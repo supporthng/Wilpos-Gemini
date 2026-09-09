@@ -40,10 +40,10 @@ if uploaded_file is not None:
                 
                 prompt = (
                     "Analiza esta factura detalladamente. Extrae TODOS los productos de la tabla. "
-                    "Para cada producto, devuelve estrictamente un arreglo JSON válido (sin formato markdown adicional) "
+                    "Para cada producto, devuelve estrictamente un arreglo JSON válido (sin formato de bloque de código markdown adicional si es posible, o puro JSON) "
                     "que contenga una lista de objetos con las siguientes claves exactas: "
                     "'codigo', 'descripcion', 'costo_sin_itbis', 'empaque', 'stock'. "
-                    "Calcula el costo unitario sin ITBIS (si incluye 18% de ITBIS desglósalo, o si es neto úsalo directo)."
+                    "Calcula el costo unitario sin ITBIS (si incluye 18% de ITBIS desglósalo, o si es neto úsalo directo por unidad/caja según corresponda)."
                 )
                 
                 response = model.generate_content([
@@ -51,6 +51,7 @@ if uploaded_file is not None:
                     prompt
                 ])
                 
+                # Limpiar texto de respuesta para extraer JSON
                 raw_text = response.text.strip()
                 if raw_text.startswith("```json"):
                     raw_text = raw_text[7:]
@@ -60,6 +61,7 @@ if uploaded_file is not None:
                 
                 data_items = json.loads(raw_text)
                 
+                # Construir DataFrame
                 rows = []
                 for item in data_items:
                     costo = float(item.get("costo_sin_itbis", 0))
@@ -88,7 +90,7 @@ if uploaded_file is not None:
                     ws.append([
                         str(item_dict.get("descripcion", "")),
                         str(item_dict.get("codigo", "")),
-                        "General",
+                        "Snacks / Licores",
                         "producto",
                         pv,
                         costo,
@@ -119,6 +121,3 @@ if uploaded_file is not None:
                 
             except Exception as e:
                 st.error(f"Ocurrió un error al procesar con la IA: {e}")
-```[cite: 3]
-
-Actualiza el archivo en GitHub, haz un *Reboot* de la app en Streamlit Cloud y ahora procesará cualquier factura extrayendo todos sus productos con el nuevo modelo.
