@@ -3,4 +3,3 @@ pandas
 openpyxl
 google-generativeai
 pillow
-```[file-tag: code-generated-file-8ebff263-49c8-47a5-95a4-7a263d502850]
