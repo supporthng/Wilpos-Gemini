@@ -132,6 +132,3 @@ if uploaded_file is not None:
                 
             except Exception as e:
                 st.error(f"Error en el procesamiento: {e}")
-```[file-tag: code-generated-file-16e12e11-6930-4055-a663-6db7b9ed55a7]
-
-Haz un *Reboot* en Streamlit Cloud tras guardar este cambio y tus precios de venta se generarán directamente redondeados en múltiplos de 5.
