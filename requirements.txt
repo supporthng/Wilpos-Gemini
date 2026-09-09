@@ -1,1 +1,10 @@
-streamlit, pandas, openpyxl, google-genai
+streamlit
+pandas
+openpyxl
+google-genai
+pillow
+```[file-tag: code-generated-file-ff793064-3ef5-4f24-ba48-db0eb9c5b388]
+
+2. En tu panel de Streamlit Cloud, haz clic en el botón **"Reboot app"** o **"Clear cache and reboot"** para que vuelva a intentar la instalación con esta configuración limpia. 
+
+¡Cuéntame en cuanto recargue la aplicación para verla en línea funcionando!
