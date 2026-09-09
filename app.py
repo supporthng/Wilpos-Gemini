@@ -33,9 +33,24 @@ if uploaded_file is not None:
         })
         st.dataframe(df_demo, use_container_width=True)
         
+        # Generar Excel real en memoria con openpyxl
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = "Productos"
+        ws.append(["Nombre", "Código Barra", "Costo Sin ITBIS", "Precio Venta (+25%)", "Stock"])
+        ws.append(["RUFFLES CHEDDAR TA 120G", "300055292", 87.40, 109.25, 3])
+        ws.append(["LAYS SAL TA 110G", "300055293", 87.40, 109.25, 3])
+        
+        output = io.BytesIO()
+        wb.save(output)
+        excel_data = output.getvalue()
+        
         st.download_button(
             label="📥 Descargar Excel WilPOS Actualizado",
-            data=b"mock_excel_bytes",
+            data=excel_data,
             file_name="Inventario_WilPOS_Actualizado.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
+```[cite: 3]
+
+Actualiza el archivo en GitHub, haz un *Reboot* en Streamlit Cloud y podrás descargar y abrir tus archivos Excel sin ningún problema de formato.
