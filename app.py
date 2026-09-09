@@ -3,13 +3,14 @@ import openpyxl
 import pandas as pd
 import io
 import json
+import os
 import google.generativeai as genai
 from PIL import Image
 
-st.set_page_config(page_title="WilPOS - Automatizador Rápido", page_icon="⚡", layout="wide")
+st.set_page_config(page_title="WilPOS - Automatizador con Plantilla", page_icon="📊", layout="wide")
 
-st.title("⚡ Automatizador Rápido de Facturas para WilPOS")
-st.markdown("Sube tu factura y la IA procesará los productos aplicando la fórmula (**Costo + 25% + 18% ITBIS**) con redondeo automático a **múltiplos de 5** y conservación de **ceros a la izquierda** en los códigos.")
+st.title("📊 Automatizador de Facturas para WilPOS (Plantilla Oficial)")
+st.markdown("Sube tu factura. La app extraerá los productos, calculará la fórmula (**Costo + 25% + 18% ITBIS** con redondeo a **múltiplos de 5**), mantendrá los **ceros a la izquierda** en los códigos de barras y generará el Excel usando exactamente la **Plantilla Oficial de WilPOS**.")
 
 # Configurar API Key de Gemini desde Streamlit Secrets
 try:
@@ -38,8 +39,8 @@ def round_to_nearest_5(x):
 if uploaded_file is not None:
     st.success(f"¡Factura cargada: {uploaded_file.name}!")
     
-    if st.button("⚡ Procesar Factura (Conservando Ceros y Redondeando)"):
-        with st.spinner("Procesando factura y asegurando precios y códigos exactos..."):
+    if st.button("🚀 Procesar Factura con Plantilla Oficial"):
+        with st.spinner("Analizando factura con IA y generando plantilla WilPOS..."):
             try:
                 model = genai.GenerativeModel('gemini-3.6-flash')
                 
@@ -48,7 +49,7 @@ if uploaded_file is not None:
                 
                 prompt = (
                     "Extrae todos los productos de esta factura en formato JSON puro (una lista de objetos con claves exactas: 'codigo', 'descripcion', 'costo_sin_itbis', 'empaque', 'stock'). "
-                    "REGLA CRÍTICA PARA CÓDIGOS: Trata el campo 'codigo' estrictamente como texto (string). NO elimines los ceros a la izquierda (por ejemplo, si el código es '05455458444', debe mantenerse completo con su cero inicial). "
+                    "REGLA CRÍTICA PARA CÓDIGOS: Trata el campo 'codigo' estrictamente como texto (string). NO elimines los ceros a la izquierda (por ejemplo, si el código es '0300055292', debe mantenerse completo con su cero inicial). "
                     "Nota importante: 'stock' y 'empaque' deben ser valores numéricos enteros. Si no hay stock especificado, pon 1. "
                     "Calcula el costo unitario sin ITBIS y asegúrate de que sea una respuesta JSON válida sin texto adicional."
                 )
@@ -67,17 +68,15 @@ if uploaded_file is not None:
                 
                 data_items = json.loads(raw_text)
                 
-                rows = []
+                rows_preview = []
                 for idx, item in enumerate(data_items, start=1):
                     costo = safe_float(item.get("costo_sin_itbis", 0))
-                    # Fórmula: (Costo * 1.25) * 1.18, redondeado al múltiplo de 5 más cercano
                     raw_pv = (costo * 1.25) * 1.18
                     precio_venta = round_to_nearest_5(raw_pv)
                     stock_val = safe_int(item.get("stock", 1), 1)
-                    
                     codigo_barras = str(item.get("codigo", "")).strip()
                     
-                    rows.append({
+                    rows_preview.append({
                         "No.": idx,
                         "Código Barra": codigo_barras,
                         "Nombre": str(item.get("descripcion", "")),
@@ -86,17 +85,25 @@ if uploaded_file is not None:
                         "Stock": stock_val
                     })
                 
-                df_resultado = pd.DataFrame(rows)
-                st.success("¡Proceso completado con éxito!")
+                df_resultado = pd.DataFrame(rows_preview)
+                st.success("¡Factura procesada exitosamente con IA!")
                 st.dataframe(df_resultado, use_container_width=True, hide_index=True)
                 
-                # Generar archivo Excel en formato WilPOS
-                wb = openpyxl.Workbook()
-                ws = wb.active
-                ws.title = "Productos"
-                ws.append(["No.", "Nombre", "Código Barra", "Categoría", "Tipo", "Precio Venta", "Costo", "Stock", "Stock Mínimo", "ITBIS", "Unidad Medida", "Venta Granel", "Cantidad Empaque", "Precio Variable", "Descuento %", "Descuento Monto", "Precio Especial", "Descuento Activo", "Descuento Nota"])
+                # Cargar plantilla oficial de WilPOS desde el repositorio
+                template_path = "Plantilla_Inventario_WilPOS.xlsx"
+                if os.path.exists(template_path):
+                    wb = openpyxl.load_workbook(template_path)
+                    ws_prod = wb['Productos']
+                    # Borrar filas de ejemplo (a partir de la fila 2)
+                    ws_prod.delete_rows(2, ws_prod.max_row)
+                else:
+                    wb = openpyxl.Workbook()
+                    ws_prod = wb.active
+                    ws_prod.title = "Productos"
+                    ws_prod.append(['Nombre', 'Código Barra', 'Categoría', 'Tipo', 'Precio Venta', 'Costo', 'Stock', 'Stock Mínimo', 'ITBIS', 'Unidad Medida', 'Venta Granel', 'Cantidad Empaque', 'Precio Variable', 'Descuento %', 'Descuento Monto', 'Precio Especial', 'Descuento Activo', 'Descuento Nota'])
                 
-                for idx, item_dict in enumerate(data_items, start=1):
+                # Insertar productos extraídos respetando el formato de la plantilla oficial
+                for item_dict in data_items:
                     costo = safe_float(item_dict.get("costo_sin_itbis", 0))
                     raw_pv = (costo * 1.25) * 1.18
                     pv = round_to_nearest_5(raw_pv)
@@ -104,8 +111,7 @@ if uploaded_file is not None:
                     stock_val = safe_int(item_dict.get("stock", 1), 1)
                     codigo_barras = str(item_dict.get("codigo", "")).strip()
                     
-                    row_cells = [
-                        idx,
+                    ws_prod.append([
                         str(item_dict.get("descripcion", "")),
                         codigo_barras,
                         "General",
@@ -124,21 +130,20 @@ if uploaded_file is not None:
                         None,
                         "No",
                         None
-                    ]
-                    ws.append(row_cells)
-                    # Forzar formato texto en la celda del código de barras en Excel
-                    ws.cell(row=ws.max_row, column=3).number_format = '@'
+                    ])
+                    # Forzar formato texto (@) en la columna Código Barra (Columna 2)
+                    ws_prod.cell(row=ws_prod.max_row, column=2).number_format = '@'
                 
                 output = io.BytesIO()
                 wb.save(output)
                 excel_data = output.getvalue()
                 
                 st.download_button(
-                    label="📥 Descargar Excel WilPOS Actualizado",
+                    label="📥 Descargar Excel Plantilla WilPOS Actualizada",
                     data=excel_data,
                     file_name="Inventario_WilPOS_Actualizado.xlsx",
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                 )
                 
             except Exception as e:
-                st.error(f"Error en el procesamiento: {e}")
+                st.error(f"Ocurrió un error al procesar con la IA: {e}")
