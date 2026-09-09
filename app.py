@@ -9,7 +9,7 @@ from PIL import Image
 st.set_page_config(page_title="WilPOS - Automatizador Rápido", page_icon="⚡", layout="wide")
 
 st.title("⚡ Automatizador Rápido de Facturas para WilPOS")
-st.markdown("Sube tu factura y la IA procesará los productos aplicando la nueva fórmula: **Costo + 25% + 18% de ITBIS**.")
+st.markdown("Sube tu factura y la IA procesará los productos aplicando la fórmula (**Costo + 25% + 18% ITBIS**) con redondeo automático a **múltiplos de 5**.")
 
 # Configurar API Key de Gemini desde Streamlit Secrets
 try:
@@ -32,11 +32,14 @@ def safe_float(val, default=0.0):
     except Exception:
         return default
 
+def round_to_nearest_5(x):
+    return round(round(x / 5) * 5, 2)
+
 if uploaded_file is not None:
     st.success(f"¡Factura cargada: {uploaded_file.name}!")
     
-    if st.button("⚡ Procesar Factura con Nueva Fórmula"):
-        with st.spinner("Procesando factura y aplicando fórmula (Costo + 25% + 18% ITBIS)..."):
+    if st.button("⚡ Procesar con Precios Redondeados (Múltiplos de 5)"):
+        with st.spinner("Procesando factura y aplicando redondeo a múltiplos de 5..."):
             try:
                 model = genai.GenerativeModel('gemini-3.6-flash')
                 
@@ -66,14 +69,15 @@ if uploaded_file is not None:
                 rows = []
                 for item in data_items:
                     costo = safe_float(item.get("costo_sin_itbis", 0))
-                    # Nueva fórmula: Costo + 25% + 18% ITBIS => (Costo * 1.25) * 1.18
-                    precio_venta = round((costo * 1.25) * 1.18, 2)
+                    # Fórmula: (Costo * 1.25) * 1.18, redondeado al múltiplo de 5 más cercano
+                    raw_pv = (costo * 1.25) * 1.18
+                    precio_venta = round_to_nearest_5(raw_pv)
                     stock_val = safe_int(item.get("stock", 1), 1)
                     rows.append({
                         "Código Barra": str(item.get("codigo", "")),
                         "Nombre": str(item.get("descripcion", "")),
                         "Costo Sin ITBIS": costo,
-                        "Precio Venta (Costo + 25% + 18% ITBIS)": precio_venta,
+                        "Precio Venta (Redondeado a Múltiplos de 5)": precio_venta,
                         "Stock": stock_val
                     })
                 
@@ -89,7 +93,8 @@ if uploaded_file is not None:
                 
                 for item_dict in data_items:
                     costo = safe_float(item_dict.get("costo_sin_itbis", 0))
-                    pv = round((costo * 1.25) * 1.18, 2)
+                    raw_pv = (costo * 1.25) * 1.18
+                    pv = round_to_nearest_5(raw_pv)
                     empaque_val = safe_int(item_dict.get("empaque", 1), 1)
                     stock_val = safe_int(item_dict.get("stock", 1), 1)
                     
@@ -119,7 +124,7 @@ if uploaded_file is not None:
                 excel_data = output.getvalue()
                 
                 st.download_button(
-                    label="📥 Descargar Excel WilPOS Actualizado (Con Nueva Fórmula)",
+                    label="📥 Descargar Excel WilPOS (Precios en Múltiplos de 5)",
                     data=excel_data,
                     file_name="Inventario_WilPOS_Actualizado.xlsx",
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
@@ -127,3 +132,6 @@ if uploaded_file is not None:
                 
             except Exception as e:
                 st.error(f"Error en el procesamiento: {e}")
+```[file-tag: code-generated-file-16e12e11-6930-4055-a663-6db7b9ed55a7]
+
+Haz un *Reboot* en Streamlit Cloud tras guardar este cambio y tus precios de venta se generarán directamente redondeados en múltiplos de 5.
