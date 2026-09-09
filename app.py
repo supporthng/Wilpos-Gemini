@@ -4,7 +4,7 @@ import pandas as pd
 import io
 import google.generativeai as genai
 
-st.set_page_title("WilPOS - Automatizador de Facturas", page_icon="📊", layout="wide")
+st.set_page_config(page_title="WilPOS - Automatizador de Facturas", page_icon="📊", layout="wide")
 
 st.title("📊 Automatizador de Facturas para WilPOS")
 st.markdown("Sube o arrastra tus facturas (PDF, imágenes o tickets) para extraer ítems, calcular costos sin ITBIS y aplicar el margen del 25% automáticamente.")
