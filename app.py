@@ -51,6 +51,3 @@ if uploaded_file is not None:
             file_name="Inventario_WilPOS_Actualizado.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
-```[cite: 3]
-
-Actualiza el archivo en GitHub, haz un *Reboot* en Streamlit Cloud y podrás descargar y abrir tus archivos Excel sin ningún problema de formato.
