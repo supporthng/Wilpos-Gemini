@@ -12,12 +12,9 @@ st.set_page_config(page_title="WilPOS - Automatizador con Plantilla", page_icon=
 st.title("📊 Automatizador de Facturas para WilPOS (Plantilla Oficial)")
 st.markdown("Sube tu factura. La app extraerá los productos, calculará la fórmula (**Costo + 25% + 18% ITBIS** con redondeo a **múltiplos de 5**), mantendrá los **ceros a la izquierda** en los códigos de barras y generará el Excel usando exactamente la **Plantilla Oficial de WilPOS**.")
 
-# Configurar API Key de Gemini desde Streamlit Secrets
-try:
-    api_key = st.secrets["GEMINI_API_KEY"]
-    genai.configure(api_key=api_key)
-except Exception:
-    st.warning("⚠️ No se encontró la GEMINI_API_KEY en los Secrets de Streamlit.")
+# Configurar API Keys de Gemini desde Streamlit Secrets
+free_api_key = st.secrets.get("GEMINI_API_KEY", "")
+paid_api_key = st.secrets.get("GEMINI_API_KEY_PAID", "")
 
 uploaded_file = st.file_uploader("Sube tu factura (Imagen o PDF)", type=["pdf", "png", "jpg", "jpeg"])
 
@@ -41,7 +38,15 @@ if uploaded_file is not None:
     
     if st.button("🚀 Procesar Factura con Plantilla Oficial"):
         with st.spinner("Analizando factura con IA y generando plantilla WilPOS..."):
+            data_items = None
+            used_paid = False
+            
+            # Intento 1: Usar la clave gratuita (GEMINI_API_KEY)
             try:
+                if not free_api_key:
+                    raise Exception("No free API key found")
+                
+                genai.configure(api_key=free_api_key)
                 model = genai.GenerativeModel('gemini-3.6-flash')
                 
                 uploaded_file.seek(0)
@@ -68,6 +73,50 @@ if uploaded_file is not None:
                 
                 data_items = json.loads(raw_text)
                 
+            except Exception as e:
+                err_msg = str(e)
+                # Si se agotó la cuota gratuita (Error 429) y existe clave de pago configurada
+                if ("429" in err_msg or "Quota exceeded" in err_msg or "No free API key" in err_msg) and paid_api_key:
+                    st.warning("⚠️ **Se agotaron las solicitudes gratuitas de Gemini.** Notificación: Cambiando automáticamente a la **versión de pago** para procesar tu factura...")
+                    try:
+                        genai.configure(api_key=paid_api_key)
+                        model_paid = genai.GenerativeModel('gemini-3.6-flash')
+                        
+                        uploaded_file.seek(0)
+                        file_bytes = uploaded_file.read()
+                        
+                        prompt = (
+                            "Extrae todos los productos de esta factura en formato JSON puro (una lista de objetos con claves exactas: 'codigo', 'descripcion', 'costo_sin_itbis', 'empaque', 'stock'). "
+                            "REGLA CRÍTICA PARA CÓDIGOS: Trata el campo 'codigo' estrictamente como texto (string). NO elimines los ceros a la izquierda (por ejemplo, si el código es '0300055292', debe mantenerse completo con su cero inicial). "
+                            "Nota importante: 'stock' y 'empaque' deben ser valores numéricos enteros. Si no hay stock especificado, pon 1. "
+                            "Calcula el costo unitario sin ITBIS y asegúrate de que sea una respuesta JSON válida sin texto adicional."
+                        )
+                        
+                        response = model_paid.generate_content([
+                            {'mime_type': uploaded_file.type if hasattr(uploaded_file, 'type') else 'image/jpeg', 'data': file_bytes},
+                            prompt
+                        ])
+                        
+                        raw_text = response.text.strip()
+                        if raw_text.startswith("```json"):
+                            raw_text = raw_text[7:]
+                        if raw_text.endswith("```"):
+                            raw_text = raw_text[:-3]
+                        raw_text = raw_text.strip()
+                        
+                        data_items = json.loads(raw_text)
+                        used_paid = True
+                    except Exception as err_paid:
+                        st.error(f"Error al procesar con la versión de pago: {err_paid}")
+                else:
+                    st.error(f"Ocurrió un error al procesar con la IA: {e}")
+            
+            if data_items:
+                if used_paid:
+                    st.success("✅ ¡Factura procesada exitosamente utilizando la **versión de pago**!")
+                else:
+                    st.success("✅ ¡Factura procesada exitosamente usando la cuota gratuita!")
+                
                 rows_preview = []
                 for idx, item in enumerate(data_items, start=1):
                     costo = safe_float(item.get("costo_sin_itbis", 0))
@@ -86,7 +135,6 @@ if uploaded_file is not None:
                     })
                 
                 df_resultado = pd.DataFrame(rows_preview)
-                st.success("¡Factura procesada exitosamente con IA!")
                 st.dataframe(df_resultado, use_container_width=True, hide_index=True)
                 
                 # Cargar plantilla oficial de WilPOS desde el repositorio
@@ -141,10 +189,3 @@ if uploaded_file is not None:
                     file_name="Inventario_WilPOS_Actualizado.xlsx",
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                 )
-                
-            except Exception as e:
-                err_str = str(e)
-                if "429" in err_str or "Quota exceeded" in err_str:
-                    st.error("⚠️ **Límite de cuota gratuita alcanzado (Error 429).** Has superado las 20 solicitudes gratuitas diarias de Gemini. Por favor, espera unos minutos o configura una cuenta de pago en Google AI Studio.")
-                else:
-                    st.error(f"Ocurrió un error al procesar con la IA: {e}")
