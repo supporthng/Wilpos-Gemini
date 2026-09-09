@@ -39,14 +39,3 @@ if uploaded_file is not None:
             file_name="Inventario_WilPOS_Actualizado.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
-```[file-tag: code-generated-file-7f02c432-fe99-4edc-907b-07ea4bcc8f62]
-
-### Pasos finales:
-1. Actualiza el archivo **`app.py`** en tu repositorio de GitHub con el código de arriba.
-2. Asegúrate de que tu archivo **`requirements.txt`** tenga exactamente estas 5 líneas:
-   ```text
-   streamlit
-   pandas
-   openpyxl
-   google-generativeai
-   pillow
