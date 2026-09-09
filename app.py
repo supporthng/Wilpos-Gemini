@@ -94,7 +94,6 @@ if uploaded_file is not None:
                 if os.path.exists(template_path):
                     wb = openpyxl.load_workbook(template_path)
                     ws_prod = wb['Productos']
-                    # Borrar filas de ejemplo (a partir de la fila 2)
                     ws_prod.delete_rows(2, ws_prod.max_row)
                 else:
                     wb = openpyxl.Workbook()
@@ -102,7 +101,6 @@ if uploaded_file is not None:
                     ws_prod.title = "Productos"
                     ws_prod.append(['Nombre', 'Código Barra', 'Categoría', 'Tipo', 'Precio Venta', 'Costo', 'Stock', 'Stock Mínimo', 'ITBIS', 'Unidad Medida', 'Venta Granel', 'Cantidad Empaque', 'Precio Variable', 'Descuento %', 'Descuento Monto', 'Precio Especial', 'Descuento Activo', 'Descuento Nota'])
                 
-                # Insertar productos extraídos respetando el formato de la plantilla oficial
                 for item_dict in data_items:
                     costo = safe_float(item_dict.get("costo_sin_itbis", 0))
                     raw_pv = (costo * 1.25) * 1.18
@@ -131,7 +129,6 @@ if uploaded_file is not None:
                         "No",
                         None
                     ])
-                    # Forzar formato texto (@) en la columna Código Barra (Columna 2)
                     ws_prod.cell(row=ws_prod.max_row, column=2).number_format = '@'
                 
                 output = io.BytesIO()
@@ -146,4 +143,8 @@ if uploaded_file is not None:
                 )
                 
             except Exception as e:
-                st.error(f"Ocurrió un error al procesar con la IA: {e}")
+                err_str = str(e)
+                if "429" in err_str or "Quota exceeded" in err_str:
+                    st.error("⚠️ **Límite de cuota gratuita alcanzado (Error 429).** Has superado las 20 solicitudes gratuitas diarias de Gemini. Por favor, espera unos minutos o configura una cuenta de pago en Google AI Studio.")
+                else:
+                    st.error(f"Ocurrió un error al procesar con la IA: {e}")
