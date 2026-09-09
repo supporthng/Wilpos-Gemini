@@ -9,7 +9,7 @@ from PIL import Image
 st.set_page_config(page_title="WilPOS - Automatizador Rápido", page_icon="⚡", layout="wide")
 
 st.title("⚡ Automatizador Rápido de Facturas para WilPOS")
-st.markdown("Sube tu factura y la IA procesará todos los productos al instante para entregarte tu Excel con costos sin ITBIS y margen del 25%.")
+st.markdown("Sube tu factura y la IA procesará los productos aplicando la nueva fórmula: **Costo + 25% + 18% de ITBIS**.")
 
 # Configurar API Key de Gemini desde Streamlit Secrets
 try:
@@ -20,21 +20,32 @@ except Exception:
 
 uploaded_file = st.file_uploader("Sube tu factura (Imagen o PDF)", type=["pdf", "png", "jpg", "jpeg"])
 
+def safe_int(val, default=1):
+    try:
+        return int(float(val))
+    except Exception:
+        return default
+
+def safe_float(val, default=0.0):
+    try:
+        return float(val)
+    except Exception:
+        return default
+
 if uploaded_file is not None:
     st.success(f"¡Factura cargada: {uploaded_file.name}!")
     
-    if st.button("⚡ Procesar Factura Rápido"):
-        with st.spinner("Procesando factura a alta velocidad..."):
+    if st.button("⚡ Procesar Factura con Nueva Fórmula"):
+        with st.spinner("Procesando factura y aplicando fórmula (Costo + 25% + 18% ITBIS)..."):
             try:
-                # Usar el modelo rápido optimizado
                 model = genai.GenerativeModel('gemini-3.6-flash')
                 
                 uploaded_file.seek(0)
                 file_bytes = uploaded_file.read()
                 
-                # Prompt optimizado y ultra conciso para respuesta rápida
                 prompt = (
-                    "Extrae todos los productos de esta factura en formato JSON puro (una lista de objetos con claves: 'codigo', 'descripcion', 'costo_sin_itbis', 'empaque', 'stock'). "
+                    "Extrae todos los productos de esta factura en formato JSON puro (una lista de objetos con claves exactas: 'codigo', 'descripcion', 'costo_sin_itbis', 'empaque', 'stock'). "
+                    "Nota importante: 'stock' y 'empaque' deben ser valores numéricos enteros (ejemplo: 3, 12, 1). Si no hay stock especificado, pon 1. "
                     "Calcula el costo unitario sin ITBIS y asegúrate de que sea una respuesta JSON válida sin texto adicional."
                 )
                 
@@ -54,14 +65,16 @@ if uploaded_file is not None:
                 
                 rows = []
                 for item in data_items:
-                    costo = float(item.get("costo_sin_itbis", 0))
-                    precio_venta = round(costo * 1.25, 2)
+                    costo = safe_float(item.get("costo_sin_itbis", 0))
+                    # Aplicando nueva fórmula: (Costo * 1.25) * 1.18
+                    precio_venta = round((costo * 1.25) * 1.18, 2)
+                    stock_val = safe_int(item.get("stock", 1), 1)
                     rows.append({
                         "Código Barra": str(item.get("codigo", "")),
                         "Nombre": str(item.get("descripcion", "")),
                         "Costo Sin ITBIS": costo,
-                        "Precio Venta (+25%)": precio_venta,
-                        "Stock": int(item.get("stock", 1))
+                        "Precio Venta (Costo + 25% + 18% ITBIS)": precio_venta,
+                        "Stock": stock_val
                     })
                 
                 df_resultado = pd.DataFrame(rows)
@@ -75,8 +88,11 @@ if uploaded_file is not None:
                 ws.append(["Nombre", "Código Barra", "Categoría", "Tipo", "Precio Venta", "Costo", "Stock", "Stock Mínimo", "ITBIS", "Unidad Medida", "Venta Granel", "Cantidad Empaque", "Precio Variable", "Descuento %", "Descuento Monto", "Precio Especial", "Descuento Activo", "Descuento Nota"])
                 
                 for item_dict in data_items:
-                    costo = float(item_dict.get("costo_sin_itbis", 0))
-                    pv = round(costo * 1.25, 2)
+                    costo = safe_float(item_dict.get("costo_sin_itbis", 0))
+                    pv = round((costo * 1.25) * 1.18, 2)
+                    empaque_val = safe_int(item_dict.get("empaque", 1), 1)
+                    stock_val = safe_int(item_dict.get("stock", 1), 1)
+                    
                     ws.append([
                         str(item_dict.get("descripcion", "")),
                         str(item_dict.get("codigo", "")),
@@ -84,12 +100,12 @@ if uploaded_file is not None:
                         "producto",
                         pv,
                         costo,
-                        int(item_dict.get("stock", 1)),
+                        stock_val,
                         5,
                         0.18,
                         "unidad",
                         "No",
-                        int(item_dict.get("empaque", 1)),
+                        empaque_val,
                         "No",
                         0,
                         0,
@@ -103,11 +119,14 @@ if uploaded_file is not None:
                 excel_data = output.getvalue()
                 
                 st.download_button(
-                    label="📥 Descargar Excel WilPOS Actualizado",
+                    label="📥 Descargar Excel WilPOS Actualizado (Con Nueva Fórmula)",
                     data=excel_data,
                     file_name="Inventario_WilPOS_Actualizado.xlsx",
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                 )
                 
             except Exception as e:
-                st.error(f"Error en el procesamiento rápido: {e}")
+                st.error(f"Error en el procesamiento: {e}")
+```[file-tag: code-generated-file-966f8748-4ed3-4b73-a2f2-3131f0da7be8]
+
+Guarda los cambios en tu repositorio de GitHub, haz un *Reboot* en Streamlit Cloud y tus facturas calcularán el precio de venta final incluyendo el margen y el ITBIS automáticamente.
