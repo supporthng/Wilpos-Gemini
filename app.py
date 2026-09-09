@@ -66,7 +66,7 @@ if uploaded_file is not None:
                 rows = []
                 for item in data_items:
                     costo = safe_float(item.get("costo_sin_itbis", 0))
-                    # Aplicando nueva fórmula: (Costo * 1.25) * 1.18
+                    # Nueva fórmula: Costo + 25% + 18% ITBIS => (Costo * 1.25) * 1.18
                     precio_venta = round((costo * 1.25) * 1.18, 2)
                     stock_val = safe_int(item.get("stock", 1), 1)
                     rows.append({
@@ -127,6 +127,3 @@ if uploaded_file is not None:
                 
             except Exception as e:
                 st.error(f"Error en el procesamiento: {e}")
-```[file-tag: code-generated-file-966f8748-4ed3-4b73-a2f2-3131f0da7be8]
-
-Guarda los cambios en tu repositorio de GitHub, haz un *Reboot* en Streamlit Cloud y tus facturas calcularán el precio de venta final incluyendo el margen y el ITBIS automáticamente.
