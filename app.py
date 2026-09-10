@@ -8,13 +8,13 @@ from PIL import Image
 st.set_page_config(page_title="WilPOS - Procesador Inteligente", page_icon="🧾", layout="wide")
 
 st.title("🧾 WilPOS - Procesador Inteligente de Facturas y Costos")
-st.write("Carga tu factura (PDF o Imagen). El sistema autodetectará el proveedor, el tipo de empaque, la moneda y calculará los costos y precios de venta.")
+st.write("Carga tu factura (PDF o Imagen). El sistema autodetectará el proveedor, el tipo de empaque, cambiará la moneda automáticamente y calculará todo en pesos.")
 
 # Sidebar global para parámetros ajustados
 st.sidebar.header("⚙️ Parámetros Globales")
 
-# 1. Tasa de compra del día (solo se usa si la factura viene en USD)
-tasa_compra_usd = st.sidebar.number_input("Tasa de Compra USD a DOP (Solo para facturas en USD)", value=58.50, step=0.01)
+# 1. Tasa de compra del día (se usa para convertir de USD a DOP)
+tasa_compra_usd = st.sidebar.number_input("Tasa de Compra USD a DOP (Día)", value=58.50, step=0.01)
 
 # 2. ITBIS Fijo (18%)
 itbis_fijo = 18.0
@@ -28,14 +28,15 @@ if "proveedor_detectado" not in st.session_state:
     st.session_state.proveedor_detectado = ""
 if "nro_factura_detectado" not in st.session_state:
     st.session_state.nro_factura_detectado = ""
-if "moneda_detectada" not in st.session_state:
-    st.session_state.moneda_detectada = "DOP"
 if "tipo_empaque_detectado" not in st.session_state:
     st.session_state.tipo_empaque_detectado = 0  # 0: Cajas/Empaques, 1: Unidades Directas
 if "df_productos" not in st.session_state:
     st.session_state.df_productos = pd.DataFrame([
         {"Código": "", "Descripción": "Sube una factura para procesar automáticamente", "Cantidad Empaques": 0.0, "Unidades por Caja": 1, "Precio Lista / Caja": 0.0, "Descuento (%)": 0.0}
     ])
+# Asegurar estado inicial para el selectbox de moneda
+if "mon_ind" not in st.session_state:
+    st.session_state["mon_ind"] = "DOP"
 
 # Pestañas principales
 tab_individual, tab_multiple = st.tabs([
@@ -48,7 +49,7 @@ tab_individual, tab_multiple = st.tabs([
 # =============================================================
 with tab_individual:
     st.subheader("Módulo de Factura Individual con Autodetección")
-    st.write("Sube el PDF o la imagen de tu factura. El sistema leerá el formato, detectará la moneda original y calculará todo.")
+    st.write("Sube el PDF o la imagen de tu factura. El sistema detectará la moneda y convertirá los valores a pesos automáticamente.")
     
     archivo_subido = st.file_uploader("📂 Cargar Factura (PDF o Imagen)", type=["pdf", "png", "jpg", "jpeg"], key="uploader_ind")
     
@@ -71,7 +72,7 @@ with tab_individual:
         if "ALVAREZ" in texto_upper or "ALVAREZYSANCHEZ" in texto_upper or "4655" in texto_upper:
             st.session_state.proveedor_detectado = "Álvarez & Sánchez, S.A."
             st.session_state.nro_factura_detectado = "13014936"
-            st.session_state.moneda_detectada = "DOP"  # Factura local en pesos
+            st.session_state["mon_ind"] = "DOP"  # Forzar moneda local
             
             match_empaque = re.search(r'(\d+)\s*/\s*(\d+)\s*(CL|ML|L|OZ)?', texto_upper)
             unidades_auto = int(match_empaque.group(1)) if match_empaque else 12
@@ -87,12 +88,12 @@ with tab_individual:
                     "Descuento (%)": 10.0
                 }
             ])
-            st.success(f"🤖 ¡Proveedor detectado: Álvarez & Sánchez! Moneda: **DOP (Pesos)** | Empaque: **Por Cajas ({unidades_auto} u.)**.")
+            st.success(f"🤖 ¡Proveedor detectado: Álvarez & Sánchez! Moneda: **DOP** | Empaque: **Por Cajas ({unidades_auto} u.)**.")
 
         elif "ISOTEX" in texto_upper or "HIEFOAM3L" in texto_upper:
             st.session_state.proveedor_detectado = "Isotex Dominicana, S.A.S."
             st.session_state.nro_factura_detectado = "C-00137907"
-            st.session_state.moneda_detectada = "USD"  # Factura internacional en dólares
+            st.session_state["mon_ind"] = "USD"  # Forzar moneda extranjera para activar conversión
             
             st.session_state.tipo_empaque_detectado = 1  # Unidades Directas
             st.session_state.df_productos = pd.DataFrame([
@@ -102,7 +103,7 @@ with tab_individual:
                 {"Código": "CAVA20LS", "Descripción": "ISOBOX 20L", "Cantidad Empaques": 30.0, "Unidades por Caja": 1, "Precio Lista / Caja": 4.60, "Descuento (%)": 0.0},
                 {"Código": "SERICOL", "Descripción": "SERIGRAFÍA EN NEVERAS A UN COLOR", "Cantidad Empaques": 60.0, "Unidades por Caja": 1, "Precio Lista / Caja": 0.30, "Descuento (%)": 0.0}
             ])
-            st.success("🤖 ¡Proveedor detectado: Isotex Dominicana! Moneda: **USD (Dólares)** -> Se aplicará conversión automática a DOP | Empaque: **Unidades Directas**.")
+            st.success("🤖 ¡Proveedor detectado: Isotex Dominicana! Moneda: **USD** (Se aplicará la tasa de compra para convertir automáticamente a pesos) | Empaque: **Unidades Directas**.")
         else:
             st.warning("⚠️ No se pudo reconocer el formato automáticamente. Puedes ajustar los datos abajo.")
 
@@ -113,7 +114,7 @@ with tab_individual:
         proveedor_ind = st.text_input("Proveedor (Autodetectado)", value=st.session_state.proveedor_detectado)
         nro_factura = st.text_input("No. de Factura / Pedido", value=st.session_state.nro_factura_detectado)
     with col_f2:
-        moneda_ind = st.selectbox("Moneda de la Factura", ["DOP", "USD"], index=0 if st.session_state.moneda_detectada=="DOP" else 1, key="mon_ind")
+        moneda_ind = st.selectbox("Moneda de la Factura", ["DOP", "USD"], key="mon_ind")
         tipo_empaque = st.radio(
             "Cálculo por Unidad (Autodetectado):", 
             ["Por Cajas / Empaques (con unidades por caja)", "Unidades Directas"], 
@@ -140,7 +141,7 @@ with tab_individual:
             if cant_empaques <= 0 or precio_lista <= 0:
                 continue
             
-            # Si la factura está en USD, se convierte a DOP usando la tasa de compra; si está en DOP, se queda igual
+            # Conversión automática obligatoria si la moneda es USD utilizando la tasa de compra
             precio_base_dop = precio_lista * tasa_compra_usd if moneda_ind == "USD" else precio_lista
             precio_con_desc = precio_base_dop * (1 - (desc_pct / 100.0))
             importe_linea_neto = cant_empaques * precio_con_desc
@@ -173,11 +174,11 @@ with tab_individual:
         itbis_total_dop = subtotal_neto_dop * (itbis_fijo / 100.0)
         total_general_dop = subtotal_neto_dop + itbis_total_dop
         
-        st.success("¡Cálculos de inventario y precios de venta realizados con éxito!")
+        st.success("¡Cálculos de inventario convertidos a pesos y precios de venta realizados con éxito!")
         st.dataframe(df_res_ind, use_container_width=True)
         
         c1, c2, c3 = st.columns(3)
-        c1.metric("Subtotal Neto", f"RD$ {subtotal_neto_dop:,.2f}")
+        c1.metric("Subtotal Neto (DOP)", f"RD$ {subtotal_neto_dop:,.2f}")
         c2.metric("ITBIS Fijo (18%)", f"RD$ {itbis_total_dop:,.2f}")
         c3.metric("Importe Total General", f"RD$ {total_general_dop:,.2f}")
 
@@ -211,7 +212,7 @@ with tab_multiple:
             if cant <= 0 or precio_unit <= 0:
                 continue
             
-            # Conversión selectiva solo si la línea indica USD
+            # Conversión automática selectiva si la línea indica USD
             precio_dop = precio_unit * tasa_compra_usd if mon == "USD" else precio_unit
             importe_linea = cant * precio_dop
             subtotal_lote_dop += importe_linea
