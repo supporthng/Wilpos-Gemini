@@ -33,7 +33,7 @@ if "nfc_val" not in st.session_state:
 if "mon_val" not in st.session_state:
     st.session_state.mon_val = "DOP"
 if "emp_val" not in st.session_state:
-    st.session_state.emp_val = 0  # 0: Por Cajas / Empaques, 1: Unidades Directas
+    st.session_state.emp_val = "Por Cajas / Empaques (con unidades por caja)"
 if "df_productos" not in st.session_state:
     st.session_state.df_productos = pd.DataFrame([
         {"Código": "", "Descripción": "Sube una factura para procesar automáticamente", "Cantidad Empaques": 0.0, "Unidades por Caja": 1, "Precio Lista / Caja": 0.0, "Descuento (%)": 0.0}
@@ -74,7 +74,7 @@ with tab_individual:
             st.session_state.prov_val = "Álvarez & Sánchez, S.A."
             st.session_state.nfc_val = "13014936"
             st.session_state.mon_val = "DOP"
-            st.session_state.emp_val = 0
+            st.session_state.emp_val = "Por Cajas / Empaques (con unidades por caja)"
             
             match_empaque = re.search(r'(\d+)\s*/\s*(\d+)\s*(CL|ML|L|OZ)?', texto_upper)
             unidades_auto = int(match_empaque.group(1)) if match_empaque else 12
@@ -96,7 +96,7 @@ with tab_individual:
             st.session_state.prov_val = "Isotex Dominicana, S.A.S."
             st.session_state.nfc_val = "C-00137907"
             st.session_state.mon_val = "USD"
-            st.session_state.emp_val = 1
+            st.session_state.emp_val = "Unidades Directas"
             
             st.session_state.df_productos = pd.DataFrame([
                 {"Código": "HIEFOAM3L", "Descripción": "HIELERA DE FOAM 3L", "Cantidad Empaques": 30.0, "Unidades por Caja": 1, "Precio Lista / Caja": 1.43, "Descuento (%)": 0.0},
@@ -112,7 +112,7 @@ with tab_individual:
             st.session_state.prov_val = "Centro de Distribucion Cristian SRL (CDC)"
             st.session_state.nfc_val = "E310000011806"
             st.session_state.mon_val = "DOP"
-            st.session_state.emp_val = 0
+            st.session_state.emp_val = "Por Cajas / Empaques (con unidades por caja)"
             
             st.session_state.df_productos = pd.DataFrame([
                 {"Código": "281", "Descripción": "AGUA TONICA CANADA DRY 400ML", "Cantidad Empaques": 2.0, "Unidades por Caja": 12, "Precio Lista / Caja": 580.02, "Descuento (%)": 0.0},
@@ -131,19 +131,16 @@ with tab_individual:
     
     col_f1, col_f2 = st.columns(2)
     with col_f1:
-        proveedor_ind = st.text_input("Proveedor (Autodetectado)", value=st.session_state.prov_val)
-        nro_factura = st.text_input("No. de Factura / NCF", value=st.session_state.nfc_val)
+        # Usar key vinculada directamente al session_state para que se actualice visualmente
+        st.text_input("Proveedor (Autodetectado)", key="prov_val")
+        st.text_input("No. de Factura / NCF", key="nfc_val")
     with col_f2:
-        mon_options = ["DOP", "USD"]
-        mon_index = mon_options.index(st.session_state.mon_val) if st.session_state.mon_val in mon_options else 0
-        moneda_ind = st.selectbox("Moneda de la Factura", mon_options, index=mon_index)
-        
-        emp_options = ["Por Cajas / Empaques (con unidades por caja)", "Unidades Directas"]
-        tipo_empaque = st.radio(
+        st.selectbox("Moneda de la Factura", ["DOP", "USD"], key="mon_val")
+        st.radio(
             "Cálculo por Unidad (Autodetectado):", 
-            emp_options, 
-            index=st.session_state.emp_val,
-            horizontal=True
+            ["Por Cajas / Empaques (con unidades por caja)", "Unidades Directas"], 
+            horizontal=True,
+            key="emp_val"
         )
 
     st.divider()
@@ -165,6 +162,10 @@ with tab_individual:
             if cant_empaques <= 0 or precio_lista <= 0:
                 continue
             
+            # Leer valores directamente desde el session_state
+            moneda_ind = st.session_state.mon_val
+            tipo_empaque = st.session_state.emp_val
+
             precio_base_dop = precio_lista * TASA_COMPRA_USD_INTERNA if moneda_ind == "USD" else precio_lista
             precio_con_desc = precio_base_dop * (1 - (desc_pct / 100.0))
             importe_linea_neto = cant_empaques * precio_con_desc
