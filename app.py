@@ -1,272 +1,482 @@
-import streamlit as st
-import pandas as pd
-import pdfplumber
-import re
+import io
+import json
+import os
+import hashlib
+import google.generativeai as genai
 from PIL import Image
 
-# Configuración de la página
-st.set_page_config(page_title="WilPOS - Procesador Inteligente", page_icon="🧾", layout="wide")
+@@ -31,6 +32,10 @@ def safe_float(val, default=0.0):
+def round_to_nearest_5(x):
+return round(round(x / 5) * 5, 2)
 
-st.title("🧾 WilPOS - Procesador Inteligente de Facturas y Costos")
-st.write("Carga tu factura. El sistema reconocerá los proveedores frecuentes o te permitirá gestionar los ítems libremente.")
+# Inicializar control de documentos procesados para evitar duplicados
+if "processed_signatures" not in st.session_state:
+    st.session_state["processed_signatures"] = set()
 
-# Sidebar global para parámetros
-st.sidebar.header("⚙️ Parámetros Globales")
-TASA_COMPRA_USD_INTERNA = 58.50  # Cálculo interno oculto
-itbis_fijo = 18.0
-st.sidebar.markdown(f"**ITBIS Fijo:** `{itbis_fijo}%`")
-margen_ganancia = st.sidebar.number_input("Margen de Ganancia sobre Costo (%)", value=25.0, step=0.5)
+# ==========================================
+# MENÚ DE NAVEGACIÓN LATERAL
+# ==========================================
+@@ -40,14 +45,19 @@ def round_to_nearest_5(x):
+["📄 Factura Individual", "📂 Múltiples Facturas (Lote)"]
+)
 
-# =============================================================
-# INICIALIZACIÓN DE VARIABLES DE ESTADO (SESSION STATE)
-# =============================================================
-if "prov_val" not in st.session_state:
-    st.session_state.prov_val = ""
-if "nfc_val" not in st.session_state:
-    st.session_state.nfc_val = ""
-if "mon_val" not in st.session_state:
-    st.session_state.mon_val = "DOP"
-if "emp_val" not in st.session_state:
-    st.session_state.emp_val = "Por Cajas / Empaques (con unidades por caja)"
-if "df_productos" not in st.session_state:
-    st.session_state.df_productos = pd.DataFrame([
-        {"Código": "", "Descripción": "Escribe o ingresa los ítems de tu factura aquí", "Cantidad Empaques": 1.0, "Unidades por Caja": 1, "Precio Lista / Caja": 0.0, "Descuento (%)": 0.0}
-    ])
-if "ultimo_archivo" not in st.session_state:
-    st.session_state.ultimo_archivo = None
+# Botón para limpiar historial de duplicados si el usuario lo desea
+if st.sidebar.button("🧹 Restablecer Memoria de Duplicados"):
+    st.session_state["processed_signatures"] = set()
+    st.sidebar.success("¡Memoria de duplicados reiniciada!")
 
-# Pestañas principales
-tab_individual, tab_multiple = st.tabs([
-    "📄 Módulo 1: Factura Individual", 
-    "📚 Módulo 2: Múltiples Facturas (Lote Masivo)"
-])
-
-# =============================================================
+# ==========================================
+# MÓDULO 1: FACTURA INDIVIDUAL (EL QUE YA TENÍAS)
 # MÓDULO 1: FACTURA INDIVIDUAL
-# =============================================================
-with tab_individual:
-    st.subheader("Módulo de Factura Individual")
-    
-    archivo_subido = st.file_uploader("📂 Cargar Factura (PDF o Imagen)", type=["pdf", "png", "jpg", "jpeg"], key="uploader_ind")
-    
-    if archivo_subido is not None and archivo_subido != st.session_state.ultimo_archivo:
-        st.session_state.ultimo_archivo = archivo_subido
-        extension = archivo_subido.name.split('.')[-1].lower()
-        texto_extraido = ""
-        
-        if extension == "pdf":
-            with pdfplumber.open(archivo_subido) as pdf:
-                for pagina in pdf.pages:
-                    texto_extraido += pagina.extract_text() or ""
-        else:
-            imagen = Image.open(archivo_subido)
-            st.image(imagen, caption=f"Vista previa: {archivo_subido.name}", use_container_width=True)
-            texto_extraido = "IMAGEN_CARGADA"
+# ==========================================
+if modulo == "📄 Factura Individual":
+st.title("📊 Automatizador de Facturas para WilPOS (Individual)")
+    st.markdown("Sube tu factura. La IA detectará los empaques, calculará el costo unitario sin ITBIS y el **stock total correcto**, aplicando la fórmula de WilPOS (**25% margen + 18% ITBIS** con redondeo a **múltiplos de 5**).")
+    st.markdown("Sube tu factura. El sistema cuenta con **control anti-duplicados** para evitar procesar dos veces el mismo documento basándose en su emisor, número de factura, fecha y monto total.")
 
-        texto_upper = texto_extraido.upper()
-        
-        # 1. AUTODETECCIÓN DE ÁLVAREZ & SÁNCHEZ
-        if "ALVAREZ" in texto_upper or "ALVAREZYSANCHEZ" in texto_upper or "4655" in texto_upper:
-            st.session_state.prov_val = "Álvarez & Sánchez, S.A."
-            st.session_state.nfc_val = "13014936"
-            st.session_state.mon_val = "DOP"
-            st.session_state.emp_val = "Por Cajas / Empaques (con unidades por caja)"
-            
-            match_empaque = re.search(r'(\d+)\s*/\s*(\d+)\s*(CL|ML|L|OZ)?', texto_upper)
-            unidades_auto = int(match_empaque.group(1)) if match_empaque else 12
-            
-            st.session_state.df_productos = pd.DataFrame([
-                {
-                    "Código": "4655", 
-                    "Descripción": "TEQUILA RESERVA CRISTALINO 1800 12/70 CL", 
-                    "Cantidad Empaques": 2.0, 
-                    "Unidades por Caja": unidades_auto, 
-                    "Precio Lista / Caja": 37200.0, 
-                    "Descuento (%)": 10.0
-                }
-            ])
-            st.success("🤖 ¡Proveedor detectado: Álvarez & Sánchez!")
+    uploaded_file = st.file_uploader("Sube tu factura (Imagen o PDF)", type=["pdf", "png", "jpg", "jpeg"], key="single_file")
+    uploaded_file = st.file_uploader("Sube tu factura (PDF o Imagen)", type=["pdf", "png", "jpg", "jpeg"], key="single_file")
 
-        # 2. AUTODETECCIÓN DE ISOTEX
-        elif "ISOTEX" in texto_upper or "HIEFOAM3L" in texto_upper:
-            st.session_state.prov_val = "Isotex Dominicana, S.A.S."
-            st.session_state.nfc_val = "C-00137907"
-            st.session_state.mon_val = "USD"
-            st.session_state.emp_val = "Unidades Directas"
-            
-            st.session_state.df_productos = pd.DataFrame([
-                {"Código": "HIEFOAM3L", "Descripción": "HIELERA DE FOAM 3L", "Cantidad Empaques": 30.0, "Unidades por Caja": 1, "Precio Lista / Caja": 1.43, "Descuento (%)": 0.0},
-                {"Código": "NEVER10LA", "Descripción": "NEVERA DE FOAM 10L CON ASA", "Cantidad Empaques": 30.0, "Unidades por Caja": 1, "Precio Lista / Caja": 4.69, "Descuento (%)": 0.0},
-                {"Código": "NEVER20LA", "Descripción": "NEVERA DE FOAM 20L CON ASA", "Cantidad Empaques": 30.0, "Unidades por Caja": 1, "Precio Lista / Caja": 5.75, "Descuento (%)": 0.0},
-                {"Código": "CAVA20LS", "Descripción": "ISOBOX 20L", "Cantidad Empaques": 30.0, "Unidades por Caja": 1, "Precio Lista / Caja": 4.60, "Descuento (%)": 0.0},
-                {"Código": "SERICOL", "Descripción": "SERIGRAFÍA EN NEVERAS A UN COLOR", "Cantidad Empaques": 60.0, "Unidades por Caja": 1, "Precio Lista / Caja": 0.30, "Descuento (%)": 0.0}
-            ])
-            st.success("🤖 ¡Proveedor detectado: Isotex Dominicana (USD)!")
+if "quota_exceeded" not in st.session_state:
+st.session_state["quota_exceeded"] = False
+@@ -73,206 +83,89 @@ def paid_confirmation_dialog():
+st.rerun()
 
-        # 3. AUTODETECCIÓN DE CENTRO DE DISTRIBUCION CRISTIAN (CDC)
-        elif "CDC" in texto_upper or "CRISTIAN" in texto_upper or "CENTRO DE DISTRIBUCION" in texto_upper or "E3100000" in texto_upper:
-            st.session_state.prov_val = "Centro de Distribucion Cristian SRL (CDC)"
-            st.session_state.nfc_val = "E310000011806"
-            st.session_state.mon_val = "DOP"
-            st.session_state.emp_val = "Por Cajas / Empaques (con unidades por caja)"
-            
-            st.session_state.df_productos = pd.DataFrame([
-                {"Código": "281", "Descripción": "AGUA TONICA CANADA DRY 400ML", "Cantidad Empaques": 2.0, "Unidades por Caja": 12, "Precio Lista / Caja": 290.01, "Descuento (%)": 0.0},
-                {"Código": "049000057638", "Descripción": "REFRESCO COCA COLA 400ML", "Cantidad Empaques": 2.0, "Unidades por Caja": 12, "Precio Lista / Caja": 299.98, "Descuento (%)": 0.0},
-                {"Código": "1765", "Descripción": "BEBIDA ENERGIZANTE MONTER 473ML", "Cantidad Empaques": 1.0, "Unidades por Caja": 24, "Precio Lista / Caja": 2225.04, "Descuento (%)": 0.0},
-                {"Código": "070847893110", "Descripción": "BEBIDA ENERGIZANTE MONTER MANGO LOCO 473ML", "Cantidad Empaques": 1.0, "Unidades por Caja": 24, "Precio Lista / Caja": 2225.04, "Descuento (%)": 0.0},
-                {"Código": "070847891727", "Descripción": "BEBIDA ENERGIZANTE MONTER ULTRA 473ML", "Cantidad Empaques": 1.0, "Unidades por Caja": 24, "Precio Lista / Caja": 2225.04, "Descuento (%)": 0.0}
-            ])
-            st.success("🤖 ¡Proveedor detectado: Centro de Distribucion Cristian SRL (CDC)!")
-        else:
-            st.info("ℹ️ Factura cargada. Proveedor nuevo o no registrado automáticamente: puedes completar o ajustar los campos y la tabla libremente abajo.")
+if uploaded_file is not None:
+        st.success(f"¡Factura cargada: {uploaded_file.name}!")
+        st.success(f"¡Archivo cargado: {uploaded_file.name}[cite: 12, 13]!")
 
-    st.divider()
-    
-    col_f1, col_f2 = st.columns(2)
-    with col_f1:
-        proveedor_ind = st.text_input("Proveedor", key="prov_val")
-        nro_factura = st.text_input("No. de Factura / NCF", key="nfc_val")
-    with col_f2:
-        mon_options = ["DOP", "USD"]
-        mon_index = mon_options.index(st.session_state.mon_val) if st.session_state.mon_val in mon_options else 0
-        moneda_ind = st.selectbox("Moneda de la Factura", mon_options, index=mon_index, key="mon_select")
-        
-        emp_options = ["Por Cajas / Empaques (con unidades por caja)", "Unidades Directas"]
-        tipo_empaque = st.radio("Cálculo por Unidad:", emp_options, horizontal=True, key="emp_radio")
+if st.session_state["quota_exceeded"]:
+paid_confirmation_dialog()
 
-    st.divider()
-    
-    st.write("📋 **Detalle de Ítems (Editable / Libre)**")
-    df_ind_edit = st.data_editor(st.session_state.df_productos, num_rows="dynamic", key="editor_individual", use_container_width=True)
-    
-    if st.button("🧮 Calcular Costos y Precios de Venta", type="primary", key="btn_ind"):
-        subtotal_neto_dop = 0.0
-        resultados_ind = []
-        
-        for idx, row in df_ind_edit.iterrows():
-            codigo = str(row.get("Código", f"PROD-{idx+1}"))
-            desc = str(row.get("Descripción", ""))
-            cant_empaques = float(row.get("Cantidad Empaques", 0.0))
-            unidades_por_caja = int(row.get("Unidades por Caja", 1))
-            precio_lista = float(row.get("Precio Lista / Caja", 0.0))
-            desc_pct = float(row.get("Descuento (%)", 0.0))
-            
-            if cant_empaques <= 0 or precio_lista <= 0:
-                continue
-            
-            # Conversión interna si es USD
-            precio_base_dop = precio_lista * TASA_COMPRA_USD_INTERNA if moneda_ind == "USD" else precio_lista
-            precio_con_desc = precio_base_dop * (1 - (desc_pct / 100.0))
-            importe_linea_neto = cant_empaques * precio_con_desc
-            subtotal_neto_dop += importe_linea_neto
-            
-            # Cálculo unitario
-            if tipo_empaque.startswith("Por Cajas") and unidades_por_caja > 1:
-                total_unidades_sueltas = cant_empaques * unidades_por_caja
-                costo_unitario_neto = importe_linea_neto / total_unidades_sueltas
-            else:
-                costo_unitario_neto = precio_con_desc
+        if st.session_state["use_paid_now"]:
+            with st.spinner("Procesando factura con la versión de pago..."):
+        if st.button("🚀 Procesar Factura con Control Anti-Duplicados") or st.session_state["use_paid_now"]:
+            with st.spinner("Analizando factura y verificando duplicidad..."):
+                prompt_text = (
+                    "Analiza esta factura o cotización detalladamente. Extrae los datos de cabecera: 'emisor_rnc', 'numero_documento', 'fecha', 'total'. "
+                    "Para cada ítem, extrae: 'codigo', 'descripcion', 'cantidad' (cantidad comprada, ej: 2, 4, 30), 'empaque' (unidades por empaque, ej: 1, 10, 12, 24), y 'costo_sin_itbis' (calculado dividiendo el valor neto sin ITBIS entre el total de unidades individuales: cantidad * empaque). "
+                    "Devuelve la información estrictamente en formato JSON con la siguiente estructura exacta: "
+                    '{"emisor_rnc": "...", "numero_documento": "...", "fecha": "...", "total": "...", "items": [{"codigo": "...", "descripcion": "...", "cantidad": 1, "empaque": 1, "costo_sin_itbis": 0.0}]}. '
+                    "REGLA CRÍTICA PARA CÓDIGOS DE BARRAS: Preserva todos los ceros a la izquierda como texto. Respuesta JSON pura sin texto adicional."
+                )
                 
-            costo_unitario_con_itbis = costo_unitario_neto * (1 + (itbis_fijo / 100.0))
-            
-            # Precio venta con margen y redondeo a múltiplo de 5
-            precio_venta_bruto = costo_unitario_con_itbis * (1 + (margen_ganancia / 100.0))
-            precio_venta_sugerido = round(precio_venta_bruto / 5) * 5
-            
-            resultados_ind.append({
-                "Código": codigo,
-                "Descripción": desc,
-                "Cantidad Empaques": cant_empaques,
-                "Costo Unitario Neto (DOP)": round(costo_unitario_neto, 2),
-                "Costo Unit. + ITBIS": round(costo_unitario_con_itbis, 2),
-                f"Precio Venta (+{margen_ganancia}% - Múltiplo de 5)": round(precio_venta_sugerido, 2),
-                "Importe Neto Línea": round(importe_linea_neto, 2)
-            })
-            
-        if resultados_ind:
-            df_res_ind = pd.DataFrame(resultados_ind)
-            itbis_total_dop = subtotal_neto_dop * (itbis_fijo / 100.0)
-            total_general_dop = subtotal_neto_dop + itbis_total_dop
-            
-            st.success("¡Cálculos de inventario y precios de venta realizados con éxito!")
-            st.dataframe(df_res_ind, use_container_width=True)
-            
-            c1, c2, c3 = st.columns(3)
-            c1.metric("Subtotal Neto (DOP)", f"RD$ {subtotal_neto_dop:,.2f}")
-            c2.metric("ITBIS Fijo (18%)", f"RD$ {itbis_total_dop:,.2f}")
-            c3.metric("Importe Total General", f"RD$ {total_general_dop:,.2f}")
+                file_bytes = uploaded_file.read()
+                file_type = uploaded_file.type if hasattr(uploaded_file, 'type') else 'image/jpeg'
+                
+                parsed_data = None
+                success_msg = ""
+                
+                active_key = paid_api_key if st.session_state["use_paid_now"] else free_key_1
+                
+try:
+                    genai.configure(api_key=paid_api_key)
+                    model_paid = genai.GenerativeModel('gemini-3.6-flash')
+                    
+                    uploaded_file.seek(0)
+                    file_bytes = uploaded_file.read()
+                    
+                    prompt = (
+                        "Analiza esta factura detalladamente. Para cada ítem, extrae: 'codigo', 'descripcion', 'cantidad' (la cantidad comprada de cajas/paquetes/unidades, ej: 2, 4, 5, 6), 'empaque' (cuántas unidades individuales trae cada caja o paquete, ej: 12, 24, 10, o 1 si es suelto), y el valor total e ITBIS. "
+                        "Devuelve la información en formato JSON puro (una lista de objetos con claves exactas: 'codigo', 'descripcion', 'cantidad', 'empaque', 'costo_sin_itbis'). "
+                        "REGLA DE ORO PARA EL COSTO UNITARIO: Calcula el valor neto sin ITBIS (Valor Total - ITBIS) y divídelo entre el total de unidades individuales (cantidad * empaque) para obtener el 'costo_sin_itbis' por unidad exacta. "
+                        "REGLA PARA DESCRIPCIÓN: Limpia la descripción para que solo incluya el nombre principal y su tamaño (ejemplo: 'BEBIDA ENERGIZANTE CICLON 250ML'). "
+                        "REGLA CRÍTICA PARA CÓDIGOS DE BARRAS: Extrae rigurosamente el código de barras completo de cada producto (EAN-13, UPC o código de proveedor). Trata el campo 'codigo' estrictamente como texto (string), PRESERVANDO ABSOLUTAMENTE TODOS LOS CEROS A LA IZQUIERDA. "
+                        "Respuesta JSON válida sin texto adicional."
+                    )
+                    
+                    response = model_paid.generate_content([
+                        {'mime_type': uploaded_file.type if hasattr(uploaded_file, 'type') else 'image/jpeg', 'data': file_bytes},
+                        prompt
+                    genai.configure(api_key=active_key)
+                    model = genai.GenerativeModel('gemini-3.6-flash')
+                    response = model.generate_content([
+                        {'mime_type': file_type, 'data': file_bytes},
+                        prompt_text
+])
+                    
+raw_text = response.text.strip()
+if raw_text.startswith("```json"):
+raw_text = raw_text[7:]
+if raw_text.endswith("```"):
+raw_text = raw_text[:-3]
+                    raw_text = raw_text.strip()
+                    
+                    data_items = json.loads(raw_text)
+                    st.session_state["use_paid_now"] = False
+                    st.success("✅ ¡Factura procesada exitosamente con la versión de pago!")
+                    
+                    rows_preview = []
+                    for idx, item in enumerate(data_items, start=1):
+                        costo = safe_float(item.get("costo_sin_itbis", 0))
+                        raw_pv = (costo * 1.25) * 1.18
+                        precio_venta = round_to_nearest_5(raw_pv)
+                        cant_comprada = safe_int(item.get("cantidad", 1), 1)
+                        empaque_val = safe_int(item.get("empaque", 1), 1)
+                        stock_val = cant_comprada * empaque_val
+                        codigo_barras = str(item.get("codigo", "")).strip()
+                        
+                        rows_preview.append({
+                            "No.": idx,
+                            "Código Barra": codigo_barras,
+                            "Nombre": str(item.get("descripcion", "")),
+                            "Cant. Compra": cant_comprada,
+                            "Empaque": empaque_val,
+                            "Stock Total": stock_val,
+                            "Costo Unit. Sin ITBIS": costo,
+                            "Precio Venta (M5)": precio_venta
+                        })
+                    
+                    df_resultado = pd.DataFrame(rows_preview)
+                    st.dataframe(df_resultado, use_container_width=True, hide_index=True)
+                    
+                    template_path = "Plantilla_Inventario_WilPOS_2.xlsx"
+                    if not os.path.exists(template_path):
+                        template_path = "Plantilla_Inventario_WilPOS.xlsx"
+                        
+                    if os.path.exists(template_path):
+                        wb = openpyxl.load_workbook(template_path)
+                        ws_prod = wb['Productos']
+                        ws_prod.delete_rows(2, ws_prod.max_row)
+                    else:
+                        wb = openpyxl.Workbook()
+                        ws_prod = wb.active
+                        ws_prod.title = "Productos"
+                        ws_prod.append(['Nombre', 'Código Barra', 'Categoría', 'Tipo', 'Precio Venta', 'Costo', 'Stock', 'Stock Mínimo', 'ITBIS', 'Unidad Medida', 'Venta Granel', 'Cantidad Empaque', 'Precio Variable', 'Descuento %', 'Descuento Monto', 'Precio Especial', 'Descuento Activo', 'Descuento Nota'])
+                    
+                    for item_dict in data_items:
+                        costo = safe_float(item_dict.get("costo_sin_itbis", 0))
+                        raw_pv = (costo * 1.25) * 1.18
+                        pv = round_to_nearest_5(raw_pv)
+                        cant_comprada = safe_int(item_dict.get("cantidad", 1), 1)
+                        empaque_val = safe_int(item_dict.get("empaque", 1), 1)
+                        stock_val = cant_comprada * empaque_val
+                        codigo_barras = str(item_dict.get("codigo", "")).strip()
+                        
+                        ws_prod.append([
+                            str(item_dict.get("descripcion", "")),
+                            codigo_barras,
+                            "General",
+                            "producto",
+                            pv,
+                            costo,
+                            stock_val,
+                            5,
+                            0.18,
+                            "unidad",
+                            "No",
+                            empaque_val,
+                            "No",
+                            0,
+                            0,
+                            None,
+                            "No",
+                            None
+                        ])
+                        ws_prod.cell(row=ws_prod.max_row, column=2).number_format = '@'
+                    
+                    output = io.BytesIO()
+                    wb.save(output)
+                    excel_data = output.getvalue()
+                    
+                    st.download_button(
+                        label="📥 Descargar Excel Plantilla WilPOS Actualizada",
+                        data=excel_data,
+                        file_name="Inventario_WilPOS_Actualizado.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                    )
+                except Exception as err_paid:
+                    st.error(f"Error al procesar con la versión de pago: {err_paid}")
+                    st.session_state["use_paid_now"] = False
         else:
-            st.warning("Verifica que las cantidades y precios en la tabla sean mayores a cero.")
+            if st.button("🚀 Procesar Factura con Plantilla Oficial"):
+                with st.spinner("Analizando empaques, cantidades y calculando stock correcto..."):
+                    data_items = None
+                    success_msg = ""
+                    
+                    prompt_text = (
+                        "Analiza esta factura detalladamente. Para cada ítem, extrae: 'codigo', 'descripcion', 'cantidad' (la cantidad comprada de cajas/paquetes/unidades, ej: 2, 4, 5, 6), 'empaque' (cuántas unidades individuales trae cada caja o paquete, ej: 12, 24, 10, o 1 si es suelto), y el valor total e ITBIS. "
+                        "Devuelve la información en formato JSON puro (una lista de objetos con claves exactas: 'codigo', 'descripcion', 'cantidad', 'empaque', 'costo_sin_itbis'). "
+                        "REGLA DE ORO PARA EL COSTO UNITARIO: Calcula el valor neto sin ITBIS (Valor Total - ITBIS) y divídelo entre el total de unidades individuales (cantidad * empaque) para obtener el 'costo_sin_itbis' por unidad exacta. "
+                        "REGLA PARA DESCRIPCIÓN: Limpia la descripción para que solo incluya el nombre principal y su tamaño (ejemplo: 'BEBIDA ENERGIZANTE CICLON 250ML'). "
+                        "REGLA CRÍTICA PARA CÓDIGOS DE BARRAS: Extrae rigurosamente el código de barras completo de cada producto (EAN-13, UPC o código de proveedor). Trata el campo 'codigo' estrictamente como texto (string), PRESERVANDO ABSOLUTAMENTE TODOS LOS CEROS A LA IZQUIERDA. "
+                        "Respuesta JSON válida sin texto adicional."
+                    )
+                    
+                    try:
+                        if not free_key_1:
+                            raise Exception("No free key 1")
+                        
+                        genai.configure(api_key=free_key_1)
+                        model = genai.GenerativeModel('gemini-3.6-flash')
+                        
+                        uploaded_file.seek(0)
+                        file_bytes = uploaded_file.read()
+                        
+                        response = model.generate_content([
+                            {'mime_type': uploaded_file.type if hasattr(uploaded_file, 'type') else 'image/jpeg', 'data': file_bytes},
+                            prompt_text
+                        ])
+                        
+                        raw_text = response.text.strip()
+                        if raw_text.startswith("```json"):
+                            raw_text = raw_text[7:]
+                        if raw_text.endswith("```"):
+                            raw_text = raw_text[:-3]
+                        raw_text = raw_text.strip()
+                        
+                        data_items = json.loads(raw_text)
+                        success_msg = "✅ ¡Factura procesada con éxito usando la **Cuenta Gratuita #1**!"
+                        
+                    except Exception as e1:
+                        err_msg1 = str(e1)
+                        if ("429" in err_msg1 or "Quota exceeded" in err_msg1 or "No free key 1" in err_msg1) and free_key_2:
+                            try:
+                                genai.configure(api_key=free_key_2)
+                                model2 = genai.GenerativeModel('gemini-3.6-flash')
+                                
+                                uploaded_file.seek(0)
+                                file_bytes = uploaded_file.read()
+                                
+                                response = model2.generate_content([
+                                    {'mime_type': uploaded_file.type if hasattr(uploaded_file, 'type') else 'image/jpeg', 'data': file_bytes},
+                                    prompt_text
+                                ])
+                                
+                                raw_text = response.text.strip()
+                                if raw_text.startswith("```json"):
+                                    raw_text = raw_text[7:]
+                                if raw_text.endswith("```"):
+                                    raw_text = raw_text[:-3]
+                                raw_text = raw_text.strip()
+                                
+                                data_items = json.loads(raw_text)
+                                success_msg = "✅ ¡Factura procesada con éxito rotando al **Respaldo Gratuito #2**!"
+                            except Exception as e2:
+                                err_msg2 = str(e2)
+                                if "429" in err_msg2 or "Quota exceeded" in err_msg2:
+                                    st.session_state["quota_exceeded"] = True
+                                    st.rerun()
+                                else:
+                                    st.error(f"Error con Respaldo Gratuito #2: {e2}")
+                        elif "429" in err_msg1 or "Quota exceeded" in err_msg1:
+                    parsed_data = json.loads(raw_text.strip())
+                    success_msg = "✅ ¡Factura procesada con éxito!"
+                except Exception as e:
+                    err_str = str(e)
+                    if ("429" in err_str or "Quota exceeded" in err_str) and not st.session_state["use_paid_now"]:
+                        try:
+                            genai.configure(api_key=free_key_2)
+                            model2 = genai.GenerativeModel('gemini-3.6-flash')
+                            uploaded_file.seek(0)
+                            response = model2.generate_content([
+                                {'mime_type': file_type, 'data': uploaded_file.read()},
+                                prompt_text
+                            ])
+                            raw_text = response.text.strip()
+                            if raw_text.startswith("```json"):
+                                raw_text = raw_text[7:]
+                            if raw_text.endswith("```"):
+                                raw_text = raw_text[:-3]
+                            parsed_data = json.loads(raw_text.strip())
+                            success_msg = "✅ ¡Factura procesada usando el respaldo gratuito #2!"
+                        except Exception:
+st.session_state["quota_exceeded"] = True
+st.rerun()
+                        else:
+                            st.error(f"Ocurrió un error con la IA: {e1}")
+                    else:
+                        st.error(f"Error al procesar: {e}")
 
-# =============================================================
-# MÓDULO 2: MÚLTIPLES FACTURAS (LOTE MASIVO)
-# =============================================================
-with tab_multiple:
-    st.subheader("Módulo de Múltiples Facturas (Lote Masivo)")
-    
-    df_multi_init = pd.DataFrame([
-        {"No. Factura": "FACT-001", "Proveedor": "Proveedor Genérico", "Código": "PROD-01", "Descripción": "Artículo de prueba", "Cantidad": 1.0, "Moneda": "DOP", "Precio Unitario": 100.0}
-    ])
-    
-    df_multi_edit = st.data_editor(df_multi_init, num_rows="dynamic", key="editor_multiple", use_container_width=True)
-    
-    if st.button("🚀 Consolidar Lote Masivo y Precios", type="primary", key="btn_multi"):
-        resultados_lote = []
-        subtotal_lote_dop = 0.0
-        
-        for idx, row in df_multi_edit.iterrows():
-            factura_ref = str(row.get("No. Factura", ""))
-            prov = str(row.get("Proveedor", ""))
-            codigo = str(row.get("Código", f"MULT-{idx+1}"))
-            desc = str(row.get("Descripción", ""))
-            cant = float(row.get("Cantidad", 0.0))
-            mon = str(row.get("Moneda", "DOP")).upper()
-            precio_unit = float(row.get("Precio Unitario", 0.0))
+                if parsed_data:
+                    rnc_emisor = str(parsed_data.get("emisor_rnc", "")).strip()
+                    num_doc = str(parsed_data.get("numero_documento", "")).strip()
+                    fecha_doc = str(parsed_data.get("fecha", "")).strip()
+                    total_doc = str(parsed_data.get("total", "")).strip()
+                    
+                    signature_string = f"{rnc_emisor}_{num_doc}_{fecha_doc}_{total_doc}"
+                    doc_signature = hashlib.md5(signature_string.encode('utf-8')).hexdigest()
+
+                    if data_items:
+                    if doc_signature in st.session_state["processed_signatures"]:
+                        st.error("🚨 **¡ADVERTENCIA DE FACTURA DUPLICADA!**")
+                        st.warning(f"Este documento ya fue procesado anteriormente.\n\n"
+                                   f"- **Emisor RNC:** `{rnc_emisor}`\n"
+                                   f"- **No. Documento:** `{num_doc}`[cite: 12, 13]\n"
+                                   f"- **Fecha:** `{fecha_doc}`[cite: 12, 13]\n"
+                                   f"- **Total:** `{total_doc}`[cite: 12, 13]\n\n"
+                                   f"El sistema ha bloqueado la carga para evitar duplicidad en el inventario de WilPOS.")
+                    else:
+                        st.session_state["processed_signatures"].add(doc_signature)
+st.success(success_msg)
+                        
+                        data_items = parsed_data.get("items", [])
+rows_preview = []
+for idx, item in enumerate(data_items, start=1):
+costo = safe_float(item.get("costo_sin_itbis", 0))
+@@ -354,57 +247,54 @@ def paid_confirmation_dialog():
+)
+
+# ==========================================
+# MÓDULO 2: MÚLTIPLES FACTURAS (LOTE / BATCH)
+# MÓDULO 2: MÚLTIPLES FACTURAS (LOTE) CON ANTI-DUPLICADOS
+# ==========================================
+elif modulo == "📂 Múltiples Facturas (Lote)":
+    st.title("📂 Procesador por Lotes de Facturas (Múltiples Archivos)")
+    st.markdown("Sube varias facturas (PDF o imágenes). El sistema procesará cada una, consolidará los productos en una sola lista y calculará el inventario completo para WilPOS.")
+    st.title("📂 Procesador por Lotes con Control Anti-Duplicados")
+    st.markdown("Sube varias facturas o cotizaciones. El sistema filtrará automáticamente cualquier documento duplicado evaluando su firma única.")
+
+uploaded_files = st.file_uploader("Sube tus facturas (Puedes seleccionar varias)", type=["pdf", "png", "jpg", "jpeg"], accept_multiple_files=True, key="batch_files")
+
+if uploaded_files:
+        st.info(f"Se han cargado {len(uploaded_files)} archivos para procesar.")
+        st.info(f"Se han cargado {len(uploaded_files)} archivos en total.")
+
+        if st.button("🚀 Procesar Lote Completo de Facturas", type="primary"):
+        if st.button("🚀 Procesar Lote Evaluando Duplicados", type="primary"):
+all_consolidated_items = []
+            duplicate_count = 0
+            processed_in_this_batch = set()
+
+progress_bar = st.progress(0)
+status_text = st.empty()
+
+for i, file in enumerate(uploaded_files):
+                status_text.text(f"Procesando archivo {i+1} de {len(uploaded_files)}: {file.name}...")
+                status_text.text(f"Analizando archivo {i+1} de {len(uploaded_files)}: {file.name}[cite: 12, 13]...")
+
+prompt_text = (
+                    "Analiza esta factura detalladamente. Para cada ítem, extrae: 'codigo', 'descripcion', 'cantidad' (la cantidad comprada de cajas/paquetes/unidades, ej: 2, 4, 5, 6), 'empaque' (cuántas unidades individuales trae cada caja o paquete, ej: 12, 24, 10, o 1 si es suelto), y el valor total e ITBIS. "
+                    "Devuelve la información en formato JSON puro (una lista de objetos con claves exactas: 'codigo', 'descripcion', 'cantidad', 'empaque', 'costo_sin_itbis'). "
+                    "REGLA DE ORO PARA EL COSTO UNITARIO: Calcula el valor neto sin ITBIS (Valor Total - ITBIS) y divídelo entre el total de unidades individuales (cantidad * empaque) para obtener el 'costo_sin_itbis' por unidad exacta. "
+                    "REGLA PARA DESCRIPCIÓN: Limpia la descripción para que solo incluya el nombre principal y su tamaño (ejemplo: 'BEBIDA ENERGIZANTE CICLON 250ML'). "
+                    "REGLA CRÍTICA PARA CÓDIGOS DE BARRAS: Extrae rigurosamente el código de barras completo de cada producto (EAN-13, UPC o código de proveedor). Trata el campo 'codigo' estrictamente como texto (string), PRESERVANDO ABSOLUTAMENTE TODOS LOS CEROS A LA IZQUIERDA. "
+                    "Respuesta JSON válida sin texto adicional."
+                    "Analiza esta factura o cotización detalladamente. Extrae los datos de cabecera: 'emisor_rnc', 'numero_documento', 'fecha', 'total'. "
+                    "Para cada ítem, extrae: 'codigo', 'descripcion', 'cantidad' (cantidad comprada), 'empaque' (unidades por empaque), y 'costo_sin_itbis'. "
+                    "Devuelve la información estrictamente en formato JSON con la siguiente estructura exacta: "
+                    '{"emisor_rnc": "...", "numero_documento": "...", "fecha": "...", "total": "...", "items": [{"codigo": "...", "descripcion": "...", "cantidad": 1, "empaque": 1, "costo_sin_itbis": 0.0}]}. '
+                    "REGLA CRÍTICA: Preserva todos los ceros a la izquierda como texto. Respuesta JSON pura sin texto adicional."
+)
+
+file_bytes = file.read()
+file_type = file.type if hasattr(file, 'type') else 'image/jpeg'
+
+                items_from_file = None
+                
+                # Intentar con Cuenta Gratuita 1
+                parsed_data = None
+try:
+                    if free_key_1:
+                        genai.configure(api_key=free_key_1)
+                        model_b1 = genai.GenerativeModel('gemini-3.6-flash')
+                        response = model_b1.generate_content([
+                            {'mime_type': file_type, 'data': file_bytes},
+                            prompt_text
+                        ])
+                        raw_txt = response.text.strip()
+                        if raw_txt.startswith("```json"):
+                            raw_txt = raw_txt[7:]
+                        if raw_txt.endswith("```"):
+                            raw_txt = raw_txt[:-3]
+                        items_from_file = json.loads(raw_txt.strip())
+                    genai.configure(api_key=free_key_1 if free_key_1 else paid_api_key)
+                    model_b = genai.GenerativeModel('gemini-3.6-flash')
+                    response = model_b.generate_content([
+                        {'mime_type': file_type, 'data': file_bytes},
+                        prompt_text
+                    ])
+                    raw_txt = response.text.strip()
+                    if raw_txt.startswith("```json"):
+                        raw_txt = raw_txt[7:]
+                    if raw_txt.endswith("```"):
+                        raw_txt = raw_txt[:-3]
+                    parsed_data = json.loads(raw_txt.strip())
+except Exception:
+                    # Intentar con Cuenta Gratuita 2 en caso de fallo o cuota
+try:
+if free_key_2:
+genai.configure(api_key=free_key_2)
+@@ -418,35 +308,38 @@ def paid_confirmation_dialog():
+raw_txt = raw_txt[7:]
+if raw_txt.endswith("```"):
+raw_txt = raw_txt[:-3]
+                            items_from_file = json.loads(raw_txt.strip())
+                            parsed_data = json.loads(raw_txt.strip())
+except Exception:
+                        # Fallback final a versión de pago si las gratuitas fallan
+                        try:
+                            if paid_api_key:
+                                genai.configure(api_key=paid_api_key)
+                                model_bp = genai.GenerativeModel('gemini-3.6-flash')
+                                response = model_bp.generate_content([
+                                    {'mime_type': file_type, 'data': file_bytes},
+                                    prompt_text
+                                ])
+                                raw_txt = response.text.strip()
+                                if raw_txt.startswith("```json"):
+                                    raw_txt = raw_txt[7:]
+                                if raw_txt.endswith("```"):
+                                    raw_txt = raw_txt[:-3]
+                                items_from_file = json.loads(raw_txt.strip())
+                        except Exception as batch_err:
+                            st.warning(f"No se pudo procesar el archivo {file.name}: {batch_err}")
+                        pass
+
+                if items_from_file and isinstance(items_from_file, list):
+                    all_consolidated_items.extend(items_from_file)
+                if parsed_data and isinstance(parsed_data, dict):
+                    rnc_emisor = str(parsed_data.get("emisor_rnc", "")).strip()
+                    num_doc = str(parsed_data.get("numero_documento", "")).strip()
+                    fecha_doc = str(parsed_data.get("fecha", "")).strip()
+                    total_doc = str(parsed_data.get("total", "")).strip()
+                    
+                    signature_string = f"{rnc_emisor}_{num_doc}_{fecha_doc}_{total_doc}"
+                    doc_signature = hashlib.md5(signature_string.encode('utf-8')).hexdigest()
+                    
+                    if doc_signature in st.session_state["processed_signatures"] or doc_signature in processed_in_this_batch:
+                        duplicate_count += 1
+                        st.warning(f"⚠️ Archivo omitido por duplicidad: **{file.name}**[cite: 12, 13] (Doc: {num_doc}[cite: 12, 13], Total: {total_doc}[cite: 12, 13])")
+                    else:
+                        processed_in_this_batch.add(doc_signature)
+                        st.session_state["processed_signatures"].add(doc_signature)
+                        items = parsed_data.get("items", [])
+                        if isinstance(items, list):
+                            all_consolidated_items.extend(items)
+
+progress_bar.progress((i + 1) / len(uploaded_files))
+
+            status_text.text("¡Procesamiento por lotes completado con éxito!")
+            status_text.text("¡Procesamiento por lotes completado!")
             
-            if cant <= 0 or precio_unit <= 0:
-                continue
-            
-            precio_dop = precio_unit * TASA_COMPRA_USD_INTERNA if mon == "USD" else precio_unit
-            importe_linea = cant * precio_dop
-            subtotal_lote_dop += importe_linea
-            
-            costo_unit_neto = precio_dop
-            costo_unit_con_itbis = costo_unit_neto * (1 + (itbis_fijo / 100.0))
-            
-            precio_venta_bruto = costo_unit_con_itbis * (1 + (margen_ganancia / 100.0))
-            precio_venta_sugerido = round(precio_venta_bruto / 5) * 5
-            
-            resultados_lote.append({
-                "Factura": factura_ref,
-                "Proveedor": prov,
-                "Código": codigo,
-                "Descripción": desc,
-                "Cantidad": cant,
-                "Moneda": mon,
-                "Costo Unitario Neto": round(costo_unit_neto, 2),
-                "Costo Unit. + ITBIS": round(costo_unit_con_itbis, 2),
-                f"Precio Venta (+{margen_ganancia}% - Múltiplo de 5)": round(precio_venta_sugerido, 2),
-                "Importe Total": round(importe_linea, 2)
-            })
-            
-        if resultados_lote:
-            df_res_lote = pd.DataFrame(resultados_lote)
-            itbis_lote_dop = subtotal_lote_dop * (itbis_fijo / 100.0)
-            total_lote_dop = subtotal_lote_dop + itbis_lote_dop
-            
-            st.success("¡Lote consolidado con éxito!")
-            st.dataframe(df_res_lote, use_container_width=True)
-            
-            m1, m2, m3 = st.columns(3)
-            m1.metric("Subtotal Lote", f"RD$ {subtotal_lote_dop:,.2f}")
-            m2.metric("ITBIS Fijo (18%)", f"RD$ {itbis_lote_dop:,.2f}")
-            m3.metric("Total General del Lote", f"RD$ {total_lote_dop:,.2f}")
-            
-            csv_lote = df_res_lote.to_csv(index=False).encode('utf-8')
-            st.download_button(
-                label="📥 Descargar CSV Consolidado para Importación en WilPOS",
-                data=csv_lote,
-                file_name="wilpos_lote_multiples_facturas.csv",
-                mime="text/csv"
-            )
+            if duplicate_count > 0:
+                st.error(f"🚨 Se detectaron y bloquearon **{duplicate_count} archivo(s) duplicado(s)** en este lote.")
+
+if all_consolidated_items:
+                st.success(f"🎉 Se consolidaron un total de {len(all_consolidated_items)} ítems provenientes de todas las facturas.")
+                st.success(f"🎉 Se consolidaron exitosamente {len(all_consolidated_items)} ítems de facturas válidas.")
+
+rows_preview = []
+for idx, item in enumerate(all_consolidated_items, start=1):
+@@ -472,7 +365,6 @@ def paid_confirmation_dialog():
+df_batch = pd.DataFrame(rows_preview)
+st.dataframe(df_batch, use_container_width=True, hide_index=True)
+
+                # Generar Excel Consolidado
+template_path = "Plantilla_Inventario_WilPOS_2.xlsx"
+if not os.path.exists(template_path):
+template_path = "Plantilla_Inventario_WilPOS.xlsx"
+@@ -523,10 +415,10 @@ def paid_confirmation_dialog():
+excel_data_batch = output.getvalue()
+
+st.download_button(
+                    label="📥 Descargar Excel Consolidado (Lote WilPOS)",
+                    label="📥 Descargar Excel Consolidado Sin Duplicados",
+data=excel_data_batch,
+file_name="Inventario_WilPOS_Consolidado_Lote.xlsx",
+mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+)
+else:
+                st.warning("No se pudieron extraer ítems de las facturas proporcionadas.")
+                st.warning("No hay ítems válidos para consolidar (todos los archivos eran duplicados o vacíos).")
