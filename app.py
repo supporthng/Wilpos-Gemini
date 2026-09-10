@@ -38,6 +38,8 @@ if "df_productos" not in st.session_state:
     st.session_state.df_productos = pd.DataFrame([
         {"Código": "", "Descripción": "Sube una factura para extraer ítems automáticamente", "Cantidad Empaques": 1.0, "Unidades por Caja": 1, "Precio Lista / Caja": 0.0, "Descuento (%)": 0.0}
     ])
+if "ultimo_archivo" not in st.session_state:
+    st.session_state.ultimo_archivo = None
 
 # Pestañas principales
 tab_individual, tab_multiple = st.tabs([
@@ -54,7 +56,9 @@ with tab_individual:
     
     archivo_subido = st.file_uploader("📂 Cargar Factura (PDF o Imagen)", type=["pdf", "png", "jpg", "jpeg"], key="uploader_ind")
     
-    if archivo_subido is not None:
+    # Procesar solo si se sube un archivo nuevo para evitar bucles de carga
+    if archivo_subido is not None and archivo_subido != st.session_state.ultimo_archivo:
+        st.session_state.ultimo_archivo = archivo_subido
         extension = archivo_subido.name.split('.')[-1].lower()
         texto_extraido = ""
         filas_extraidas = []
@@ -62,43 +66,36 @@ with tab_individual:
         if extension == "pdf":
             with pdfplumber.open(archivo_subido) as pdf:
                 for pagina in pdf.pages:
-                    # Extraer texto general para detectar moneda o proveedor de forma genérica
                     texto_extraido += pagina.extract_text() or ""
-                    
-                    # Extraer tablas de manera genérica
                     tablas = pagina.extract_tables()
                     for tabla in tablas:
                         for fila in tabla:
-                            # Limpiar celdas vacías o nulas de la fila
                             fila_limpia = [str(c).strip() for c in fila if c is not None and str(c).strip() != ""]
-                            if len(fila_limpia >= 2):
+                            if len(fila_limpia) >= 2:
                                 filas_extraidas.append(fila_limpia)
         else:
             imagen = Image.open(archivo_subido)
-            st.image(imagen, caption=f"Vista previa: {archivo_subido.name}", use_container_width=True)
             texto_extraido = "IMAGEN_CARGADA"
 
         texto_upper = texto_extraido.upper()
         
-        # 1. Autodetección genérica de Moneda
+        # Autodetección genérica de Moneda
         if "USD" in texto_upper or "US$" in texto_upper:
             st.session_state.mon_val = "USD"
         else:
             st.session_state.mon_val = "DOP"
             
-        # 2. Autodetección genérica de empaques o porciones (ej: 12/70, Paquete-12, etc.)
+        # Autodetección genérica de empaques
         match_empaque = re.search(r'(\d+)\s*(?:/|PAQUETE-|CAJA-)\s*(\d+)?', texto_upper)
         if match_empaque:
             st.session_state.emp_val = "Por Cajas / Empaques (con unidades por caja)"
         
-        # Si se extrajeron filas de tablas genéricas, intentamos pasarlas al editor
         if filas_extraidas:
             nuevos_items = []
             for idx, f in enumerate(filas_extraidas):
-                # Intentar mapear celdas de forma heurística genérica
                 desc = f[1] if len(f) > 1 else "Item extraído"
                 if "DESCRIPCION" in desc.upper() or "TOTAL" in desc.upper():
-                    continue # Saltar encabezados o totales
+                    continue
                 nuevos_items.append({
                     "Código": f[0] if len(f) > 0 else f"GEN-{idx}",
                     "Descripción": desc,
@@ -109,11 +106,9 @@ with tab_individual:
                 })
             if nuevos_items:
                 st.session_state.df_productos = pd.DataFrame(nuevos_items)
-                st.success("🤖 ¡Estructura de factura analizada y extraída de manera genérica con éxito!")
+                st.success("🤖 ¡Estructura de factura analizada y extraída con éxito!")
         else:
-            st.info("ℹ️ Factura leída. Si no se autocompletaron las líneas por diseño gráfico del PDF, puedes ingresarlas o pegarlas abajo.")
-
-        st.rerun()
+            st.info("ℹ️ Factura leída correctamente. Puedes ingresar o ajustar los ítems abajo.")
 
     st.divider()
     
@@ -155,13 +150,11 @@ with tab_individual:
             if cant_empaques <= 0 or precio_lista <= 0:
                 continue
             
-            # Conversión interna automática si la moneda es USD
             precio_base_dop = precio_lista * TASA_COMPRA_USD_INTERNA if moneda_ind == "USD" else precio_lista
             precio_con_desc = precio_base_dop * (1 - (desc_pct / 100.0))
             importe_linea_neto = cant_empaques * precio_con_desc
             subtotal_neto_dop += importe_linea_neto
             
-            # Costo unitario dinámico según empaque
             if tipo_empaque.startswith("Por Cajas") and unidades_por_caja > 1:
                 total_unidades_sueltas = cant_empaques * unidades_por_caja
                 costo_unitario_neto = importe_linea_neto / total_unidades_sueltas
@@ -170,7 +163,6 @@ with tab_individual:
                 
             costo_unitario_con_itbis = costo_unitario_neto * (1 + (itbis_fijo / 100.0))
             
-            # Precio de venta aplicando el margen y redondeando al múltiplo de 5
             precio_venta_bruto = costo_unitario_con_itbis * (1 + (margen_ganancia / 100.0))
             precio_venta_sugerido = round(precio_venta_bruto / 5) * 5
             
