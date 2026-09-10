@@ -7,20 +7,14 @@ from PIL import Image
 # Configuración de la página
 st.set_page_config(page_title="WilPOS - Procesador Inteligente de Facturas", page_icon="🧾", layout="wide")
 
-st.title("🧾 WilPOS - Procesador General y Automático de Facturas")
-st.write("Sube cualquier factura en PDF o Imagen. El sistema extraerá el texto, detectará los valores y calculará todo automáticamente.")
+st.title("🧾 WilPOS - Procesador Universal de Facturas")
+st.write("Sube cualquier factura en PDF. El sistema extraerá automáticamente las líneas de productos mediante coordenadas de texto.")
 
-# Sidebar global para parámetros visibles
+# Sidebar global para parámetros
 st.sidebar.header("⚙️ Parámetros Globales")
-
-# Tasa de compra interna fija (oculta para conversiones de USD a DOP)
 TASA_COMPRA_USD_INTERNA = 58.50
-
-# ITBIS Fijo (18%)
 itbis_fijo = 18.0
 st.sidebar.markdown(f"**ITBIS Fijo:** `{itbis_fijo}%`")
-
-# Margen de Ganancia (Fijo en 25% por defecto, modificable)
 margen_ganancia = st.sidebar.number_input("Margen de Ganancia sobre Costo (%)", value=25.0, step=0.5)
 
 # =============================================================
@@ -43,87 +37,85 @@ if "ultimo_archivo" not in st.session_state:
 
 # Pestañas principales
 tab_individual, tab_multiple = st.tabs([
-    "📄 Módulo 1: Factura Individual (Extracción Genérica)", 
+    "📄 Módulo 1: Factura Individual (Extracción Universal)", 
     "📚 Módulo 2: Múltiples Facturas (Lote Masivo)"
 ])
 
 # =============================================================
-# MÓDULO 1: EXTRACCIÓN GENÉRICA DE CUALQUIER FACTURA
+# MÓDULO 1: EXTRACCIÓN UNIVERSAL POR COORDENADAS
 # =============================================================
 with tab_individual:
-    st.subheader("Módulo de Procesamiento Genérico")
-    st.write("Sube cualquier factura PDF. El motor inteligente analizará las líneas de texto para extraer los ítems.")
+    st.subheader("Módulo de Extracción Universal")
+    st.write("Sube tu factura en PDF. El motor leerá las posiciones de las palabras para armar la tabla de productos.")
     
     archivo_subido = st.file_uploader("📂 Cargar Factura (PDF o Imagen)", type=["pdf", "png", "jpg", "jpeg"], key="uploader_ind")
     
-    # Procesar solo si se sube un archivo nuevo para evitar bucles de carga
     if archivo_subido is not None and archivo_subido != st.session_state.ultimo_archivo:
         st.session_state.ultimo_archivo = archivo_subido
         extension = archivo_subido.name.split('.')[-1].lower()
-        texto_extraido = ""
+        texto_global = ""
+        items_extraidos = []
         
         if extension == "pdf":
             with pdfplumber.open(archivo_subido) as pdf:
                 for pagina in pdf.pages:
-                    texto_extraido += pagina.extract_text() or ""
+                    texto_global += pagina.extract_text() or ""
+                    
+                    # Extraer palabras con sus coordenadas (top, x0, text)
+                    palabras = pagina.extract_words()
+                    if palabras:
+                        # Agrupar palabras por su posición vertical (top redondeado a 5 píxeles)
+                        lineas_dict = {}
+                        for w in palabras:
+                            # Redondear la coordenada 'top' para agrupar palabras de la misma línea
+                            y_Coord = round(w['top'] / 6) * 6
+                            if y_Coord not in lineas_dict:
+                                lineas_dict[y_Coord] = []
+                            lineas_dict[y_Coord].append(w['text'])
+                        
+                        # Convertir las líneas agrupadas en texto de línea
+                        for y in sorted(lineas_dict.keys()):
+                            linea_texto = " ".join(lineas_dict[y])
+                            
+                            # Filtrar encabezados comunes o totales
+                            if any(k in linea_texto.upper() for k in ["SUBTOTAL", "ITBIS", "TOTAL", "RNC", "FECHA", "NCF", "DIRECCION", "TELEFONO"]):
+                                continue
+                                
+                            # Buscar líneas que contengan números decimales (posibles precios/cantidades)
+                            if re.search(r'\d+[.,]\d+', linea_texto):
+                                partes = linea_texto.split()
+                                if len(partes) >= 2:
+                                    codigo_det = partes[0] if len(partes[0]) <= 15 else "PROD"
+                                    desc_det = " ".join(partes[1:])
+                                    items_extraidos.append({
+                                        "Código": codigo_det,
+                                        "Descripción": desc_det[:80],
+                                        "Cantidad Empaques": 1.0,
+                                        "Unidades por Caja": 1,
+                                        "Precio Lista / Caja": 0.0,
+                                        "Descuento (%)": 0.0
+                                    })
         else:
             imagen = Image.open(archivo_subido)
-            texto_extraido = "IMAGEN_CARGADA"
+            texto_global = "IMAGEN_CARGADA"
 
-        texto_upper = texto_extraido.upper()
+        texto_upper = texto_global.upper()
         
-        # 1. Autodetección genérica de Moneda
+        # Detección de moneda
         if "USD" in texto_upper or "US$" in texto_upper:
             st.session_state.mon_val = "USD"
         else:
             st.session_state.mon_val = "DOP"
             
-        # 2. Autodetección genérica de empaques o porciones (ej: 12/70, Paquete-12, etc.)
-        match_empaque = re.search(r'(\d+)\s*(?:/|PAQUETE-|CAJA-)\s*(\d+)?', texto_upper)
-        if match_empaque:
-            st.session_state.emp_val = "Por Cajas / Empaques (con unidades por caja)"
-        
-        # 3. Extracción inteligente línea por línea basada en patrones numéricos y de texto
-        lineas = texto_extraido.split('\n')
-        items_extraidos = []
-        
-        for idx, linea in enumerate(lineas):
-            linea_limpia = linea.strip()
-            if not linea_limpia:
-                continue
-            
-            # Omitir encabezados, pies de página o totales comunes
-            palabras_omitidas = ["RNC", "TEL", "FACTURA", "SUBTOTAL", "ITBIS", "TOTAL", "CLIENTE", "FECHA", "RUTA", "PAGINA", "DIRECCION"]
-            if any(p in linea_limpia.upper() for p in palabras_omitidas):
-                continue
-                
-            # Buscar patrones que parezcan una línea de producto (que contengan números y texto descriptivo)
-            # Ejemplo heurístico: líneas que tienen longitud considerable y números al final o al inicio
-            partes = linea_limpia.split()
-            if len(partes) >= 2:
-                # Intentar detectar si hay un precio o cantidad numérica en la línea
-                tiene_numeros = any(re.search(r'\d+[.,]\d+', p) for p in partes)
-                if tiene_numeros:
-                    codigo_posible = partes[0] if len(partes[0]) <= 15 else f"PROD-{idx}"
-                    desc_posible = " ".join(partes[1:]) if len(partes) > 1 else linea_limpia
-                    
-                    items_extraidos.append({
-                        "Código": codigo_posible,
-                        "Descripción": desc_posible[:80], # Limitar longitud
-                        "Cantidad Empaques": 1.0,
-                        "Unidades por Caja": 1,
-                        "Precio Lista / Caja": 0.0,
-                        "Descuento (%)": 0.0
-                    })
-
         if items_extraidos:
-            st.session_state.df_productos = pd.DataFrame(items_extraidos[:15]) # Tomar una muestra limpia relevante
-            st.success(f"🤖 ¡Se han detectado y extraído {len(items_extraidos)} posibles ítems de la factura!")
+            # Limitar y asegurar ítems únicos relevantes
+            st.session_state.df_productos = pd.DataFrame(items_extraidos[:20])
+            st.success(f"🤖 ¡Se han extraído {len(items_extraidos)} elementos estructurados de la factura con éxito!")
         else:
-            st.info("ℹ️ Factura leída. El formato no generó líneas tabulares automáticas, pero puedes ingresar o pegar los datos abajo.")
+            st.warning("⚠️ No se pudieron aislar los ítems automáticamente por el diseño del documento. Puedes ingresarlos o ajustarlos manualmente en la tabla de abajo.")
             
-        with st.expander("🔍 Ver texto bruto extraído de la factura (para referencia)"):
-            st.text(texto_extraido)
+        with st.expander("🔍 Ver texto bruto extraído del archivo"):
+            st.text(texto_global)
 
     st.divider()
     
@@ -138,16 +130,11 @@ with tab_individual:
         
         emp_options = ["Por Cajas / Empaques (con unidades por caja)", "Unidades Directas"]
         emp_index = emp_options.index(st.session_state.emp_val) if st.session_state.emp_val in emp_options else 0
-        tipo_empaque = st.radio(
-            "Cálculo por Unidad:", 
-            emp_options, 
-            index=emp_index,
-            horizontal=True
-        )
+        tipo_empaque = st.radio("Cálculo por Unidad:", emp_options, index=emp_index, horizontal=True)
 
     st.divider()
     
-    st.write("📋 **Detalle de Ítems (Editable o Pegado Directo)**")
+    st.write("📋 **Detalle de Ítems (Editable)**")
     df_ind_edit = st.data_editor(st.session_state.df_productos, num_rows="dynamic", key="editor_individual", use_container_width=True)
     
     if st.button("🧮 Calcular Costos y Precios de Venta", type="primary", key="btn_ind"):
@@ -276,5 +263,5 @@ with tab_multiple:
                 label="📥 Descargar CSV Consolidado para Importación en WilPOS",
                 data=csv_lote,
                 file_name="wilpos_lote_multiples_facturas.csv",
-                mime="text/csv"
+                mime="text/css"
             )
