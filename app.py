@@ -79,7 +79,6 @@ if master_file_uploaded is not None:
         else:
             df_master = pd.read_excel(master_file_uploaded)
         
-        # Intentar detectar columnas de nombre y código de barras
         cols = [c.lower() for c in df_master.columns]
         name_col = next((df_master.columns[i] for i, c in enumerate(cols) if 'nombre' in c or 'descripcion' in c), df_master.columns[0])
         code_col = next((df_master.columns[i] for i, c in enumerate(cols) if 'codigo' in c or 'barra' in c or 'barcode' in c), df_master.columns[1])
@@ -101,17 +100,14 @@ def validate_with_master(item_description, original_code):
     if not master_dict:
         return original_code, "Sin Maestro Cargado"
     
-    # 1. Búsqueda exacta
     if clean_desc in master_dict:
         return master_dict[clean_desc], "Actualizado (Exacto)"
     
-    # 2. Búsqueda por similitud (Fuzzy matching con umbral de 0.6)
     matches = difflib.get_close_matches(clean_desc, master_names, n=1, cutoff=0.6)
     if matches:
         matched_name = matches[0]
         return master_dict[matched_name], f"Actualizado (Similitud: {matched_name})"
     
-    # Si no encuentra coincidencia
     return original_code, "⚠️ No Encontrado en Maestro"
 
 # ==========================================
@@ -128,6 +124,16 @@ if modulo == "📄 Factura Individual":
 
     if uploaded_file is not None:
         st.success(f"¡Archivo cargado: {uploaded_file.name}!")
+
+        # 👁️ Botón de Vista Previa (Ojito)
+        with st.expander("👁️ Vista Previa del Archivo Cargado"):
+            file_type_check = uploaded_file.type if hasattr(uploaded_file, 'type') else ''
+            if "image" in file_type_check or uploaded_file.name.lower().endswith(('png', 'jpg', 'jpeg', 'webp')):
+                image = Image.open(uploaded_file)
+                st.image(image, caption=f"Vista previa: {uploaded_file.name}", use_container_width=True)
+                uploaded_file.seek(0) # Reiniciar cursor del archivo tras leerlo
+            else:
+                st.info(f"El archivo '{uploaded_file.name}' es de tipo PDF o documento. No se puede renderizar directamente como imagen en el visor, pero está listo para ser procesado.")
 
         if st.button("🚀 Procesar Factura") or st.session_state["use_paid_now"]:
             with st.spinner("Analizando factura, validando maestro y calculando costos..."):
@@ -218,7 +224,6 @@ if modulo == "📄 Factura Individual":
                         desc = str(item.get("descripcion", ""))
                         orig_code = str(item.get("codigo", "")).strip()
                         
-                        # Validar con maestro
                         final_code, status_match = validate_with_master(desc, orig_code)
                         if "No Encontrado" in status_match:
                             unmatched_items.append((desc, orig_code))
@@ -309,6 +314,14 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
 
     if uploaded_files:
         st.info(f"Se han cargado {len(uploaded_files)} archivos en total.")
+
+        # 👁️ Vista previa múltiple (Ojito para Lotes)
+        with st.expander("👁️ Vista Previa de los Archivos en Lote"):
+            for f_item in uploaded_files:
+                st.markdown(f"**Archivo:** `{f_item.name}`")
+                if "image" in f_item.type or f_item.name.lower().endswith(('png', 'jpg', 'jpeg', 'webp')):
+                    st.image(Image.open(f_item), caption=f_item.name, width=300)
+                    f_item.seek(0)
 
         if st.button("🚀 Procesar Lote y Validar con Maestro", type="primary"):
             all_consolidated_items = []
