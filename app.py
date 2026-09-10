@@ -57,7 +57,7 @@ def paid_confirmation_dialog():
             st.rerun()
 
 # ==========================================
-# MENÚ Y CONFIGURACIÓN LATERAL (MAESTRO POS)
+# MENÚ Y CONFIGURACIÓN LATERAL (MAESTRO Y EQUIVALENCIAS)
 # ==========================================
 st.sidebar.title("Menú de Navegación")
 modulo = st.sidebar.radio(
@@ -67,7 +67,6 @@ modulo = st.sidebar.radio(
 
 st.sidebar.markdown("---")
 st.sidebar.title("🗂️ Maestro de Inventario POS")
-st.sidebar.markdown("Sube tu archivo maestro actual (Excel o CSV) para validar y corregir códigos de barra por nombre o similitud.")
 master_file_uploaded = st.sidebar.file_uploader("Sube tu archivo Maestro", type=["xlsx", "xls", "csv"], key="master_inv_file")
 
 master_dict = {}
@@ -90,24 +89,103 @@ if master_file_uploaded is not None:
                 master_dict[p_name] = p_code
                 master_names.append(p_name)
                 
-        st.sidebar.success(f"✅ Maestro cargado: {len(master_dict)} productos indexados.")
+        st.sidebar.success(f"✅ Maestro cargado: {len(master_dict)} productos.")
     except Exception as e:
         st.sidebar.error(f"Error al leer el maestro: {e}")
 
-# Función para validar y reemplazar códigos usando el maestro
+# Diccionario de equivalencias personalizables guardado en session_state
+if "custom_equivalences" not in st.session_state:
+    st.session_state["custom_equivalences"] = {
+        "EVIAN 24/0.5 LT": "EVIAN 500ML",
+        "JW BLUE": "BLUE LABEL",
+        "BUCHANANS 12": "BUCHANAN'S 12 AÑOS"
+    }
+
+st.sidebar.markdown("---")
+st.sidebar.title("🔄 Equivalencias y Sinónimos")
+st.sidebar.markdown("Mapea términos de proveedores a tu formato POS:")
+with st.sidebar.expander("Ver / Editar Equivalencias"):
+    eq_key = st.text_input("Término del Proveedor (ej: EVIAN 24/0.5 LT)")
+    eq_val = st.text_input("Equivalente en tu POS (ej: EVIAN 500ML)")
+    if st.button("➕ Agregar Regla"):
+        if eq_key and eq_val:
+            st.session_state["custom_equivalences"][eq_key.strip().upper()] = eq_val.strip().upper()
+            st.success("¡Regla agregada!")
+            st.rerun()
+            
+    if st.session_state["custom_equivalences"]:
+        st.markdown("**Reglas activas:**")
+        to_remove = []
+        for k, v in st.session_state["custom_equivalences"].items():
+            if st.checkbox(f"{k} ➔ {v}", value=True, key=f"eq_{k}") == False:
+                to_remove.append(k)
+        if to_remove:
+            for r in to_remove:
+                del st.session_state["custom_equivalences"][r]
+            st.rerun()
+
+# ==========================================
+# MOTOR DE NORMALIZACIÓN Y COMPARACIÓN ROBUSTA
+# ==========================================
+SYNONYMS_MAP = {
+    "JW ": "JOHNNIE WALKER ",
+    "JW.": "JOHNNIE WALKER",
+    "BUCH ": "BUCHANANS ",
+    "BUCHANAN": "BUCHANANS",
+    "VODKA ABSOLUT": "ABSOLUT VODKA",
+    "0.5 LT": "500ML",
+    "0.5LT": "500ML",
+    "1 LT": "1000ML",
+    "1LT": "1000ML"
+}
+
+def normalize_product_name(name):
+    clean = str(name).strip().upper()
+    
+    # 1. Aplicar reglas de equivalencia personalizadas del usuario
+    for prov_term, pos_term in st.session_state["custom_equivalences"].items():
+        if prov_term in clean:
+            clean = clean.replace(prov_term, pos_term)
+            
+    # 2. Reemplazar abreviaturas comunes y conversiones de unidades
+    for abbr, full in SYNONYMS_MAP.items():
+        clean = clean.replace(abbr, full)
+        
+    return clean
+
 def validate_with_master(item_description, original_code):
-    clean_desc = str(item_description).strip().upper()
     if not master_dict:
         return original_code, "Sin Maestro Cargado"
     
-    if clean_desc in master_dict:
-        return master_dict[clean_desc], "Actualizado (Exacto)"
+    norm_desc = normalize_product_name(item_description)
     
-    matches = difflib.get_close_matches(clean_desc, master_names, n=1, cutoff=0.6)
+    # 1. Búsqueda exacta normalizada
+    if norm_desc in master_dict:
+        return master_dict[norm_desc], "Actualizado (Exacto Normalizado)"
+    
+    # 2. Búsqueda difusa estándar (Fuzzy matching)
+    matches = difflib.get_close_matches(norm_desc, master_names, n=1, cutoff=0.50)
     if matches:
         matched_name = matches[0]
         return master_dict[matched_name], f"Actualizado (Similitud: {matched_name})"
     
+    # 3. Búsqueda avanzada por tokens (palabras clave cruzadas)
+    desc_tokens = set(norm_desc.split())
+    best_match_code = original_code
+    best_match_reason = "⚠️ No Encontrado en Maestro"
+    max_shared_tokens = 0
+    
+    for m_name in master_names:
+        m_tokens = set(m_name.split())
+        shared = desc_tokens.intersection(m_tokens)
+        if len(shared) >= 2 and len(shared) > max_shared_tokens:
+            max_shared_tokens = len(shared)
+            best_match_code = master_dict[m_name]
+            best_match_reason = f"Actualizado (Tokens Clave: {m_name})"
+            
+    if max_shared_tokens >= 2:
+        return best_match_code, best_match_reason
+
     return original_code, "⚠️ No Encontrado en Maestro"
 
 # ==========================================
@@ -131,15 +209,16 @@ if modulo == "📄 Factura Individual":
             if "image" in file_type_check or uploaded_file.name.lower().endswith(('png', 'jpg', 'jpeg', 'webp')):
                 image = Image.open(uploaded_file)
                 st.image(image, caption=f"Vista previa: {uploaded_file.name}", use_container_width=True)
-                uploaded_file.seek(0) # Reiniciar cursor del archivo tras leerlo
+                uploaded_file.seek(0)
             else:
-                st.info(f"El archivo '{uploaded_file.name}' es de tipo PDF o documento. No se puede renderizar directamente como imagen en el visor, pero está listo para ser procesado.")
+                st.info(f"El archivo '{uploaded_file.name}' es de tipo PDF o documento.")
 
         if st.button("🚀 Procesar Factura") or st.session_state["use_paid_now"]:
             with st.spinner("Analizando factura, validando maestro y calculando costos..."):
                 prompt_text = (
                     "Analiza esta factura detalladamente. Extrae los datos de cabecera: 'emisor_rnc', 'numero_documento', 'fecha', 'subtotal', 'itbis', 'total'. "
                     "Para cada ítem, extrae: 'codigo', 'descripcion', 'cantidad', 'empaque', y 'costo_sin_itbis'. "
+                    "REGLA ESTRICTA PARA LA DESCRIPCIÓN: Limpia el texto de cada producto para incluir ÚNICAMENTE el nombre del producto y su presentación o tamaño (ej: 'EVIAN 500ML' o 'BLUE LABEL 750ML'), eliminando códigos internos innecesarios o textos redundantes. "
                     "Devuelve la información estrictamente en formato JSON con la siguiente estructura exacta: "
                     '{"emisor_rnc": "...", "numero_documento": "...", "fecha": "...", "subtotal": 0.0, "itbis": 0.0, "total": 0.0, "items": [{"codigo": "...", "descripcion": "...", "cantidad": 1, "empaque": 1, "costo_sin_itbis": 0.0}]}. '
                     "REGLA CRÍTICA: Preserva todos los ceros a la izquierda como texto. Respuesta JSON pura sin texto adicional."
@@ -307,8 +386,8 @@ if modulo == "📄 Factura Individual":
 # MÓDULO 2: MÚLTIPLES FACTURAS (LOTE)
 # ==========================================
 elif modulo == "📂 Múltiples Facturas (Lote)":
-    st.title("📂 Procesador por Lotes (Con Validación de Maestro POS)")
-    st.markdown("Sube varias facturas. El sistema filtrará duplicados en la selección y validará cada ítem contra tu archivo maestro POS.")
+    st.title("📂 Procesador por Lotes (Con Validación Avanzada de Maestro POS)")
+    st.markdown("Sube varias facturas. El sistema filtrará duplicados y validará cada ítem contra tu maestro usando sinónimos y equivalencias.")
 
     uploaded_files = st.file_uploader("Sube tus facturas (Puedes seleccionar varias)", type=["pdf", "png", "jpg", "jpeg"], accept_multiple_files=True, key="batch_files")
 
@@ -337,6 +416,7 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
                 prompt_text = (
                     "Analiza esta factura detalladamente. Extrae los datos de cabecera: 'emisor_rnc', 'numero_documento', 'fecha', 'subtotal', 'itbis', 'total'. "
                     "Para cada ítem, extrae: 'codigo', 'descripcion', 'cantidad', 'empaque', y 'costo_sin_itbis'. "
+                    "REGLA ESTRICTA PARA LA DESCRIPCIÓN: Limpia el texto de cada producto para incluir ÚNICAMENTE el nombre del producto y su presentación o tamaño, eliminando códigos internos innecesarios o textos redundantes. "
                     "Devuelve la información estrictamente en formato JSON con la siguiente estructura exacta: "
                     '{"emisor_rnc": "...", "numero_documento": "...", "fecha": "...", "subtotal": 0.0, "itbis": 0.0, "total": 0.0, "items": [{"codigo": "...", "descripcion": "...", "cantidad": 1, "empaque": 1, "costo_sin_itbis": 0.0}]}. '
                     "REGLA CRÍTICA: Preserva todos los ceros a la izquierda como texto. Respuesta JSON pura sin texto adicional."
