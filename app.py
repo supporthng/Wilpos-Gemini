@@ -1,49 +1,65 @@
 import streamlit as st
 import pandas as pd
+import pdfplumber
+import io
 
 # Configuración de la página
 st.set_page_config(page_title="WilPOS - Procesador de Facturas e Inventario", page_icon="🧾", layout="wide")
 
-st.title("🧾 WilPOS - Sistema de Procesamiento de Facturas")
-st.write("Gestiona el inventario procesando facturas individuales a detalle o consolidando lotes de múltiples facturas de forma masiva.")
+st.title("🧾 WilPOS - Sistema de Procesamiento y Carga de Facturas")
+st.write("Carga tus facturas en PDF o procesa los datos de manera individual y masiva para actualizar tu inventario.")
 
 # Sidebar global para parámetros fiscales y de conversión
 st.sidebar.header("⚙️ Parámetros Globales")
 tasa_usd = st.sidebar.number_input("Tasa de Cambio USD a DOP", value=58.96, step=0.01)
 itbis_porcentaje = st.sidebar.slider("Porcentaje de ITBIS (%)", min_value=0.0, max_value=18.0, value=18.0, step=0.5)
 
-# Pestañas principales separadas por el flujo de trabajo correcto
+# Pestañas principales
 tab_individual, tab_multiple = st.tabs([
-    "📄 Módulo 1: Facturas Individuales", 
+    "📄 Módulo 1: Factura Individual (Carga y Detalle)", 
     "📚 Módulo 2: Múltiples Facturas (Lote Masivo)"
 ])
 
 # =============================================================
-# MÓDULO 1: FACTURAS INDIVIDUALES
+# MÓDULO 1: FACTURA INDIVIDUAL (CON CARGA DE PDF)
 # =============================================================
 with tab_individual:
-    st.subheader("Módulo de Facturas Individuales")
-    st.write("Ideal para auditar y procesar el detalle exacto de una factura o cotización individual (cajas, descuentos y costos por botella/unidad).")
+    st.subheader("Módulo de Factura Individual")
+    st.write("Sube el archivo PDF de la factura o cotización para extraer y auditar su contenido a detalle.")
+    
+    # Widget para cargar el archivo PDF
+    archivo_pdf = st.file_uploader("📂 Cargar Factura en PDF", type=["pdf"], key="uploader_ind")
+    
+    texto_extraido = ""
+    if archivo_pdf is not None:
+        with pdfplumber.open(archivo_pdf) as pdf:
+            for pagina in pdf.pages:
+                texto_extraido += pagina.extract_text() or ""
+        st.success("¡Factura PDF cargada y leída con éxito!")
+        with st.expander("🔍 Ver texto bruto extraído del PDF"):
+            st.text(texto_extraido)
+
+    st.divider()
     
     col_f1, col_f2 = st.columns(2)
     with col_f1:
-        proveedor_ind = st.text_input("Proveedor", "Ej. Álvarez & Sánchez, S.A.")
-        nro_factura = st.text_input("No. de Factura / Pedido", "Ej. 13014936")
+        proveedor_ind = st.text_input("Proveedor", "Ej. Álvarez & Sánchez, S.A. / Isotex")
+        nro_factura = st.text_input("No. de Factura / Pedido", "Ej. 13014936 o C-00137907")
     with col_f2:
         moneda_ind = st.selectbox("Moneda de la Factura", ["DOP", "USD"], key="mon_ind")
         tipo_empaque = st.radio("Cálculo por Unidad:", ["Por Cajas / Empaques (con unidades por caja)", "Unidades Directas"], horizontal=True)
 
     st.divider()
     
-    # Tabla editable para la factura individual
+    # Tabla editable basada en lo que el usuario suba o ingrese
     df_ind_init = pd.DataFrame([
         {
-            "Código": "4655", 
-            "Descripción": "TEQUILA RESERVA CRISTALINO 1800", 
-            "Cantidad Empaques": 2.0, 
-            "Unidades por Caja": 12, 
-            "Precio Lista / Caja": 37200.0, 
-            "Descuento (%)": 10.0
+            "Código": "", 
+            "Descripción": "Sube un PDF o escribe los datos aquí", 
+            "Cantidad Empaques": 1.0, 
+            "Unidades por Caja": 1, 
+            "Precio Lista / Caja": 0.0, 
+            "Descuento (%)": 0.0
         }
     ])
     
@@ -64,15 +80,11 @@ with tab_individual:
             if cant_empaques <= 0 or precio_lista <= 0:
                 continue
             
-            # Normalizar precio a DOP si viene en USD
             precio_base_dop = precio_lista * tasa_usd if moneda_ind == "USD" else precio_lista
-            
-            # Aplicar descuento comercial de la línea
             precio_con_desc = precio_base_dop * (1 - (desc_pct / 100.0))
             importe_linea_neto = cant_empaques * precio_con_desc
             subtotal_neto_dop += importe_linea_neto
             
-            # Cálculo de costo unitario final (por botella/unidad suelta)
             if tipo_empaque.startswith("Por Cajas") and unidades_por_caja > 1:
                 total_unidades_sueltas = cant_empaques * unidades_por_caja
                 costo_unitario_neto = importe_linea_neto / total_unidades_sueltas
@@ -94,7 +106,7 @@ with tab_individual:
         itbis_total_dop = subtotal_neto_dop * (itbis_porcentaje / 100.0)
         total_general_dop = subtotal_neto_dop + itbis_total_dop
         
-        st.success(f"¡Factura '{nro_factura}' procesada con éxito!")
+        st.success(f"¡Factura procesada con éxito!")
         st.dataframe(df_res_ind, use_container_width=True)
         
         c1, c2, c3 = st.columns(3)
@@ -107,16 +119,19 @@ with tab_individual:
 # =============================================================
 with tab_multiple:
     st.subheader("Módulo de Múltiples Facturas (Lote Masivo)")
-    st.write("Agrega, pega o consolida ítems provenientes de varias facturas o proveedores diferentes en una sola tabla general.")
+    st.write("Puedes subir varios archivos PDF de factura o administrar múltiples filas de diferentes proveedores en una sola tabla.")
     
+    archivos_multiples = st.file_uploader("📂 Cargar múltiples facturas en PDF", type=["pdf"], accept_multiple_files=True, key="uploader_multi")
+    if archivos_multiples:
+        st.info(f"Se han cargado {len(archivos_multiples)} documentos PDF para lote.")
+
     df_multi_init = pd.DataFrame([
-        {"No. Factura": "13014936", "Proveedor": "Álvarez & Sánchez", "Código": "4655", "Descripción": "TEQUILA RESERVA CRISTALINO 1800", "Cantidad": 2.0, "Moneda": "DOP", "Precio Unitario": 33480.0},
-        {"No. Factura": "C-00137907", "Proveedor": "Isotex", "Código": "HIEFOAM3L", "Descripción": "HIELERA DE FOAM 3L", "Cantidad": 30.0, "Moneda": "USD", "Precio Unitario": 1.43}
+        {"No. Factura": "", "Proveedor": "", "Código": "", "Descripción": "", "Cantidad": 0.0, "Moneda": "DOP", "Precio Unitario": 0.0}
     ])
     
     df_multi_edit = st.data_editor(df_multi_init, num_rows="dynamic", key="editor_multiple", use_container_width=True)
     
-    if st.button("🚀 Consolidar y Procesar Lote de Múltiples Facturas", type="primary", key="btn_multi"):
+    if st.button("🚀 Consolidar y Procesar Lote Masivo", type="primary", key="btn_multi"):
         resultados_lote = []
         subtotal_lote_dop = 0.0
         
@@ -132,7 +147,6 @@ with tab_multiple:
             if cant <= 0 or precio_unit <= 0:
                 continue
             
-            # Conversión dinámica si la línea está en USD
             precio_dop = precio_unit * tasa_usd if mon == "USD" else precio_unit
             importe_linea = cant * precio_dop
             subtotal_lote_dop += importe_linea
@@ -155,7 +169,7 @@ with tab_multiple:
         itbis_lote_dop = subtotal_lote_dop * (itbis_porcentaje / 100.0)
         total_lote_dop = subtotal_lote_dop + itbis_lote_dop
         
-        st.success("¡Lote de múltiples facturas consolidado con éxito!")
+        st.success("¡Lote consolidado con éxito!")
         st.dataframe(df_res_lote, use_container_width=True)
         
         m1, m2, m3 = st.columns(3)
@@ -163,7 +177,6 @@ with tab_multiple:
         m2.metric("ITBIS Lote", f"RD$ {itbis_lote_dop:,.2f}")
         m3.metric("Total General del Lote", f"RD$ {total_lote_dop:,.2f}")
         
-        # Botón para descargar el archivo de importación consolidado
         csv_lote = df_res_lote.to_csv(index=False).encode('utf-8')
         st.download_button(
             label="📥 Descargar CSV Consolidado para Importación en WilPOS",
