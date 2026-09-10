@@ -40,12 +40,12 @@ if uploaded_file is not None:
     st.success(f"¡Factura cargada: {uploaded_file.name}!")
     
     if st.session_state["quota_exceeded"]:
-        st.warning("⚠️ **Se han agotado las solicitudes gratuitas principales.**")
+        st.warning("⚠️ **Se han agotado las solicitudes gratuitas de ambas cuentas de Gemini.**")
         confirm_paid = st.checkbox("¿Deseas procesar esta factura utilizando la versión de pago?")
         
         if confirm_paid:
-            if st.button("🚀 Continuar con Versión de Pago"):
-                with st.spinner("Procesando factura con versión de pago..."):
+            if st.button("🚀 Continuar con la Versión de Pago"):
+                with st.spinner("Procesando factura con la versión de pago..."):
                     try:
                         genai.configure(api_key=paid_api_key)
                         model_paid = genai.GenerativeModel('gemini-3.6-flash')
@@ -76,7 +76,7 @@ if uploaded_file is not None:
                         
                         data_items = json.loads(raw_text)
                         st.session_state["quota_exceeded"] = False
-                        st.success("✅ ¡Factura procesada exitosamente!")
+                        st.success("✅ ¡Factura procesada exitosamente con la versión de pago!")
                         
                         rows_preview = []
                         for idx, item in enumerate(data_items, start=1):
@@ -155,13 +155,23 @@ if uploaded_file is not None:
                             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                         )
                     except Exception as err_paid:
-                        st.error(f"Error al procesar: {err_paid}")
+                        st.error(f"Error al procesar con la versión de pago: {err_paid}")
     else:
         if st.button("🚀 Procesar Factura con Plantilla Oficial"):
-            with st.spinner("Analizando tipos de empaque y calculando costos unitarios..."):
+            with st.spinner("Analizando factura y calculando costos unitarios..."):
                 data_items = None
                 success_msg = ""
                 
+                prompt_text = (
+                    "Analiza esta factura detectando los diferentes tipos de empaques (Caja, Paquete, Botella, Lata, Unidad, etc.), sus cantidades y el factor de conversión. "
+                    "Devuelve la información en formato JSON puro (una lista de objetos con claves exactas: 'codigo', 'descripcion', 'costo_sin_itbis', 'empaque', 'stock'). "
+                    "REGLA DE ORO PARA EL COSTO UNITARIO: Identifica el valor total de la línea y el ITBIS. Calcula el valor neto sin ITBIS (Valor Total - ITBIS). Luego, detecta cuántas unidades individuales componen el empaque (ej. Caja-12 = 12 unidades, Paquete-24 = 24 unidades) y divide el neto entre el total de unidades para obtener el 'costo_sin_itbis' por unidad individual exacta. "
+                    "REGLA PARA DESCRIPCIÓN: Limpia la descripción para que solo incluya el nombre principal y su tamaño (ejemplo: 'BEBIDA ENERGIZANTE CICLON 250ML', eliminando términos de empaque masivo como CS, TA, 16X1). "
+                    "REGLA CRÍTICA PARA CÓDIGOS: Trata el campo 'codigo' como texto (string) preservando todos los ceros a la izquierda. "
+                    "Stock y empaque deben ser enteros numéricos. Respuesta JSON válida sin texto adicional."
+                )
+                
+                # Intento con Cuenta Gratuita #1
                 try:
                     if not free_key_1:
                         raise Exception("No free key 1")
@@ -172,18 +182,9 @@ if uploaded_file is not None:
                     uploaded_file.seek(0)
                     file_bytes = uploaded_file.read()
                     
-                    prompt = (
-                        "Analiza esta factura detectando los diferentes tipos de empaques (Caja, Paquete, Botella, Lata, Unidad, etc.), sus cantidades y el factor de conversión. "
-                        "Devuelve la información en formato JSON puro (una lista de objetos con claves exactas: 'codigo', 'descripcion', 'costo_sin_itbis', 'empaque', 'stock'). "
-                        "REGLA DE ORO PARA EL COSTO UNITARIO: Identifica el valor total de la línea y el ITBIS. Calcula el valor neto sin ITBIS (Valor Total - ITBIS). Luego, detecta cuántas unidades individuales componen el empaque (ej. Caja-12 = 12 unidades, Paquete-24 = 24 unidades) y divide el neto entre el total de unidades para obtener el 'costo_sin_itbis' por unidad individual exacta. "
-                        "REGLA PARA DESCRIPCIÓN: Limpia la descripción para que solo incluya el nombre principal y su tamaño (ejemplo: 'BEBIDA ENERGIZANTE CICLON 250ML', eliminando términos de empaque masivo como CS, TA, 16X1). "
-                        "REGLA CRÍTICA PARA CÓDIGOS: Trata el campo 'codigo' como texto (string) preservando todos los ceros a la izquierda. "
-                        "Stock y empaque deben ser enteros numéricos. Respuesta JSON válida sin texto adicional."
-                    )
-                    
                     response = model.generate_content([
                         {'mime_type': uploaded_file.type if hasattr(uploaded_file, 'type') else 'image/jpeg', 'data': file_bytes},
-                        prompt
+                        prompt_text
                     ])
                     
                     raw_text = response.text.strip()
@@ -194,10 +195,11 @@ if uploaded_file is not None:
                     raw_text = raw_text.strip()
                     
                     data_items = json.loads(raw_text)
-                    success_msg = "✅ ¡Factura procesada detectando empaques y costos unitarios!"
+                    success_msg = "✅ ¡Factura procesada con éxito usando la **Cuenta Gratuita #1**!"
                     
                 except Exception as e1:
                     err_msg1 = str(e1)
+                    # Rotación automática a Cuenta Gratuita #2
                     if ("429" in err_msg1 or "Quota exceeded" in err_msg1 or "No free key 1" in err_msg1) and free_key_2:
                         try:
                             genai.configure(api_key=free_key_2)
@@ -206,18 +208,9 @@ if uploaded_file is not None:
                             uploaded_file.seek(0)
                             file_bytes = uploaded_file.read()
                             
-                            prompt = (
-                                "Analiza esta factura detectando los diferentes tipos de empaques (Caja, Paquete, Botella, Lata, Unidad, etc.), sus cantidades y el factor de conversión. "
-                                "Devuelve la información en formato JSON puro (una lista de objetos con claves exactas: 'codigo', 'descripcion', 'costo_sin_itbis', 'empaque', 'stock'). "
-                                "REGLA DE ORO PARA EL COSTO UNITARIO: Calcula el valor neto sin ITBIS y divídelo entre el total de unidades del empaque para obtener el costo unitario exacto por unidad. "
-                                "REGLA PARA DESCRIPCIÓN: Limpia la descripción para que solo incluya el nombre principal y tamaño. "
-                                "REGLA CRÍTICA PARA CÓDIGOS: Trata el campo 'codigo' como texto (string) preservando ceros a la izquierda. "
-                                "Respuesta JSON válida sin texto adicional."
-                            )
-                            
                             response = model2.generate_content([
                                 {'mime_type': uploaded_file.type if hasattr(uploaded_file, 'type') else 'image/jpeg', 'data': file_bytes},
-                                prompt
+                                prompt_text
                             ])
                             
                             raw_text = response.text.strip()
@@ -228,19 +221,19 @@ if uploaded_file is not None:
                             raw_text = raw_text.strip()
                             
                             data_items = json.loads(raw_text)
-                            success_msg = "✅ ¡Factura procesada rotando a la Cuenta Gratuita #2!"
+                            success_msg = "✅ ¡Factura procesada con éxito rotando a la **Cuenta Gratuita #2**!"
                         except Exception as e2:
                             err_msg2 = str(e2)
                             if "429" in err_msg2 or "Quota exceeded" in err_msg2:
                                 st.session_state["quota_exceeded"] = True
                                 st.rerun()
                             else:
-                                st.error(f"Error con la Cuenta Gratuita #2: {e2}")
+                                st.error(f"Error con Cuenta Gratuita #2: {e2}")
                     elif "429" in err_msg1 or "Quota exceeded" in err_msg1:
                         st.session_state["quota_exceeded"] = True
                         st.rerun()
                     else:
-                        st.error(f"Ocurrió un error al procesar con la IA: {e1}")
+                        st.error(f"Ocurrió un error con la IA: {e1}")
                 
                 if data_items:
                     st.success(success_msg)
