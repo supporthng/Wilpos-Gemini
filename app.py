@@ -64,7 +64,7 @@ def save_to_history(excel_bytes, prefix="Inventario"):
     except Exception as e:
         print(f"Error guardando en historial: {e}")
 
-# Funciones auxiliares de cálculo y formato con precisión estricta
+# Funciones auxiliares de cálculo y formato
 def safe_float(val, default=0.0):
     try:
         if isinstance(val, str):
@@ -117,7 +117,7 @@ with st.sidebar.expander("Ver Proveedores Aprendidos"):
     else:
         st.info("Aún no hay proveedores aprendidos.")
 
-# HISTORIAL DE EXCEL GENERADOS EN BARRA LATERAL
+# HISTORIAL DE EXCEL GENERADOS
 st.sidebar.markdown("---")
 st.sidebar.title("📁 Historial de Excel")
 with st.sidebar.expander("Ver Archivos Generados"):
@@ -244,7 +244,7 @@ with st.sidebar.expander("Ver / Editar Equivalencias"):
             st.rerun()
 
 # ==========================================
-# MOTOR DE NORMALIZACIÓN Y COMPARACIÓN CRUZADA DE PRESENTACIONES
+# MOTOR DE NORMALIZACIÓN Y COMPARACIÓN CRUZADA
 # ==========================================
 GLOBAL_SYNONYMS = {
     "JW ": "JOHNIE WALKER ",
@@ -429,9 +429,6 @@ def process_invoice_with_ai(file_obj, file_type):
 
     return parsed_data, success_msg
 
-# ==========================================
-# CONSOLIDACIÓN Y NOTIFICACIÓN DE CRUCES ENTRE FACTURAS
-# ==========================================
 def consolidate_items_with_tracking(raw_items_with_source):
     consolidated_dict = {}
     cross_notifications = []
@@ -490,12 +487,13 @@ def consolidate_items_with_tracking(raw_items_with_source):
 if modulo == "📄 Factura Individual":
     st.title("📊 Automatizador de Facturas para WilPOS (Individual)")
     st.info(f"🗂️ **Maestro Activo en Uso:** `{master_upload_date_str}`")
-    st.markdown("Sube tu factura para extraer sus ítems, validar presentaciones con tu maestro POS y generar la plantilla actualizada.")
+    
+    st.markdown("### 📌 Flujo de Trabajo: 1. Escanear ➔ 2. Procesar ➔ 3. Confirmar")
 
-    uploaded_file = st.file_uploader("Sube tu factura (PDF o Imagen)", type=["pdf", "png", "jpg", "jpeg"], key="single_file")
+    uploaded_file = st.file_uploader("Paso 1: Sube tu factura (PDF o Imagen)", type=["pdf", "png", "jpg", "jpeg"], key="single_file")
 
     if uploaded_file is not None:
-        st.success(f"¡Archivo cargado: {uploaded_file.name}!")
+        st.success(f"✅ Archivo leído correctamente: {uploaded_file.name}")
 
         file_type_check = uploaded_file.type if hasattr(uploaded_file, 'type') else ''
         is_img = "image" in file_type_check or uploaded_file.name.lower().endswith(('png', 'jpg', 'jpeg', 'webp'))
@@ -515,7 +513,7 @@ if modulo == "📄 Factura Individual":
                 except Exception as ex:
                     st.info(f"No se pudo renderizar la vista previa visual del PDF: {ex}")
             else:
-                st.info(f"El archivo '{uploaded_file.name}' está cargado y listo para procesamiento.")
+                st.info(f"El archivo '{uploaded_file.name}' está cargado.")
 
         if st.session_state["quota_exceeded"]:
             st.warning("⚠️ **Límite de Cuota Alcanzado (Error 429)**: Se ha agotado la cuota gratuita de Gemini.")
@@ -530,7 +528,8 @@ if modulo == "📄 Factura Individual":
                     st.session_state["quota_exceeded"] = False
                     st.rerun()
 
-        if st.button("🚀 Procesar Factura") or st.session_state["use_paid_now"]:
+        # BOTÓN PASO 2: PROCESAR
+        if st.button("⚙️ Paso 2: Procesar Factura con IA", type="primary") or st.session_state["use_paid_now"]:
             file_type = uploaded_file.type if hasattr(uploaded_file, 'type') else 'image/jpeg'
             
             with st.spinner("Analizando factura y realizando comparación cruzada de presentaciones..."):
@@ -540,72 +539,79 @@ if modulo == "📄 Factura Individual":
                 st.session_state["use_paid_now"] = False
 
             if parsed_data:
-                st.success(success_msg)
+                st.session_state["single_parsed_data"] = parsed_data
+                st.session_state["single_success_msg"] = success_msg
+                st.success("¡Procesamiento completado con éxito! Revisa los datos abajo para confirmar.")
+
+        # PASO 3: CONFIRMAR Y GENERAR
+        if "single_parsed_data" in st.session_state and st.session_state["single_parsed_data"]:
+            parsed_data = st.session_state["single_parsed_data"]
+            
+            st.markdown("---")
+            st.markdown("### 📋 Paso 3: Confirmación y Revisión de Datos Extracción")
+            
+            prov_nombre = parsed_data.get("emisor_nombre", "Desconocido")
+            prov_rnc = parsed_data.get("emisor_rnc", "N/D")
+            st.info(f"🏢 **Proveedor Identificado:** {prov_nombre} | **RNC:** `{prov_rnc}`")
+
+            c_t1, c_t2, c_t3 = st.columns(3)
+            c_t1.metric("Subtotal", f"RD$ {safe_float(parsed_data.get('subtotal', 0)):,.2f}")
+            c_t2.metric("ITBIS", f"RD$ {safe_float(parsed_data.get('itbis', 0)):,.2f}")
+            c_t3.metric("Total General", f"RD$ {safe_float(parsed_data.get('total', 0)):,.2f}")
+
+            data_items = parsed_data.get("items", [])
+            rows_preview = []
+            unmatched_items = []
+            matched_count = 0
+
+            for idx, item in enumerate(data_items, start=1):
+                desc = str(item.get("descripcion", ""))
+                orig_code = str(item.get("codigo", "")).strip()
                 
-                prov_nombre = parsed_data.get("emisor_nombre", "Desconocido")
-                prov_rnc = parsed_data.get("emisor_rnc", "N/D")
-                st.info(f"🏢 **Proveedor Procesado:** {prov_nombre} | **RNC:** `{prov_rnc}`")
-
-                st.markdown("### 📋 Resumen de Totales de la Factura")
-                c_t1, c_t2, c_t3 = st.columns(3)
-                c_t1.metric("Subtotal", f"RD$ {safe_float(parsed_data.get('subtotal', 0)):,.2f}")
-                c_t2.metric("ITBIS", f"RD$ {safe_float(parsed_data.get('itbis', 0)):,.2f}")
-                c_t3.metric("Total General", f"RD$ {safe_float(parsed_data.get('total', 0)):,.2f}")
-                
-                st.markdown("---")
-                st.markdown("### 📦 Validación con Maestro y Precios de Venta")
-
-                data_items = parsed_data.get("items", [])
-                rows_preview = []
-                unmatched_items = []
-                matched_count = 0
-
-                for idx, item in enumerate(data_items, start=1):
-                    desc = str(item.get("descripcion", ""))
-                    orig_code = str(item.get("codigo", "")).strip()
-                    
-                    final_code, status_match = validate_with_master(desc, orig_code)
-                    if "No Encontrado" in status_match or "Sin Maestro" in status_match:
-                        unmatched_items.append({
-                            "No.": idx,
-                            "Descripción Proveedor": desc,
-                            "Código Original": orig_code,
-                            "Estado": status_match
-                        })
-                    else:
-                        matched_count += 1
-
-                    costo = safe_float(item.get("costo_sin_itbis", 0))
-                    raw_pv = (costo * 1.25) * 1.18
-                    precio_venta = round_to_nearest_5(raw_pv)
-                    cant_comprada = safe_int(item.get("cantidad", 1), 1)
-                    empaque_val = safe_int(item.get("empaque", 1), 1)
-                    stock_val = cant_comprada * empaque_val
-                    
-                    rows_preview.append({
+                final_code, status_match = validate_with_master(desc, orig_code)
+                if "No Encontrado" in status_match or "Sin Maestro" in status_match:
+                    unmatched_items.append({
                         "No.": idx,
-                        "Código Barra POS": final_code,
-                        "Nombre": desc,
-                        "Cant. Compra": cant_comprada,
-                        "Empaque": empaque_val,
-                        "Stock Total": stock_val,
-                        "Costo Unit. Sin ITBIS": costo,
-                        "Precio Venta (M5)": precio_venta,
-                        "Estado Maestro": status_match
+                        "Descripción Proveedor": desc,
+                        "Código Original": orig_code,
+                        "Estado": status_match
                     })
-                
-                c_m1, c_m2 = st.columns(2)
-                c_m1.metric("✅ Actualizados Exitosamente", f"{matched_count} ítems")
-                c_m2.metric("⚠️ No Encontrados (Sin Match)", f"{len(unmatched_items)} ítems")
+                else:
+                    matched_count += 1
 
-                if unmatched_items:
-                    with st.expander(f"⚠️ Ver detalle de los {len(unmatched_items)} productos NO actualizados (requieren revisión o regla de equivalencia)"):
-                        st.dataframe(pd.DataFrame(unmatched_items), use_container_width=True, hide_index=True)
-
-                st.markdown("#### Tabla Completa Procesada")
-                df_resultado = pd.DataFrame(rows_preview)
-                st.dataframe(df_resultado, use_container_width=True, hide_index=True)
+                costo = safe_float(item.get("costo_sin_itbis", 0))
+                raw_pv = (costo * 1.25) * 1.18
+                precio_venta = round_to_nearest_5(raw_pv)
+                cant_comprada = safe_int(item.get("cantidad", 1), 1)
+                empaque_val = safe_int(item.get("empaque", 1), 1)
+                stock_val = cant_comprada * empaque_val
                 
+                rows_preview.append({
+                    "No.": idx,
+                    "Código Barra POS": final_code,
+                    "Nombre": desc,
+                    "Cant. Compra": cant_comprada,
+                    "Empaque": empaque_val,
+                    "Stock Total": stock_val,
+                    "Costo Unit. Sin ITBIS": costo,
+                    "Precio Venta (M5)": precio_venta,
+                    "Estado Maestro": status_match
+                })
+
+            c_m1, c_m2 = st.columns(2)
+            c_m1.metric("✅ Actualizados Exitosamente", f"{matched_count} ítems")
+            c_m2.metric("⚠️ No Encontrados (Sin Match)", f"{len(unmatched_items)} ítems")
+
+            if unmatched_items:
+                with st.expander(f"⚠️ Ver detalle de los {len(unmatched_items)} productos NO actualizados (requieren revisión o regla de equivalencia)"):
+                    st.dataframe(pd.DataFrame(unmatched_items), use_container_width=True, hide_index=True)
+
+            st.markdown("#### Tabla Completa Procesada")
+            df_resultado = pd.DataFrame(rows_preview)
+            st.dataframe(df_resultado, use_container_width=True, hide_index=True)
+
+            # Botón final de Confirmación
+            if st.button("🚀 Confirmar e Generar Plantilla Excel WilPOS", type="primary"):
                 template_path = "Plantilla_Inventario_WilPOS_2.xlsx"
                 if not os.path.exists(template_path):
                     template_path = "Plantilla_Inventario_WilPOS.xlsx"
@@ -648,6 +654,7 @@ if modulo == "📄 Factura Individual":
                 excel_data = output.getvalue()
                 
                 save_to_history(excel_data, prefix="Individual")
+                st.success("✅ ¡Inventario confirmado y guardado en el historial con éxito!")
                 
                 st.download_button(
                     label="📥 Descargar Excel Plantilla WilPOS Actualizada",
@@ -660,31 +667,17 @@ if modulo == "📄 Factura Individual":
 # MÓDULO 2: MÚLTIPLES FACTURAS (LOTE)
 # ==========================================
 elif modulo == "📂 Múltiples Facturas (Lote)":
-    st.title("📂 Procesador por Lotes (Validación de Presentaciones y Trazabilidad)")
+    st.title("📂 Procesador por Lotes (Validación y Trazabilidad)")
     st.info(f"🗂️ **Maestro Activo en Uso:** `{master_upload_date_str}`")
-    st.markdown("Sube varias facturas. El sistema validará todas las presentaciones cruzadas, consolidará duplicados y te notificará los cruces.")
+    
+    st.markdown("### 📌 Flujo de Trabajo: 1. Escanear ➔ 2. Procesar ➔ 3. Confirmar")
 
-    if st.session_state["quota_exceeded"]:
-        st.warning("⚠️ **Límite de Cuota Alcanzado (Error 429)**: Se ha agotado la cuota gratuita de Gemini.")
-        col_bw1, col_bw2 = st.columns(2)
-        with col_bw1:
-            if st.button("✅ Usar Versión de Pago", type="primary", key="btn_pay_batch"):
-                st.session_state["use_paid_now"] = True
-                st.session_state["quota_exceeded"] = False
-                st.rerun()
-        with col_bw2:
-            if st.button("❌ Cancelar / Descartar", key="btn_cancel_batch"):
-                st.session_state["quota_exceeded"] = False
-                st.rerun()
-
-    uploaded_files = st.file_uploader("Sube tus facturas (Puedes seleccionar varias)", type=["pdf", "png", "jpg", "jpeg"], accept_multiple_files=True, key="batch_files")
+    uploaded_files = st.file_uploader("Paso 1: Sube tus facturas (Puedes seleccionar varias)", type=["pdf", "png", "jpg", "jpeg"], accept_multiple_files=True, key="batch_files")
 
     if uploaded_files:
-        st.info(f"Se han cargado {len(uploaded_files)} archivos en total.")
+        st.success(f"✅ Se han cargado {len(uploaded_files)} archivos en total.")
 
         st.markdown("### 👁️ Vista Previa Selectiva de Archivos")
-        
-        # BOTONES DE CONTROL GENERAL (EXPANDIR / CONTRAER TODO)
         col_exp1, col_exp2, col_space = st.columns([1, 1, 4])
         with col_exp1:
             if st.button("📂 Expandir Todo"):
@@ -694,8 +687,6 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
             if st.button("📁 Contraer Todo"):
                 st.session_state["expand_all_previews"] = False
                 st.rerun()
-
-        st.markdown("Haz clic en el botón de cualquier archivo para desplegar su vista previa:")
         
         for idx_f, f_item in enumerate(uploaded_files):
             with st.expander(f"👁️ [Ojito] Ver factura #{idx_f+1}: {f_item.name}", expanded=st.session_state["expand_all_previews"]):
@@ -711,11 +702,25 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
                             st.image(pdf_images[0], caption=f"Página 1 - {f_item.name}", use_container_width=True)
                         f_item.seek(0)
                     except Exception as ex:
-                        st.info(f"No se pudo renderizar la vista previa visual del PDF: {ex}")
+                        st.info(f"No se pudo renderizar la vista previa del PDF: {ex}")
                 else:
                     st.info(f"El archivo '{f_item.name}' está cargado correctamente.")
 
-        run_batch_processing = st.button("🚀 Procesar Lote, Consolidar y Validar Presentaciones", type="primary") or st.session_state["use_paid_now"]
+        if st.session_state["quota_exceeded"]:
+            st.warning("⚠️ **Límite de Cuota Alcanzado (Error 429)**: Se ha agotado la cuota gratuita de Gemini.")
+            col_bw1, col_bw2 = st.columns(2)
+            with col_bw1:
+                if st.button("✅ Usar Versión de Pago", type="primary", key="btn_pay_batch"):
+                    st.session_state["use_paid_now"] = True
+                    st.session_state["quota_exceeded"] = False
+                    st.rerun()
+            with col_bw2:
+                if st.button("❌ Cancelar / Descartar", key="btn_cancel_batch"):
+                    st.session_state["quota_exceeded"] = False
+                    st.rerun()
+
+        # BOTÓN PASO 2: PROCESAR LOTE
+        run_batch_processing = st.button("⚙️ Paso 2: Procesar Lote, Consolidar y Validar Presentaciones", type="primary") or st.session_state["use_paid_now"]
 
         if run_batch_processing:
             all_raw_items_with_source = []
@@ -747,7 +752,7 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
                     
                     if doc_signature in batch_signatures:
                         duplicate_count += 1
-                        st.warning(f"⚠️ Archivo omitido por estar duplicado en este lote: **{file.name}** (Doc: {num_doc}, Total: {total_doc_val})")
+                        st.warning(f"⚠️ Archivo omitido por estar duplicado en este lote: **{file.name}**")
                     else:
                         batch_signatures.add(doc_signature)
                         
@@ -775,15 +780,33 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
 
             status_text.text("Consolidando ítems, validando presentaciones y detectando cruces...")
             consolidated_items, cross_notifications = consolidate_items_with_tracking(all_raw_items_with_source)
-
             status_text.text("¡Procesamiento completo!")
-            
+
+            st.session_state["batch_results"] = {
+                "consolidated_items": consolidated_items,
+                "cross_notifications": cross_notifications,
+                "invoice_totals_summary": invoice_totals_summary,
+                "duplicate_count": duplicate_count
+            }
+            st.success("✅ ¡Lote procesado con éxito! Revisa los resultados abajo para confirmar.")
+
+        # PASO 3: CONFIRMAR Y GENERAR LOTE
+        if "batch_results" in st.session_state and st.session_state["batch_results"]:
+            b_data = st.session_state["batch_results"]
+            consolidated_items = b_data["consolidated_items"]
+            cross_notifications = b_data["cross_notifications"]
+            invoice_totals_summary = b_data["invoice_totals_summary"]
+            duplicate_count = b_data["duplicate_count"]
+
+            st.markdown("---")
+            st.markdown("### 📋 Paso 3: Confirmación y Revisión del Lote Consolidado")
+
             if duplicate_count > 0:
-                st.error(f"🚨 Se detectaron y filtraron **{duplicate_count} archivo(s) duplicado(s)** dentro de la selección actual.")
+                st.error(f"🚨 Se detectaron y filtraron **{duplicate_count} archivo(s) duplicado(s)**.")
 
             if cross_notifications:
                 st.markdown("### 🔔 Notificación de Productos Cruzados (Múltiples Facturas)")
-                st.info(f"Se detectaron **{len(cross_notifications)} coincidencias** de productos repetidos en distintas facturas del lote. Sus stocks se han sumado y sus costos se han promediado ponderadamente.")
+                st.info(f"Se detectaron **{len(cross_notifications)} coincidencias** de productos repetidos en distintas facturas del lote.")
                 df_cross = pd.DataFrame(cross_notifications)
                 df_cross.columns = ["Descripción del Producto", "Código Barra / Ref", "Factura de Cruce", "Stock Añadido"]
                 st.dataframe(df_cross, use_container_width=True, hide_index=True)
@@ -856,54 +879,55 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
                 df_batch = pd.DataFrame(rows_preview)
                 st.dataframe(df_batch, use_container_width=True, hide_index=True)
 
-                template_path = "Plantilla_Inventario_WilPOS_2.xlsx"
-                if not os.path.exists(template_path):
-                    template_path = "Plantilla_Inventario_WilPOS.xlsx"
-                    
-                if os.path.exists(template_path):
-                    wb = openpyxl.load_workbook(template_path)
-                    ws_prod = wb['Productos']
-                    ws_prod.delete_rows(2, ws_prod.max_row)
-                else:
-                    wb = openpyxl.Workbook()
-                    ws_prod = wb.active
-                    ws_prod.title = "Productos"
-                    ws_prod.append(['Nombre', 'Código Barra', 'Categoría', 'Tipo', 'Precio Venta', 'Costo', 'Stock', 'Stock Mínimo', 'ITBIS', 'Unidad Medida', 'Venta Granel', 'Cantidad Empaque', 'Precio Variable', 'Descuento %', 'Descuento Monto', 'Precio Especial', 'Descuento Activo', 'Descuento Nota'])
+                # Botón final de Confirmación Lote
+                if st.button("🚀 Confirmar Lote y Generar Excel Consolidado", type="primary"):
+                    template_path = "Plantilla_Inventario_WilPOS_2.xlsx"
+                    if not os.path.exists(template_path):
+                        template_path = "Plantilla_Inventario_WilPOS.xlsx"
+                        
+                    if os.path.exists(template_path):
+                        wb = openpyxl.load_workbook(template_path)
+                        ws_prod = wb['Productos']
+                        ws_prod.delete_rows(2, ws_prod.max_row)
+                    else:
+                        wb = openpyxl.Workbook()
+                        ws_prod = wb.active
+                        ws_prod.title = "Productos"
+                        ws_prod.append(['Nombre', 'Código Barra', 'Categoría', 'Tipo', 'Precio Venta', 'Costo', 'Stock', 'Stock Mínimo', 'ITBIS', 'Unidad Medida', 'Venta Granel', 'Cantidad Empaque', 'Precio Variable', 'Descuento %', 'Descuento Monto', 'Precio Especial', 'Descuento Activo', 'Descuento Nota'])
 
-                for item_dict in rows_preview:
-                    ws_prod.append([
-                        item_dict["Nombre"],
-                        item_dict["Código Barra POS"],
-                        "General",
-                        "producto",
-                        item_dict["Precio Venta (M5)"],
-                        item_dict["Costo Unit. Sin ITBIS"],
-                        item_dict["Stock Total"],
-                        5,
-                        0.18,
-                        "unidad",
-                        "No",
-                        item_dict["Empaque"],
-                        "No",
-                        0,
-                        0,
-                        None,
-                        "No",
-                        None
-                    ])
-                    ws_prod.cell(row=ws_prod.max_row, column=2).number_format = '@'
+                    for item_dict in rows_preview:
+                        ws_prod.append([
+                            item_dict["Nombre"],
+                            item_dict["Código Barra POS"],
+                            "General",
+                            "producto",
+                            item_dict["Precio Venta (M5)"],
+                            item_dict["Costo Unit. Sin ITBIS"],
+                            item_dict["Stock Total"],
+                            5,
+                            0.18,
+                            "unidad",
+                            "No",
+                            item_dict["Empaque"],
+                            "No",
+                            0,
+                            0,
+                            None,
+                            "No",
+                            None
+                        ])
+                        ws_prod.cell(row=ws_prod.max_row, column=2).number_format = '@'
 
-                output = io.BytesIO()
-                wb.save(output)
-                excel_data_batch = output.getvalue()
+                    output = io.BytesIO()
+                    wb.save(output)
+                    excel_data_batch = output.getvalue()
 
-                save_to_history(excel_data_batch, prefix="Lote")
+                    save_to_history(excel_data_batch, prefix="Lote")
+                    st.success("✅ ¡Lote confirmado y guardado en el historial con éxito!")
 
-                st.download_button(
-                    label="📥 Descargar Excel Consolidado Sin Duplicados",
-                    data=excel_data_batch,
-                    file_name="Inventario_WilPOS_Consolidado_Lote.xlsx",
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                )
-            else:
-                st.warning("No hay ítems válidos para consolidar.")
+                    st.download_button(
+                        label="📥 Descargar Excel Consolidado Sin Duplicados",
+                        data=excel_data_batch,
+                        file_name="Inventario_WilPOS_Consolidado_Lote.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                    )
