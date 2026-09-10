@@ -1,9 +1,10 @@
-import io
+io
 import json
 import os
 import hashlib
 import re
 import difflib
+from datetime import datetime
 import google.generativeai as genai
 from PIL import Image
 import streamlit as st
@@ -27,6 +28,8 @@ paid_api_key = st.secrets.get("GEMINI_API_KEY_PAID", os.environ.get("GEMINI_API_
 
 # Archivo persistente de memoria de proveedores
 MEMORY_FILE = "proveedores_memoria.json"
+SAVED_MASTER_FILE = "maestro_guardado.xlsx"
+MASTER_META_FILE = "maestro_meta.json"
 
 def load_provider_memory():
     if os.path.exists(MEMORY_FILE):
@@ -99,27 +102,57 @@ with st.sidebar.expander("Ver Proveedores Aprendidos"):
 
 st.sidebar.markdown("---")
 st.sidebar.title("🗂️ Maestro de Inventario POS")
-default_master_path = "Inventario_Completo_2026-09-06.xlsx"
-master_file_uploaded = st.sidebar.file_uploader("Sube tu archivo Maestro (o usa el predeterminado)", type=["xlsx", "xls", "csv"], key="master_inv_file")
+
+# Gestión de Persistencia del Archivo Maestro
+master_file_uploaded = st.sidebar.file_uploader("Actualizar archivo Maestro (opcional)", type=["xlsx", "xls", "csv"], key="master_inv_file")
 
 master_dict = {}
 master_names = []
 master_by_code = {}
+master_upload_date_str = "No disponible"
 
-target_master = master_file_uploaded
-if target_master is None and os.path.exists(default_master_path):
-    target_master = default_master_path
-elif target_master is None:
-    local_files = [f for f in os.listdir('.') if f.endswith('.xlsx') and 'Inventario' in f]
-    if local_files:
-        target_master = local_files[0]
-
-if target_master is not None:
+# Guardar nuevo maestro si el usuario lo subió
+if master_file_uploaded is not None:
     try:
-        if hasattr(target_master, 'name') and target_master.name.endswith('.csv'):
-            df_master = pd.read_csv(target_master)
+        bytes_data = master_file_uploaded.getvalue()
+        with open(SAVED_MASTER_FILE, "wb") as f:
+            f.write(bytes_data)
+        
+        current_time_str = datetime.now().strftime("%d/%m/%Y %I:%M %p")
+        meta_data = {"fecha": current_time_str, "nombre_archivo": master_file_uploaded.name}
+        with open(MASTER_META_FILE, "w", encoding="utf-8") as mf:
+            json.dump(meta_data, mf)
+            
+        st.sidebar.success(f"✅ ¡Nuevo maestro guardado con éxito!")
+    except Exception as ex:
+        st.sidebar.error(f"Error al guardar maestro: {ex}")
+
+# Cargar maestro activo (del archivo guardado o predeterminado local)
+target_master_path = None
+if os.path.exists(SAVED_MASTER_FILE):
+    target_master_path = SAVED_MASTER_FILE
+    if os.path.exists(MASTER_META_FILE):
+        try:
+            with open(MASTER_META_FILE, "r", encoding="utf-8") as mf:
+                m_info = json.load(mf)
+                master_upload_date_str = f"{m_info.get('fecha', 'N/D')} ({m_info.get('nombre_archivo', 'Archivo guardado')})"
+        except Exception:
+            master_upload_date_str = "Archivo guardado en sistema"
+else:
+    default_master_path = "Inventario_Completo_2026-09-06.xlsx"
+    if os.path.exists(default_master_path):
+        target_master_path = default_master_path
+        mod_time = os.path.getmtime(default_master_path)
+        master_upload_date_str = f"{datetime.fromtimestamp(mod_time).strftime('%d/%m/%Y %I:%M %p')} (Predeterminado local)"
+
+st.sidebar.markdown(f"🕒 **Maestro Activo Desde:**\n`{master_upload_date_str}`")
+
+if target_master_path is not None:
+    try:
+        if target_master_path.endswith('.csv'):
+            df_master = pd.read_csv(target_master_path)
         else:
-            df_master = pd.read_excel(target_master, sheet_name='Productos' if str(target_master).endswith('.xlsx') else 0)
+            df_master = pd.read_excel(target_master_path, sheet_name='Productos' if target_master_path.endswith('.xlsx') else 0)
         
         cols = [str(c).lower() for c in df_master.columns]
         name_col = next((df_master.columns[i] for i, c in enumerate(cols) if 'nombre' in c or 'descripcion' in c), df_master.columns[0])
@@ -134,11 +167,11 @@ if target_master is not None:
                 if p_name not in master_names:
                     master_names.append(p_name)
                 
-        st.sidebar.success(f"✅ Maestro sincronizado: {len(master_dict)} productos cargados.")
+        st.sidebar.success(f"✅ Sincronizado: {len(master_dict)} productos en memoria.")
     except Exception as e:
-        st.sidebar.error(f"Error al leer el maestro: {e}")
+        st.sidebar.error(f"Error al leer el maestro activo: {e}")
 else:
-    st.sidebar.warning("⚠️ No se detectó archivo maestro. Súbelo para actualizar códigos de barra.")
+    st.sidebar.warning("⚠️ No se detectó ningún archivo maestro cargado.")
 
 # Diccionario de equivalencias personalizables guardado en session_state
 if "custom_equivalences" not in st.session_state:
@@ -199,7 +232,6 @@ def normalize_text(text):
     return re.sub(r'\s+', ' ', cleaned).strip()
 
 def extract_and_normalize_size(text):
-    """Extrae y estandariza cualquier presentación/volumen (ej: 700ml, 1L, 1.75LT -> 700ML, 1000ML, 1750ML)."""
     match = re.search(r'(\d+(?:\.\d+)?\s*(?:ML|L|LT|CL|OZ))', str(text), re.IGNORECASE)
     if not match:
         return None
@@ -244,12 +276,9 @@ def validate_with_master(item_description, original_code):
     best_match_name = ""
     highest_score = 0.0
     
-    # REVISIÓN CRUZADA DE TODAS LAS PRESENTACIONES EN EL MAESTRO
     for m_name, m_code in master_dict.items():
         m_size = extract_and_normalize_size(m_name)
         
-        # COMPARACIÓN CRUZADA ESTRICTA DE PRESENTACIONES:
-        # Si la factura trae un tamaño/volumen y el maestro tiene otro tamaño para la misma marca, se bloquea estrictamente.
         if inv_size and m_size and inv_size != m_size:
             continue
             
@@ -268,7 +297,6 @@ def validate_with_master(item_description, original_code):
             else:
                 weight += 0.10
                 
-        # Bono adicional si el tamaño coincide perfectamente
         if inv_size and m_size and inv_size == m_size:
             weight += 0.50
             
@@ -435,6 +463,7 @@ def consolidate_items_with_tracking(raw_items_with_source):
 # ==========================================
 if modulo == "📄 Factura Individual":
     st.title("📊 Automatizador de Facturas para WilPOS (Individual)")
+    st.info(f"🗂️ **Maestro Activo en Uso:** `{master_upload_date_str}`")
     st.markdown("Sube tu factura para extraer sus ítems, validar presentaciones con tu maestro POS y generar la plantilla actualizada.")
 
     uploaded_file = st.file_uploader("Sube tu factura (PDF o Imagen)", type=["pdf", "png", "jpg", "jpeg"], key="single_file")
@@ -606,6 +635,7 @@ if modulo == "📄 Factura Individual":
 # ==========================================
 elif modulo == "📂 Múltiples Facturas (Lote)":
     st.title("📂 Procesador por Lotes (Validación de Presentaciones y Trazabilidad)")
+    st.info(f"🗂️ **Maestro Activo en Uso:** `{master_upload_date_str}`")
     st.markdown("Sube varias facturas. El sistema validará todas las presentaciones cruzadas, consolidará duplicados y te notificará los cruces.")
 
     if st.session_state["quota_exceeded"]:
@@ -648,11 +678,13 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
                             st.image(pdf_images[0], caption=f"Página 1 - {f_item.name}", use_container_width=True)
                         f_item.seek(0)
                     except Exception as ex:
-                        st.info(f"No se pudo renderizar la vista previa del PDF: {ex}")
+                        st.info(f"No se pudo renderizar la vista previa visual del PDF: {ex}")
                 else:
                     st.info(f"El archivo '{f_item.name}' está cargado correctamente.")
 
-        if st.button("🚀 Procesar Lote, Consolidar y Validar Presentaciones", type="primary"):
+        run_batch_processing = st.button("🚀 Procesar Lote, Consolidar y Validar Presentaciones", type="primary") or st.session_state["use_paid_now"]
+
+        if run_batch_processing:
             all_raw_items_with_source = []
             invoice_totals_summary = []
             duplicate_count = 0
@@ -704,6 +736,9 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
                                 })
 
                 progress_bar.progress((i + 1) / len(uploaded_files))
+
+            if st.session_state["use_paid_now"]:
+                st.session_state["use_paid_now"] = False
 
             status_text.text("Consolidando ítems, validando presentaciones y detectando cruces...")
             consolidated_items, cross_notifications = consolidate_items_with_tracking(all_raw_items_with_source)
