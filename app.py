@@ -26,10 +26,14 @@ free_key_1 = st.secrets.get("GEMINI_API_KEY_1", os.environ.get("GEMINI_API_KEY_1
 free_key_2 = st.secrets.get("GEMINI_API_KEY_2", os.environ.get("GEMINI_API_KEY_2", ""))
 paid_api_key = st.secrets.get("GEMINI_API_KEY_PAID", os.environ.get("GEMINI_API_KEY_PAID", ""))
 
-# Archivo persistente de memoria de proveedores
+# Archivos y carpetas persistentes
 MEMORY_FILE = "proveedores_memoria.json"
 SAVED_MASTER_FILE = "maestro_guardado.xlsx"
 MASTER_META_FILE = "maestro_meta.json"
+HISTORY_DIR = "historial_excel"
+
+if not os.path.exists(HISTORY_DIR):
+    os.makedirs(HISTORY_DIR)
 
 def load_provider_memory():
     if os.path.exists(MEMORY_FILE):
@@ -49,6 +53,16 @@ def save_provider_memory(memory_dict):
 
 if "provider_memory" not in st.session_state:
     st.session_state["provider_memory"] = load_provider_memory()
+
+def save_to_history(excel_bytes, prefix="Inventario"):
+    try:
+        timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+        filename = f"{prefix}_{timestamp}.xlsx"
+        filepath = os.path.join(HISTORY_DIR, filename)
+        with open(filepath, "wb") as f:
+            f.write(excel_bytes)
+    except Exception as e:
+        print(f"Error guardando en historial: {e}")
 
 # Funciones auxiliares de cálculo y formato con precisión estricta
 def safe_float(val, default=0.0):
@@ -99,6 +113,34 @@ with st.sidebar.expander("Ver Proveedores Aprendidos"):
             st.rerun()
     else:
         st.info("Aún no hay proveedores aprendidos. Se registrarán automáticamente al procesar facturas.")
+
+# HISTORIAL DE EXCEL GENERADOS EN BARRA LATERAL
+st.sidebar.markdown("---")
+st.sidebar.title("📁 Historial de Excel")
+with st.sidebar.expander("Ver Archivos Generados"):
+    history_files = sorted([f for f in os.listdir(HISTORY_DIR) if f.endswith('.xlsx')], reverse=True)
+    if history_files:
+        st.write(f"Total archivados: {len(history_files)}")
+        for h_file in history_files[:10]: # Mostrar los 10 más recientes
+            file_path = os.path.join(HISTORY_DIR, h_file)
+            with open(file_path, "rb") as fh:
+                st.download_button(
+                    label=f"📥 {h_file}",
+                    data=fh.read(),
+                    file_name=h_file,
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    key=f"dl_{h_file}"
+                )
+        if len(history_files) > 10:
+            st.info(f"Y {len(history_files) - 10} archivos más en el servidor.")
+            
+        if st.button("🗑️ Vaciar Historial"):
+            for h_file in history_files:
+                os.remove(os.path.join(HISTORY_DIR, h_file))
+            st.success("¡Historial vaciado!")
+            st.rerun()
+    else:
+        st.info("Aún no hay reportes en el historial. Se guardarán aquí automáticamente al procesar facturas.")
 
 st.sidebar.markdown("---")
 st.sidebar.title("🗂️ Maestro de Inventario POS")
@@ -599,6 +641,9 @@ if modulo == "📄 Factura Individual":
                 wb.save(output)
                 excel_data = output.getvalue()
                 
+                # Guardar automáticamente en el historial
+                save_to_history(excel_data, prefix="Individual")
+                
                 st.download_button(
                     label="📥 Descargar Excel Plantilla WilPOS Actualizada",
                     data=excel_data,
@@ -834,6 +879,9 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
                 output = io.BytesIO()
                 wb.save(output)
                 excel_data_batch = output.getvalue()
+
+                # Guardar automáticamente en el historial de lotes
+                save_to_history(excel_data_batch, prefix="Lote")
 
                 st.download_button(
                     label="📥 Descargar Excel Consolidado Sin Duplicados",
