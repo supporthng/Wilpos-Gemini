@@ -10,6 +10,13 @@ import streamlit as st
 import openpyxl
 import pandas as pd
 
+# Intento de importar herramientas de renderizado PDF para vista previa universal
+try:
+    from pdf2image import convert_from_bytes
+    PDF_RENDER_AVAILABLE = True
+except ImportError:
+    PDF_RENDER_AVAILABLE = False
+
 # Configuración de la página
 st.set_page_config(page_title="WilPOS - Automatizador de Facturas", page_icon="📊", layout="wide")
 
@@ -151,75 +158,102 @@ with st.sidebar.expander("Ver / Editar Equivalencias"):
             st.rerun()
 
 # ==========================================
-# MOTOR DE NORMALIZACIÓN Y COINCIDENCIA AVANZADA
+# MOTOR GENERALIZADO DE NORMALIZACIÓN Y SIMILITUD
 # ==========================================
-SYNONYMS_MAP = {
-    "JW ": "JOHNNIE WALKER ",
-    "JW.": "JOHNNIE WALKER",
+GLOBAL_SYNONYMS = {
+    "JW ": "JOHNIE WALKER ",
+    "JW.": "JOHNIE WALKER",
+    "JOHNNIE": "JOHNIE",
     "BUCH ": "BUCHANANS ",
     "BUCHANAN": "BUCHANANS",
+    "CHIV ": "CHIVAS REGAL ",
+    "CHIVAS": "CHIVAS REGAL",
+    "OLD PARR": "OLD PARR",
+    "OLD": "",
     "0.5 LT": "500ML",
     "0.5LT": "500ML",
     "1 LT": "1000ML",
     "1LT": "1000ML",
+    "75 CL": "750ML",
+    "75CL": "750ML",
+    "1 L": "1000ML",
+    "1L": "1000ML",
+    "37.5 CL": "375ML",
+    "375 ML": "375ML",
     "RON ": "",
+    "WHISKY ": "",
+    "WISKY ": "",
     "BOTELLA ": "",
-    "BOTELL ": ""
+    "BOTELL ": "",
+    "CAJA ": ""
 }
 
-def clean_and_tokenize(text):
-    upper_text = str(text).upper()
-    for prov, pos in st.session_state["custom_equivalences"].items():
-        if prov in upper_text:
-            upper_text = upper_text.replace(prov, pos)
-            
-    for abbr, full in SYNONYMS_MAP.items():
-        upper_text = upper_text.replace(abbr, full)
-        
-    cleaned = re.sub(r'[^A-Z0-9\s]', ' ', upper_text)
-    stopwords = {"DE", "EL", "LA", "LOS", "LAS", "Y", "EN", "UN", "UNA", "CON", "CMS", "CM"}
-    tokens = [t for t in cleaned.split() if t not in stopwords]
-    return set(tokens), upper_text
+def normalize_text(text):
+    upper = str(text).upper().strip()
+    # Aplicar equivalencias de usuario primero
+    for k, v in st.session_state["custom_equivalences"].items():
+        if k in upper:
+            upper = upper.replace(k, v)
+    # Aplicar sinónimos y abreviaturas globales
+    for abbr, full in GLOBAL_SYNONYMS.items():
+        upper = upper.replace(abbr, full)
+    # Limpiar caracteres especiales dejando letras, números y espacios
+    cleaned = re.sub(r'[^A-Z0-9\s]', ' ', upper)
+    # Eliminar espacios múltiples
+    return re.sub(r'\s+', ' ', cleaned).strip()
+
+def get_tokens(text):
+    norm = normalize_text(text)
+    stopwords = {"DE", "EL", "LA", "LOS", "LAS", "Y", "EN", "UN", "UNA", "CON", "CMS", "CM", "ML", "L"}
+    tokens = [t for t in norm.split() if t not in stopwords]
+    return set(tokens), norm
 
 def validate_with_master(item_description, original_code):
     if not master_dict:
         return original_code, "Sin Maestro Cargado"
     
-    norm_desc = str(item_description).upper().strip()
-    
+    # 1. Búsqueda exacta con texto normalizado
+    norm_desc = normalize_text(item_description)
     if norm_desc in master_dict:
-        return master_dict[norm_desc], "Actualizado (Exacto)"
+        return master_dict[norm_desc], "Actualizado (Exacto Normalizado)"
         
-    desc_tokens, _ = clean_and_tokenize(item_description)
+    desc_tokens, desc_clean = get_tokens(item_description)
     best_match_code = original_code
     best_match_name = ""
     highest_score = 0.0
     
+    # 2. Búsqueda por similitud semántica avanzada de tokens y pesos numéricos
     for m_name, m_code in master_dict.items():
-        m_tokens, _ = clean_and_tokenize(m_name)
+        m_tokens, m_clean = get_tokens(m_name)
         if not desc_tokens or not m_tokens:
             continue
             
         intersection = desc_tokens.intersection(m_tokens)
         union = desc_tokens.union(m_tokens)
-        jaccard_score = len(intersection) / len(union) if union else 0
+        jaccard = len(intersection) / len(union) if union else 0
         
+        # Ponderación inteligente: dar mayor valor si coinciden números (ej. tamaños 750ml, años 12, etc.)
         weight = 1.0
         for token in intersection:
             if token.isdigit() or len(token) > 3:
-                weight += 0.25
+                weight += 0.35
+            elif len(token) <= 3:
+                weight += 0.10
                 
-        final_score = jaccard_score * weight
+        # Penalizar si faltan palabras clave críticas de marca
+        score = jaccard * weight
         
-        if final_score > highest_score and len(intersection) >= 1:
-            highest_score = final_score
+        if score > highest_score and len(intersection) >= 1:
+            highest_score = score
             best_match_code = m_code
             best_match_name = m_name
             
-    if highest_score >= 0.35:
+    # Umbral flexible pero seguro para capturar abreviaturas y similitudes
+    if highest_score >= 0.28:
         return best_match_code, f"Actualizado (IA Semántica: {best_match_name})"
         
-    matches = difflib.get_close_matches(norm_desc, master_names, n=1, cutoff=0.35)
+    # 3. Búsqueda por aproximación difusa de cadenas completas
+    matches = difflib.get_close_matches(norm_desc, list(master_dict.keys()), n=1, cutoff=0.30)
     if matches:
         matched_name = matches[0]
         return master_dict[matched_name], f"Actualizado (Similitud: {matched_name})"
@@ -323,7 +357,6 @@ if modulo == "📄 Factura Individual":
     if uploaded_file is not None:
         st.success(f"¡Archivo cargado: {uploaded_file.name}!")
 
-        # 👁️ Botón de Vista Previa Selectiva (Ojito)
         file_type_check = uploaded_file.type if hasattr(uploaded_file, 'type') else ''
         is_img = "image" in file_type_check or uploaded_file.name.lower().endswith(('png', 'jpg', 'jpeg', 'webp'))
         
@@ -332,8 +365,17 @@ if modulo == "📄 Factura Individual":
                 image = Image.open(uploaded_file)
                 st.image(image, caption=f"Vista previa: {uploaded_file.name}", use_container_width=True)
                 uploaded_file.seek(0)
+            elif uploaded_file.name.lower().endswith('.pdf') and PDF_RENDER_AVAILABLE:
+                try:
+                    uploaded_file.seek(0)
+                    pdf_images = convert_from_bytes(uploaded_file.read(), first_page=1, last_page=1)
+                    if pdf_images:
+                        st.image(pdf_images[0], caption=f"Página 1 - {uploaded_file.name}", use_container_width=True)
+                    uploaded_file.seek(0)
+                except Exception as ex:
+                    st.info(f"No se pudo renderizar la vista previa visual del PDF: {ex}")
             else:
-                st.info(f"El archivo '{uploaded_file.name}' es de tipo PDF o documento (no muestra renderizado visual directo, pero está listo para procesamiento).")
+                st.info(f"El archivo '{uploaded_file.name}' está cargado y listo para procesamiento.")
 
         if st.session_state["quota_exceeded"]:
             @st.dialog("⚠️ Confirmación Requerida: Límite de Cuota Alcanzado")
@@ -504,18 +546,26 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
     if uploaded_files:
         st.info(f"Se han cargado {len(uploaded_files)} archivos en total.")
 
-        # 👁️ Vista Previa Selectiva por Archivo (Ojito)
         st.markdown("### 👁️ Vista Previa Selectiva de Archivos")
-        st.markdown("Selecciona el archivo que deseas inspeccionar haciendo clic en su botón de vista previa:")
+        st.markdown("Haz clic en el botón de cualquier archivo para desplegar su vista previa:")
         
         for idx_f, f_item in enumerate(uploaded_files):
-            with st.expander(f"👁️ Ver factura: {f_item.name}"):
+            with st.expander(f"👁️ [Ojito] Ver factura #{idx_f+1}: {f_item.name}"):
                 f_type = f_item.type if hasattr(f_item, 'type') else ''
                 if "image" in f_type or f_item.name.lower().endswith(('png', 'jpg', 'jpeg', 'webp')):
                     st.image(Image.open(f_item), caption=f_item.name, width=500)
                     f_item.seek(0)
+                elif f_item.name.lower().endswith('.pdf') and PDF_RENDER_AVAILABLE:
+                    try:
+                        f_item.seek(0)
+                        pdf_images = convert_from_bytes(f_item.read(), first_page=1, last_page=1)
+                        if pdf_images:
+                            st.image(pdf_images[0], caption=f"Página 1 - {f_item.name}", use_container_width=True)
+                        f_item.seek(0)
+                    except Exception as ex:
+                        st.info(f"No se pudo renderizar la vista previa del PDF: {ex}")
                 else:
-                    st.info(f"El archivo '{f_item.name}' es de tipo PDF o documento.")
+                    st.info(f"El archivo '{f_item.name}' está cargado correctamente.")
 
         if st.button("🚀 Procesar Lote y Validar con Maestro", type="primary"):
             all_consolidated_items = []
