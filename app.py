@@ -86,7 +86,7 @@ with st.sidebar.expander("Ver Proveedores Aprendidos"):
             st.success("¡Memoria reseteada!")
             st.rerun()
     else:
-      st.info("Aún no hay proveedores aprendidos. Se registrarán automáticamente al procesar facturas.")
+        st.info("Aún no hay proveedores aprendidos. Se registrarán automáticamente al procesar facturas.")
 
 st.sidebar.markdown("---")
 st.sidebar.title("🗂️ Maestro de Inventario POS")
@@ -223,7 +223,6 @@ def validate_with_master(item_description, original_code):
 
 # Función centralizada con Memoria Inteligente de Proveedores
 def process_invoice_with_ai(file_obj, file_type):
-    # Revisar si tenemos memoria previa de proveedores para inyectarla como contexto y asegurar cero errores
     memory_context = ""
     known_mem = st.session_state["provider_memory"]
     if known_mem:
@@ -233,11 +232,11 @@ def process_invoice_with_ai(file_obj, file_type):
 
     prompt_text = (
         f"{memory_context}\n"
-        "Analiza esta factura detalladamente. Extrae los datos de cabecera: 'emisor_rnc', 'numero_documento', 'fecha', 'subtotal', 'itbis', 'total'. "
-        "Para cada ítem, extrae con absoluta precisión: 'codigo', 'descripcion', 'cantidad' (número de cajas compradas), 'empaque' (unidades individuales que trae la caja, interpretando formatos como 12/75CL -> 12, 6/4PACK -> 24 o 6, etc.), y 'costo_sin_itbis' (EL COSTO UNITARIO REAL POR CADA PIEZA INDIVIDUAL: toma el precio neto total de la línea y divídelo estrictamente entre cantidad * empaque). "
+        "Analiza esta factura detalladamente. Extrae los datos de cabecera con absoluta precisión: 'emisor_rnc', 'emisor_nombre', 'numero_documento', 'fecha', 'subtotal', 'itbis', 'total'. "
+        "Para cada ítem, extrae: 'codigo', 'descripcion', 'cantidad' (número de cajas compradas), 'empaque' (unidades individuales que trae la caja, interpretando formatos como 12/75CL -> 12, 6/4PACK -> 24 o 6, etc.), y 'costo_sin_itbis' (EL COSTO UNITARIO REAL POR CADA PIEZA INDIVIDUAL: toma el precio neto total de la línea y divídelo estrictamente entre cantidad * empaque). "
         "REGLA ESTRICTA PARA LA DESCRIPCIÓN: Limpia el texto de cada producto para incluir ÚNICAMENTE el nombre comercial del producto y su presentación o tamaño limpio (ej: 'EVIAN 75 CL', 'GINGER BEER SPICY 207 ML', 'BLUE LABEL 750 ML'), eliminando códigos internos, diagonales de empaque y textos redundantes. "
         "Devuelve la información estrictamente en formato JSON con la siguiente estructura exacta: "
-        '{"emisor_rnc": "...", "numero_documento": "...", "fecha": "...", "subtotal": 0.0, "itbis": 0.0, "total": 0.0, "items": [{"codigo": "...", "descripcion": "...", "cantidad": 1, "empaque": 1, "costo_sin_itbis": 0.0}]}. '
+        '{"emisor_rnc": "...", "emisor_nombre": "...", "numero_documento": "...", "fecha": "...", "subtotal": 0.0, "itbis": 0.0, "total": 0.0, "items": [{"codigo": "...", "descripcion": "...", "cantidad": 1, "empaque": 1, "costo_sin_itbis": 0.0}]}. '
         "REGLA CRÍTICA: Preserva todos los ceros a la izquierda como texto. Respuesta JSON pura sin texto adicional."
     )
 
@@ -269,11 +268,12 @@ def process_invoice_with_ai(file_obj, file_type):
         parsed_data = json.loads(raw_text.strip())
         success_msg = "✅ ¡Factura procesada con éxito y formato aprendido!"
         
-        # APRENDIZAJE AUTOMÁTICO DE PROVEEDORES
         rnc_key = str(parsed_data.get("emisor_rnc", "")).strip()
+        nombre_prov = str(parsed_data.get("emisor_nombre", "Proveedor Desconocido")).strip()
+        
         if rnc_key and rnc_key not in st.session_state["provider_memory"]:
             st.session_state["provider_memory"][rnc_key] = {
-                "nombre": f"Proveedor RNC {rnc_key}",
+                "nombre": nombre_prov if nombre_prov and nombre_prov != "None" else f"Proveedor RNC {rnc_key}",
                 "nota_formato": "Formato de cajas con empaques y costos unitarios procesados exitosamente."
             }
             save_provider_memory(st.session_state["provider_memory"])
@@ -356,6 +356,11 @@ if modulo == "📄 Factura Individual":
             if parsed_data:
                 st.success(success_msg)
                 
+                # Indicador de Proveedor Procesado
+                prov_nombre = parsed_data.get("emisor_nombre", "Desconocido")
+                prov_rnc = parsed_data.get("emisor_rnc", "N/D")
+                st.info(f"🏢 **Proveedor Procesado:** {prov_nombre} | **RNC:** `{prov_rnc}`")
+
                 # Mostrar Totales de la Factura
                 st.markdown("### 📋 Resumen de Totales de la Factura")
                 c_t1, c_t2, c_t3 = st.columns(3)
@@ -457,8 +462,8 @@ if modulo == "📄 Factura Individual":
 # MÓDULO 2: MÚLTIPLES FACTURAS (LOTE)
 # ==========================================
 elif modulo == "📂 Múltiples Facturas (Lote)":
-    st.title("📂 Procesador por Lotes (Con Memoria de Proveedores)")
-    st.markdown("Sube varias facturas. El sistema aplicará la memoria histórica de formatos de cada proveedor y validará contra tu maestro.")
+    st.title("📂 Procesador por Lotes (Con Proveedores Identificados)")
+    st.markdown("Sube varias facturas. El sistema validará los ítems, listará los proveedores procesados y consolidará el inventario sin duplicados.")
 
     if st.session_state["quota_exceeded"]:
         @st.dialog("⚠️ Confirmación Requerida: Límite de Cuota Alcanzado")
@@ -493,6 +498,7 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
 
         if st.button("🚀 Procesar Lote y Validar con Maestro", type="primary"):
             all_consolidated_items = []
+            invoice_totals_summary = []
             duplicate_count = 0
             batch_signatures = set()
 
@@ -507,18 +513,32 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
 
                 if parsed_data and isinstance(parsed_data, dict):
                     rnc_emisor = str(parsed_data.get("emisor_rnc", "")).strip()
+                    nombre_emisor = str(parsed_data.get("emisor_nombre", "Desconocido")).strip()
                     num_doc = str(parsed_data.get("numero_documento", "")).strip()
                     fecha_doc = str(parsed_data.get("fecha", "")).strip()
-                    total_doc = str(parsed_data.get("total", "")).strip()
+                    subtotal_doc = safe_float(parsed_data.get("subtotal", 0))
+                    itbis_doc = safe_float(parsed_data.get("itbis", 0))
+                    total_doc_val = safe_float(parsed_data.get("total", 0))
                     
-                    signature_string = f"{rnc_emisor}_{num_doc}_{fecha_doc}_{total_doc}"
+                    signature_string = f"{rnc_emisor}_{num_doc}_{fecha_doc}_{total_doc_val}"
                     doc_signature = hashlib.md5(signature_string.encode('utf-8')).hexdigest()
                     
                     if doc_signature in batch_signatures:
                         duplicate_count += 1
-                        st.warning(f"⚠️ Archivo omitido por estar duplicado en este lote: **{file.name}** (Doc: {num_doc}, Total: {total_doc})")
+                        st.warning(f"⚠️ Archivo omitido por estar duplicado en este lote: **{file.name}** (Doc: {num_doc}, Total: {total_doc_val})")
                     else:
                         batch_signatures.add(doc_signature)
+                        
+                        # Registrar resumen de totales y proveedor de esta factura
+                        invoice_totals_summary.append({
+                            "Proveedor": nombre_emisor if nombre_emisor and nombre_emisor != "None" else f"RNC: {rnc_emisor}",
+                            "Archivo": file.name,
+                            "Nº Documento": num_doc if num_doc else "N/D",
+                            "Subtotal": subtotal_doc,
+                            "ITBIS": itbis_doc,
+                            "Total General": total_doc_val
+                        })
+
                         items = parsed_data.get("items", [])
                         if isinstance(items, list):
                             all_consolidated_items.extend(items)
@@ -530,8 +550,24 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
             if duplicate_count > 0:
                 st.error(f"🚨 Se detectaron y filtraron **{duplicate_count} archivo(s) duplicado(s)** dentro de la selección actual.")
 
+            if invoice_totals_summary:
+                st.markdown("### 🏢 Proveedores Identificados y Totales por Factura")
+                df_totales = pd.DataFrame(invoice_totals_summary)
+                st.dataframe(df_totales, use_container_width=True, hide_index=True)
+                
+                # Totales generales acumulados del lote
+                t_sub = sum(x["Subtotal"] for x in invoice_totals_summary)
+                t_itbis = sum(x["ITBIS"] for x in invoice_totals_summary)
+                t_gen = sum(x["Total General"] for x in invoice_totals_summary)
+                
+                c_l1, c_l2, c_l3 = st.columns(3)
+                c_l1.metric("Subtotal Acumulado Lote", f"RD$ {t_sub:,.2f}")
+                c_l2.metric("ITBIS Acumulado Lote", f"RD$ {t_itbis:,.2f}")
+                c_l3.metric("Total General Acumulado", f"RD$ {t_gen:,.2f}")
+
             if all_consolidated_items:
-                st.success(f"🎉 Se consolidaron exitosamente {len(all_consolidated_items)} ítems de facturas válidas.")
+                st.markdown("---")
+                st.markdown(f"### 📦 Consolidado de Ítems ({len(all_consolidated_items)} productos totales)")
 
                 rows_preview = []
                 unmatched_batch = []
