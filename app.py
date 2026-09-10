@@ -7,12 +7,11 @@ import os
 import google.generativeai as genai
 from PIL import Image
 
-st.set_page_config(page_title="WilPOS - Automatizador con Plantilla", page_icon="📊", layout="wide")
+st.set_page_config(page_title="WilPOS - Automatizador Inteligente de Facturas", page_icon="📊", layout="wide")
 
-st.title("📊 Automatizador de Facturas para WilPOS (Plantilla Oficial)")
-st.markdown("Sube tu factura. La app extraerá los productos mostrando **solo el nombre y el tamaño**, calculará la fórmula (**Costo + 25% + 18% ITBIS** con redondeo a **múltiplos de 5**), mantendrá los **ceros a la izquierda** en los códigos de barras y usará la **Plantilla Oficial de WilPOS**.")
+st.title("📊 Automatizador de Facturas para WilPOS (Detección Inteligente de Empaques)")
+st.markdown("Sube cualquier factura. La IA detectará automáticamente el tipo de empaque (Caja, Paquete, Lata, Botella), calculará las cantidades y el **costo unitario exacto sin ITBIS**, aplicará la fórmula del **25% de margen + 18% ITBIS** con redondeo a **múltiplos de 5**, y generará el Excel usando la **Plantilla Oficial de WilPOS**.")
 
-# Configurar claves desde Streamlit Secrets (Soporta múltiples cuentas gratuitas y pago opcional)
 free_key_1 = st.secrets.get("GEMINI_API_KEY", "")
 free_key_2 = st.secrets.get("GEMINI_API_KEY_2", "")
 paid_api_key = st.secrets.get("GEMINI_API_KEY_PAID", "")
@@ -41,12 +40,12 @@ if uploaded_file is not None:
     st.success(f"¡Factura cargada: {uploaded_file.name}!")
     
     if st.session_state["quota_exceeded"]:
-        st.warning("⚠️ **Se han agotado todas las solicitudes de las cuentas gratuitas principales.**")
-        confirm_paid = st.checkbox("¿Deseas procesar esta factura utilizando la versión de pago (o tienes otra clave adicional)?")
+        st.warning("⚠️ **Se han agotado las solicitudes gratuitas principales.**")
+        confirm_paid = st.checkbox("¿Deseas procesar esta factura utilizando la versión de pago?")
         
         if confirm_paid:
-            if st.button("🚀 Continuar con Versión Alternativa / Pago"):
-                with st.spinner("Procesando factura..."):
+            if st.button("🚀 Continuar con Versión de Pago"):
+                with st.spinner("Procesando factura con versión de pago..."):
                     try:
                         genai.configure(api_key=paid_api_key)
                         model_paid = genai.GenerativeModel('gemini-3.6-flash')
@@ -55,11 +54,12 @@ if uploaded_file is not None:
                         file_bytes = uploaded_file.read()
                         
                         prompt = (
-                            "Extrae todos los productos de esta factura en formato JSON puro (una lista de objetos con claves exactas: 'codigo', 'descripcion', 'costo_sin_itbis', 'empaque', 'stock'). "
-                            "REGLA PARA DESCRIPCIÓN: Limpia la descripción del producto para que solo incluya el nombre principal y su tamaño/gramaje (ejemplo: 'RUFFLES CHEDDAR 120G', eliminando términos como TA, CS, 16X1). "
-                            "REGLA CRÍTICA PARA CÓDIGOS: Trata el campo 'codigo' estrictamente como texto (string). NO elimines los ceros a la izquierda (por ejemplo, '0300055292'). "
-                            "Nota importante: 'stock' y 'empaque' deben ser valores numéricos enteros. Si no hay stock, pon 1. "
-                            "Calcula el costo unitario sin ITBIS y asegúrate de que sea una respuesta JSON válida sin texto adicional."
+                            "Analiza esta factura detectando los diferentes tipos de empaques (Caja, Paquete, Botella, Lata, Unidad, etc.), sus cantidades y el factor de conversión. "
+                            "Devuelve la información en formato JSON puro (una lista de objetos con claves exactas: 'codigo', 'descripcion', 'costo_sin_itbis', 'empaque', 'stock'). "
+                            "REGLA DE ORO PARA EL COSTO UNITARIO: Identifica el valor total de la línea y el ITBIS. Calcula el valor neto sin ITBIS (Valor Total - ITBIS). Luego, detecta cuántas unidades individuales componen el empaque (ej. Caja-12 = 12 unidades, Paquete-24 = 24 unidades) y divide el neto entre el total de unidades para obtener el 'costo_sin_itbis' por unidad individual exacta. "
+                            "REGLA PARA DESCRIPCIÓN: Limpia la descripción para que solo incluya el nombre principal y su tamaño (ejemplo: 'BEBIDA ENERGIZANTE CICLON 250ML', eliminando términos de empaque masivo como CS, TA, 16X1). "
+                            "REGLA CRÍTICA PARA CÓDIGOS: Trata el campo 'codigo' como texto (string) preservando todos los ceros a la izquierda. "
+                            "Stock y empaque deben ser enteros numéricos. Respuesta JSON válida sin texto adicional."
                         )
                         
                         response = model_paid.generate_content([
@@ -84,13 +84,15 @@ if uploaded_file is not None:
                             raw_pv = (costo * 1.25) * 1.18
                             precio_venta = round_to_nearest_5(raw_pv)
                             stock_val = safe_int(item.get("stock", 1), 1)
+                            empaque_val = safe_int(item.get("empaque", 1), 1)
                             codigo_barras = str(item.get("codigo", "")).strip()
                             
                             rows_preview.append({
                                 "No.": idx,
                                 "Código Barra": codigo_barras,
                                 "Nombre": str(item.get("descripcion", "")),
-                                "Costo Sin ITBIS": costo,
+                                "Empaque": empaque_val,
+                                "Costo Unit. Sin ITBIS": costo,
                                 "Precio Venta (Múltiplos de 5)": precio_venta,
                                 "Stock": stock_val
                             })
@@ -156,11 +158,10 @@ if uploaded_file is not None:
                         st.error(f"Error al procesar: {err_paid}")
     else:
         if st.button("🚀 Procesar Factura con Plantilla Oficial"):
-            with st.spinner("Analizando factura..."):
+            with st.spinner("Analizando tipos de empaque y calculando costos unitarios..."):
                 data_items = None
                 success_msg = ""
                 
-                # Intento 1: Cuenta Gratuita Principal (GEMINI_API_KEY)
                 try:
                     if not free_key_1:
                         raise Exception("No free key 1")
@@ -172,11 +173,12 @@ if uploaded_file is not None:
                     file_bytes = uploaded_file.read()
                     
                     prompt = (
-                        "Extrae todos los productos de esta factura en formato JSON puro (una lista de objetos con claves exactas: 'codigo', 'descripcion', 'costo_sin_itbis', 'empaque', 'stock'). "
-                        "REGLA PARA DESCRIPCIÓN: Limpia la descripción del producto para que solo incluya el nombre principal y su tamaño/gramaje (ejemplo: 'RUFFLES CHEDDAR 120G', eliminando términos como TA, CS, 16X1). "
-                        "REGLA CRÍTICA PARA CÓDIGOS: Trata el campo 'codigo' estrictamente como texto (string). NO elimines los ceros a la izquierda (por ejemplo, '0300055292'). "
-                        "Nota importante: 'stock' y 'empaque' deben ser valores numéricos enteros. Si no hay stock, pon 1. "
-                        "Calcula el costo unitario sin ITBIS y asegúrate de que sea una respuesta JSON válida sin texto adicional."
+                        "Analiza esta factura detectando los diferentes tipos de empaques (Caja, Paquete, Botella, Lata, Unidad, etc.), sus cantidades y el factor de conversión. "
+                        "Devuelve la información en formato JSON puro (una lista de objetos con claves exactas: 'codigo', 'descripcion', 'costo_sin_itbis', 'empaque', 'stock'). "
+                        "REGLA DE ORO PARA EL COSTO UNITARIO: Identifica el valor total de la línea y el ITBIS. Calcula el valor neto sin ITBIS (Valor Total - ITBIS). Luego, detecta cuántas unidades individuales componen el empaque (ej. Caja-12 = 12 unidades, Paquete-24 = 24 unidades) y divide el neto entre el total de unidades para obtener el 'costo_sin_itbis' por unidad individual exacta. "
+                        "REGLA PARA DESCRIPCIÓN: Limpia la descripción para que solo incluya el nombre principal y su tamaño (ejemplo: 'BEBIDA ENERGIZANTE CICLON 250ML', eliminando términos de empaque masivo como CS, TA, 16X1). "
+                        "REGLA CRÍTICA PARA CÓDIGOS: Trata el campo 'codigo' como texto (string) preservando todos los ceros a la izquierda. "
+                        "Stock y empaque deben ser enteros numéricos. Respuesta JSON válida sin texto adicional."
                     )
                     
                     response = model.generate_content([
@@ -192,11 +194,10 @@ if uploaded_file is not None:
                     raw_text = raw_text.strip()
                     
                     data_items = json.loads(raw_text)
-                    success_msg = "✅ ¡Factura procesada exitosamente usando la **Cuenta Gratuita #1**!"
+                    success_msg = "✅ ¡Factura procesada detectando empaques y costos unitarios!"
                     
                 except Exception as e1:
                     err_msg1 = str(e1)
-                    # Si falla la cuota 1, intentamos automáticamente con la Cuenta Gratuita #2 (GEMINI_API_KEY_2)
                     if ("429" in err_msg1 or "Quota exceeded" in err_msg1 or "No free key 1" in err_msg1) and free_key_2:
                         try:
                             genai.configure(api_key=free_key_2)
@@ -206,11 +207,12 @@ if uploaded_file is not None:
                             file_bytes = uploaded_file.read()
                             
                             prompt = (
-                                "Extrae todos los productos de esta factura en formato JSON puro (una lista de objetos con claves exactas: 'codigo', 'descripcion', 'costo_sin_itbis', 'empaque', 'stock'). "
-                                "REGLA PARA DESCRIPCIÓN: Limpia la descripción del producto para que solo incluya el nombre principal y su tamaño/gramaje (ejemplo: 'RUFFLES CHEDDAR 120G', eliminando términos como TA, CS, 16X1). "
-                                "REGLA CRÍTICA PARA CÓDIGOS: Trata el campo 'codigo' estrictamente como texto (string). NO elimines los ceros a la izquierda (por ejemplo, '0300055292'). "
-                                "Nota importante: 'stock' y 'empaque' deben ser valores numéricos enteros. Si no hay stock, pon 1. "
-                                "Calcula el costo unitario sin ITBIS y asegúrate de que sea una respuesta JSON válida sin texto adicional."
+                                "Analiza esta factura detectando los diferentes tipos de empaques (Caja, Paquete, Botella, Lata, Unidad, etc.), sus cantidades y el factor de conversión. "
+                                "Devuelve la información en formato JSON puro (una lista de objetos con claves exactas: 'codigo', 'descripcion', 'costo_sin_itbis', 'empaque', 'stock'). "
+                                "REGLA DE ORO PARA EL COSTO UNITARIO: Calcula el valor neto sin ITBIS y divídelo entre el total de unidades del empaque para obtener el costo unitario exacto por unidad. "
+                                "REGLA PARA DESCRIPCIÓN: Limpia la descripción para que solo incluya el nombre principal y tamaño. "
+                                "REGLA CRÍTICA PARA CÓDIGOS: Trata el campo 'codigo' como texto (string) preservando ceros a la izquierda. "
+                                "Respuesta JSON válida sin texto adicional."
                             )
                             
                             response = model2.generate_content([
@@ -226,7 +228,7 @@ if uploaded_file is not None:
                             raw_text = raw_text.strip()
                             
                             data_items = json.loads(raw_text)
-                            success_msg = "✅ ¡Factura procesada exitosamente rotando a la **Cuenta Gratuita #2**!"
+                            success_msg = "✅ ¡Factura procesada rotando a la Cuenta Gratuita #2!"
                         except Exception as e2:
                             err_msg2 = str(e2)
                             if "429" in err_msg2 or "Quota exceeded" in err_msg2:
@@ -248,13 +250,15 @@ if uploaded_file is not None:
                         raw_pv = (costo * 1.25) * 1.18
                         precio_venta = round_to_nearest_5(raw_pv)
                         stock_val = safe_int(item.get("stock", 1), 1)
+                        empaque_val = safe_int(item.get("empaque", 1), 1)
                         codigo_barras = str(item.get("codigo", "")).strip()
                         
                         rows_preview.append({
                             "No.": idx,
                             "Código Barra": codigo_barras,
                             "Nombre": str(item.get("descripcion", "")),
-                            "Costo Sin ITBIS": costo,
+                            "Empaque": empaque_val,
+                            "Costo Unit. Sin ITBIS": costo,
                             "Precio Venta (Múltiplos de 5)": precio_venta,
                             "Stock": stock_val
                         })
