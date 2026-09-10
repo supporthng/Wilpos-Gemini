@@ -47,10 +47,12 @@ def save_provider_memory(memory_dict):
 if "provider_memory" not in st.session_state:
     st.session_state["provider_memory"] = load_provider_memory()
 
-# Funciones auxiliares de cálculo y formato
+# Funciones auxiliares de cálculo y formato con precisión estricta
 def safe_float(val, default=0.0):
     try:
-        return float(val)
+        if isinstance(val, str):
+            val = val.replace("RD$", "").replace(",", "").strip()
+        return round(float(val), 4)
     except (ValueError, TypeError):
         return default
 
@@ -102,15 +104,22 @@ master_file_uploaded = st.sidebar.file_uploader("Sube tu archivo Maestro (o usa 
 
 master_dict = {}
 master_names = []
+master_by_code = {}
 
-target_master = master_file_uploaded if master_file_uploaded is not None else (default_master_path if os.path.exists(default_master_path) else None)
+target_master = master_file_uploaded
+if target_master is None and os.path.exists(default_master_path):
+    target_master = default_master_path
+elif target_master is None:
+    local_files = [f for f in os.listdir('.') if f.endswith('.xlsx') and 'Inventario' in f]
+    if local_files:
+        target_master = local_files[0]
 
 if target_master is not None:
     try:
         if hasattr(target_master, 'name') and target_master.name.endswith('.csv'):
             df_master = pd.read_csv(target_master)
         else:
-            df_master = pd.read_excel(target_master, sheet_name='Productos' if hasattr(target_master, 'name') and target_master.name == default_master_path else 0)
+            df_master = pd.read_excel(target_master, sheet_name='Productos' if str(target_master).endswith('.xlsx') else 0)
         
         cols = [str(c).lower() for c in df_master.columns]
         name_col = next((df_master.columns[i] for i, c in enumerate(cols) if 'nombre' in c or 'descripcion' in c), df_master.columns[0])
@@ -121,12 +130,15 @@ if target_master is not None:
             p_code = str(row[code_col]).strip()
             if p_name and p_name != "NAN" and p_name != "NONE":
                 master_dict[p_name] = p_code
+                master_by_code[p_code] = p_name
                 if p_name not in master_names:
                     master_names.append(p_name)
                 
-        st.sidebar.success(f"✅ Maestro cargado: {len(master_dict)} productos sincronizados.")
+        st.sidebar.success(f"✅ Maestro sincronizado: {len(master_dict)} productos cargados.")
     except Exception as e:
         st.sidebar.error(f"Error al leer el maestro: {e}")
+else:
+    st.sidebar.warning("⚠️ No se detectó archivo maestro. Súbelo para actualizar códigos de barra.")
 
 # Diccionario de equivalencias personalizables guardado en session_state
 if "custom_equivalences" not in st.session_state:
@@ -168,8 +180,6 @@ GLOBAL_SYNONYMS = {
     "BUCHANAN": "BUCHANANS",
     "CHIV ": "CHIVAS REGAL ",
     "CHIVAS": "CHIVAS REGAL",
-    "OLD PARR": "OLD PARR",
-    "OLD": "",
     "0.5 LT": "500ML",
     "0.5LT": "500ML",
     "1 LT": "1000ML",
@@ -190,29 +200,27 @@ GLOBAL_SYNONYMS = {
 
 def normalize_text(text):
     upper = str(text).upper().strip()
-    # Aplicar equivalencias de usuario primero
     for k, v in st.session_state["custom_equivalences"].items():
         if k in upper:
             upper = upper.replace(k, v)
-    # Aplicar sinónimos y abreviaturas globales
     for abbr, full in GLOBAL_SYNONYMS.items():
         upper = upper.replace(abbr, full)
-    # Limpiar caracteres especiales dejando letras, números y espacios
     cleaned = re.sub(r'[^A-Z0-9\s]', ' ', upper)
-    # Eliminar espacios múltiples
     return re.sub(r'\s+', ' ', cleaned).strip()
 
 def get_tokens(text):
     norm = normalize_text(text)
-    stopwords = {"DE", "EL", "LA", "LOS", "LAS", "Y", "EN", "UN", "UNA", "CON", "CMS", "CM", "ML", "L"}
+    stopwords = {"DE", "EL", "LA", "LOS", "LAS", "Y", "EN", "UN", "UNA", "CON", "CMS", "CM", "ML", "L", "BOT", "SCATOLA"}
     tokens = [t for t in norm.split() if t not in stopwords]
     return set(tokens), norm
 
 def validate_with_master(item_description, original_code):
     if not master_dict:
-        return original_code, "Sin Maestro Cargado"
+        return original_code, "⚠️ Sin Maestro Cargado"
     
-    # 1. Búsqueda exacta con texto normalizado
+    if original_code in master_by_code:
+        return original_code, f"Actualizado (Código Directo: {master_by_code[original_code]})"
+
     norm_desc = normalize_text(item_description)
     if norm_desc in master_dict:
         return master_dict[norm_desc], "Actualizado (Exacto Normalizado)"
@@ -222,7 +230,6 @@ def validate_with_master(item_description, original_code):
     best_match_name = ""
     highest_score = 0.0
     
-    # 2. Búsqueda por similitud semántica avanzada de tokens y pesos numéricos
     for m_name, m_code in master_dict.items():
         m_tokens, m_clean = get_tokens(m_name)
         if not desc_tokens or not m_tokens:
@@ -232,7 +239,6 @@ def validate_with_master(item_description, original_code):
         union = desc_tokens.union(m_tokens)
         jaccard = len(intersection) / len(union) if union else 0
         
-        # Ponderación inteligente: dar mayor valor si coinciden números (ej. tamaños 750ml, años 12, etc.)
         weight = 1.0
         for token in intersection:
             if token.isdigit() or len(token) > 3:
@@ -240,7 +246,6 @@ def validate_with_master(item_description, original_code):
             elif len(token) <= 3:
                 weight += 0.10
                 
-        # Penalizar si faltan palabras clave críticas de marca
         score = jaccard * weight
         
         if score > highest_score and len(intersection) >= 1:
@@ -248,12 +253,10 @@ def validate_with_master(item_description, original_code):
             best_match_code = m_code
             best_match_name = m_name
             
-    # Umbral flexible pero seguro para capturar abreviaturas y similitudes
-    if highest_score >= 0.28:
+    if highest_score >= 0.22:
         return best_match_code, f"Actualizado (IA Semántica: {best_match_name})"
         
-    # 3. Búsqueda por aproximación difusa de cadenas completas
-    matches = difflib.get_close_matches(norm_desc, list(master_dict.keys()), n=1, cutoff=0.30)
+    matches = difflib.get_close_matches(norm_desc, list(master_dict.keys()), n=1, cutoff=0.25)
     if matches:
         matched_name = matches[0]
         return master_dict[matched_name], f"Actualizado (Similitud: {matched_name})"
@@ -271,11 +274,10 @@ def process_invoice_with_ai(file_obj, file_type):
     prompt_text = (
         f"{memory_context}\n"
         "Analiza esta factura detalladamente. Extrae los datos de cabecera con absoluta precisión: 'emisor_rnc', 'emisor_nombre', 'numero_documento', 'fecha', 'subtotal', 'itbis', 'total'. "
-        "Para cada ítem, extrae: 'codigo', 'descripcion', 'cantidad' (número de cajas compradas), 'empaque' (unidades individuales que trae la caja, interpretando formatos como 12/75CL -> 12, 6/4PACK -> 24 o 6, etc.), y 'costo_sin_itbis' (EL COSTO UNITARIO REAL POR CADA PIEZA INDIVIDUAL: toma el precio neto total de la línea y divídelo estrictamente entre cantidad * empaque). "
-        "REGLA ESTRICTA PARA LA DESCRIPCIÓN: Limpia el texto de cada producto para incluir ÚNICAMENTE el nombre comercial del producto y su presentación o tamaño limpio (ej: 'EVIAN 75 CL', 'GINGER BEER SPICY 207 ML', 'BLUE LABEL 750 ML'), eliminando códigos internos, diagonales de empaque y textos redundantes. "
+        "Para cada ítem, extrae con extrema precisión: 'codigo' (el código interno entre corchetes, ej: C071904), 'descripcion' (nombre del producto limpio), 'cantidad' (número de unidades o cajas compradas), 'empaque' (unidades individuales por caja, por defecto 1), y 'costo_sin_itbis' (EL COSTO UNITARIO REAL EXACTO POR UNIDAD: si la factura muestra el monto total de la línea y la cantidad, divide el total de la línea entre la cantidad para obtener el costo unitario exacto por pieza, sin redondear ni omitir decimales). "
         "Devuelve la información estrictamente en formato JSON con la siguiente estructura exacta: "
         '{"emisor_rnc": "...", "emisor_nombre": "...", "numero_documento": "...", "fecha": "...", "subtotal": 0.0, "itbis": 0.0, "total": 0.0, "items": [{"codigo": "...", "descripcion": "...", "cantidad": 1, "empaque": 1, "costo_sin_itbis": 0.0}]}. '
-        "REGLA CRÍTICA: Preserva todos los ceros a la izquierda como texto. Respuesta JSON pura sin texto adicional."
+        "REGLA CRÍTICA: Respuesta JSON pura sin texto adicional."
     )
 
     parsed_data = None
@@ -398,7 +400,7 @@ if modulo == "📄 Factura Individual":
         if st.button("🚀 Procesar Factura") or st.session_state["use_paid_now"]:
             file_type = uploaded_file.type if hasattr(uploaded_file, 'type') else 'image/jpeg'
             
-            with st.spinner("Analizando factura consultando memoria de proveedor y calculando costos..."):
+            with st.spinner("Analizando factura y calculando costos exactos..."):
                 parsed_data, success_msg = process_invoice_with_ai(uploaded_file, file_type)
 
             if parsed_data:
@@ -427,7 +429,7 @@ if modulo == "📄 Factura Individual":
                     orig_code = str(item.get("codigo", "")).strip()
                     
                     final_code, status_match = validate_with_master(desc, orig_code)
-                    if "No Encontrado" in status_match:
+                    if "No Encontrado" in status_match or "Sin Maestro" in status_match:
                         unmatched_items.append({
                             "No.": idx,
                             "Descripción Proveedor": desc,
@@ -580,6 +582,8 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
                 status_text.text(f"Analizando archivo {i+1} de {len(uploaded_files)}: {file.name}...")
                 file_type = file.type if hasattr(file, 'type') else 'image/jpeg'
                 
+                # REINICIO CRÍTICO DEL BÚFER ANTES DE PROCESAR
+                file.seek(0)
                 parsed_data, _ = process_invoice_with_ai(file, file_type)
 
                 if parsed_data and isinstance(parsed_data, dict):
@@ -647,7 +651,7 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
                     orig_code = str(item.get("codigo", "")).strip()
                     
                     final_code, status_match = validate_with_master(desc, orig_code)
-                    if "No Encontrado" in status_match:
+                    if "No Encontrado" in status_match or "Sin Maestro" in status_match:
                         unmatched_batch.append({
                             "No.": idx,
                             "Descripción Proveedor": desc,
