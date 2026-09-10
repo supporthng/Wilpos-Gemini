@@ -323,14 +323,17 @@ if modulo == "📄 Factura Individual":
     if uploaded_file is not None:
         st.success(f"¡Archivo cargado: {uploaded_file.name}!")
 
-        with st.expander("👁️ Vista Previa del Archivo Cargado"):
-            file_type_check = uploaded_file.type if hasattr(uploaded_file, 'type') else ''
-            if "image" in file_type_check or uploaded_file.name.lower().endswith(('png', 'jpg', 'jpeg', 'webp')):
+        # 👁️ Botón de Vista Previa Selectiva (Ojito)
+        file_type_check = uploaded_file.type if hasattr(uploaded_file, 'type') else ''
+        is_img = "image" in file_type_check or uploaded_file.name.lower().endswith(('png', 'jpg', 'jpeg', 'webp'))
+        
+        with st.expander(f"👁️ Vista Previa del Archivo: {uploaded_file.name}"):
+            if is_img:
                 image = Image.open(uploaded_file)
                 st.image(image, caption=f"Vista previa: {uploaded_file.name}", use_container_width=True)
                 uploaded_file.seek(0)
             else:
-                st.info(f"El archivo '{uploaded_file.name}' es de tipo PDF o documento.")
+                st.info(f"El archivo '{uploaded_file.name}' es de tipo PDF o documento (no muestra renderizado visual directo, pero está listo para procesamiento).")
 
         if st.session_state["quota_exceeded"]:
             @st.dialog("⚠️ Confirmación Requerida: Límite de Cuota Alcanzado")
@@ -411,7 +414,6 @@ if modulo == "📄 Factura Individual":
                         "Estado Maestro": status_match
                     })
                 
-                # Resumen de actualización
                 c_m1, c_m2 = st.columns(2)
                 c_m1.metric("✅ Actualizados Exitosamente", f"{matched_count} ítems")
                 c_m2.metric("⚠️ No Encontrados (Sin Match)", f"{len(unmatched_items)} ítems")
@@ -502,12 +504,18 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
     if uploaded_files:
         st.info(f"Se han cargado {len(uploaded_files)} archivos en total.")
 
-        with st.expander("👁️ Vista Previa de los Archivos en Lote"):
-            for f_item in uploaded_files:
-                st.markdown(f"**Archivo:** `{f_item.name}`")
-                if "image" in f_item.type or f_item.name.lower().endswith(('png', 'jpg', 'jpeg', 'webp')):
-                    st.image(Image.open(f_item), caption=f_item.name, width=300)
+        # 👁️ Vista Previa Selectiva por Archivo (Ojito)
+        st.markdown("### 👁️ Vista Previa Selectiva de Archivos")
+        st.markdown("Selecciona el archivo que deseas inspeccionar haciendo clic en su botón de vista previa:")
+        
+        for idx_f, f_item in enumerate(uploaded_files):
+            with st.expander(f"👁️ Ver factura: {f_item.name}"):
+                f_type = f_item.type if hasattr(f_item, 'type') else ''
+                if "image" in f_type or f_item.name.lower().endswith(('png', 'jpg', 'jpeg', 'webp')):
+                    st.image(Image.open(f_item), caption=f_item.name, width=500)
                     f_item.seek(0)
+                else:
+                    st.info(f"El archivo '{f_item.name}' es de tipo PDF o documento.")
 
         if st.button("🚀 Procesar Lote y Validar con Maestro", type="primary"):
             all_consolidated_items = []
