@@ -2,6 +2,7 @@ import io
 import json
 import os
 import hashlib
+import difflib
 import google.generativeai as genai
 from PIL import Image
 import streamlit as st
@@ -38,7 +39,7 @@ if "quota_exceeded" not in st.session_state:
 if "use_paid_now" not in st.session_state:
     st.session_state["use_paid_now"] = False
 
-# Ventana emergente (Modal centralizado de confirmación)
+# Ventana emergente (Modal centralizado de confirmación de cuota)
 @st.dialog("⚠️ Confirmación Requerida: Límite de Cuota Alcanzado")
 def paid_confirmation_dialog():
     st.write("Se ha agotado la cuota de las cuentas gratuitas de Gemini (Error 429 / Quota Exceeded).")
@@ -56,7 +57,7 @@ def paid_confirmation_dialog():
             st.rerun()
 
 # ==========================================
-# MENÚ DE NAVEGACIÓN LATERAL
+# MENÚ Y CONFIGURACIÓN LATERAL (MAESTRO POS)
 # ==========================================
 st.sidebar.title("Menú de Navegación")
 modulo = st.sidebar.radio(
@@ -64,14 +65,62 @@ modulo = st.sidebar.radio(
     ["📄 Factura Individual", "📂 Múltiples Facturas (Lote)"]
 )
 
+st.sidebar.markdown("---")
+st.sidebar.title("🗂️ Maestro de Inventario POS")
+st.sidebar.markdown("Sube tu archivo maestro actual (Excel o CSV) para validar y corregir códigos de barra por nombre o similitud.")
+master_file_uploaded = st.sidebar.file_uploader("Sube tu archivo Maestro", type=["xlsx", "xls", "csv"], key="master_inv_file")
+
+master_dict = {}
+master_names = []
+if master_file_uploaded is not None:
+    try:
+        if master_file_uploaded.name.endswith('.csv'):
+            df_master = pd.read_csv(master_file_uploaded)
+        else:
+            df_master = pd.read_excel(master_file_uploaded)
+        
+        # Intentar detectar columnas de nombre y código de barras
+        cols = [c.lower() for c in df_master.columns]
+        name_col = next((df_master.columns[i] for i, c in enumerate(cols) if 'nombre' in c or 'descripcion' in c), df_master.columns[0])
+        code_col = next((df_master.columns[i] for i, c in enumerate(cols) if 'codigo' in c or 'barra' in c or 'barcode' in c), df_master.columns[1])
+        
+        for _, row in df_master.iterrows():
+            p_name = str(row[name_col]).strip().upper()
+            p_code = str(row[code_col]).strip()
+            if p_name and p_name != "NAN":
+                master_dict[p_name] = p_code
+                master_names.append(p_name)
+                
+        st.sidebar.success(f"✅ Maestro cargado: {len(master_dict)} productos indexados.")
+    except Exception as e:
+        st.sidebar.error(f"Error al leer el maestro: {e}")
+
+# Función para validar y reemplazar códigos usando el maestro
+def validate_with_master(item_description, original_code):
+    clean_desc = str(item_description).strip().upper()
+    if not master_dict:
+        return original_code, "Sin Maestro Cargado"
+    
+    # 1. Búsqueda exacta
+    if clean_desc in master_dict:
+        return master_dict[clean_desc], "Actualizado (Exacto)"
+    
+    # 2. Búsqueda por similitud (Fuzzy matching con umbral de 0.6)
+    matches = difflib.get_close_matches(clean_desc, master_names, n=1, cutoff=0.6)
+    if matches:
+        matched_name = matches[0]
+        return master_dict[matched_name], f"Actualizado (Similitud: {matched_name})"
+    
+    # Si no encuentra coincidencia
+    return original_code, "⚠️ No Encontrado en Maestro"
+
 # ==========================================
 # MÓDULO 1: FACTURA INDIVIDUAL
 # ==========================================
 if modulo == "📄 Factura Individual":
     st.title("📊 Automatizador de Facturas para WilPOS (Individual)")
-    st.markdown("Sube tu factura para extraer sus ítems, ver los totales de cabecera y generar la plantilla de WilPOS.")
+    st.markdown("Sube tu factura para extraer sus ítems, validar códigos con tu maestro POS y generar la plantilla actualizada.")
 
-    # Si se supera la cuota, se abre la ventana emergente centrada automáticamente
     if st.session_state["quota_exceeded"]:
         paid_confirmation_dialog()
 
@@ -81,7 +130,7 @@ if modulo == "📄 Factura Individual":
         st.success(f"¡Archivo cargado: {uploaded_file.name}!")
 
         if st.button("🚀 Procesar Factura") or st.session_state["use_paid_now"]:
-            with st.spinner("Analizando factura, totales y costos unitarios..."):
+            with st.spinner("Analizando factura, validando maestro y calculando costos..."):
                 prompt_text = (
                     "Analiza esta factura detalladamente. Extrae los datos de cabecera: 'emisor_rnc', 'numero_documento', 'fecha', 'subtotal', 'itbis', 'total'. "
                     "Para cada ítem, extrae: 'codigo', 'descripcion', 'cantidad', 'empaque', y 'costo_sin_itbis'. "
@@ -159,30 +208,45 @@ if modulo == "📄 Factura Individual":
                     c_t3.metric("Total General", f"RD$ {safe_float(parsed_data.get('total', 0)):,.2f}")
                     
                     st.markdown("---")
-                    st.markdown("### 📦 Detalle de Ítems y Precios de Venta")
+                    st.markdown("### 📦 Validación con Maestro y Precios de Venta")
 
                     data_items = parsed_data.get("items", [])
                     rows_preview = []
+                    unmatched_items = []
+
                     for idx, item in enumerate(data_items, start=1):
+                        desc = str(item.get("descripcion", ""))
+                        orig_code = str(item.get("codigo", "")).strip()
+                        
+                        # Validar con maestro
+                        final_code, status_match = validate_with_master(desc, orig_code)
+                        if "No Encontrado" in status_match:
+                            unmatched_items.append((desc, orig_code))
+
                         costo = safe_float(item.get("costo_sin_itbis", 0))
                         raw_pv = (costo * 1.25) * 1.18
                         precio_venta = round_to_nearest_5(raw_pv)
                         cant_comprada = safe_int(item.get("cantidad", 1), 1)
                         empaque_val = safe_int(item.get("empaque", 1), 1)
                         stock_val = cant_comprada * empaque_val
-                        codigo_barras = str(item.get("codigo", "")).strip()
                         
                         rows_preview.append({
                             "No.": idx,
-                            "Código Barra": codigo_barras,
-                            "Nombre": str(item.get("descripcion", "")),
+                            "Código Barra POS": final_code,
+                            "Nombre": desc,
                             "Cant. Compra": cant_comprada,
                             "Empaque": empaque_val,
                             "Stock Total": stock_val,
                             "Costo Unit. Sin ITBIS": costo,
-                            "Precio Venta (M5)": precio_venta
+                            "Precio Venta (M5)": precio_venta,
+                            "Estado Maestro": status_match
                         })
                     
+                    if unmatched_items:
+                        st.warning(f"⚠️ **Atención:** Hay {len(unmatched_items)} producto(s) que no se encontraron en tu archivo maestro y conservan su código original:")
+                        for u_desc, u_code in unmatched_items:
+                            st.markdown(f"- *{u_desc}* (Código original: `{u_code}`)")
+
                     df_resultado = pd.DataFrame(rows_preview)
                     st.dataframe(df_resultado, use_container_width=True, hide_index=True)
                     
@@ -200,28 +264,20 @@ if modulo == "📄 Factura Individual":
                         ws_prod.title = "Productos"
                         ws_prod.append(['Nombre', 'Código Barra', 'Categoría', 'Tipo', 'Precio Venta', 'Costo', 'Stock', 'Stock Mínimo', 'ITBIS', 'Unidad Medida', 'Venta Granel', 'Cantidad Empaque', 'Precio Variable', 'Descuento %', 'Descuento Monto', 'Precio Especial', 'Descuento Activo', 'Descuento Nota'])
                     
-                    for item_dict in data_items:
-                        costo = safe_float(item_dict.get("costo_sin_itbis", 0))
-                        raw_pv = (costo * 1.25) * 1.18
-                        pv = round_to_nearest_5(raw_pv)
-                        cant_comprada = safe_int(item_dict.get("cantidad", 1), 1)
-                        empaque_val = safe_int(item_dict.get("empaque", 1), 1)
-                        stock_val = cant_comprada * empaque_val
-                        codigo_barras = str(item_dict.get("codigo", "")).strip()
-                        
+                    for item_dict in rows_preview:
                         ws_prod.append([
-                            str(item_dict.get("descripcion", "")),
-                            codigo_barras,
+                            item_dict["Nombre"],
+                            item_dict["Código Barra POS"],
                             "General",
                             "producto",
-                            pv,
-                            costo,
-                            stock_val,
+                            item_dict["Precio Venta (M5)"],
+                            item_dict["Costo Unit. Sin ITBIS"],
+                            item_dict["Stock Total"],
                             5,
                             0.18,
                             "unidad",
                             "No",
-                            empaque_val,
+                            item_dict["Empaque"],
                             "No",
                             0,
                             0,
@@ -246,15 +302,15 @@ if modulo == "📄 Factura Individual":
 # MÓDULO 2: MÚLTIPLES FACTURAS (LOTE)
 # ==========================================
 elif modulo == "📂 Múltiples Facturas (Lote)":
-    st.title("📂 Procesador por Lotes (Detección automática de duplicados juntos)")
-    st.markdown("Sube varias facturas o cotizaciones. Si hay archivos duplicados **dentro de la misma selección**, el sistema los detectará y omitirá automáticamente.")
+    st.title("📂 Procesador por Lotes (Con Validación de Maestro POS)")
+    st.markdown("Sube varias facturas. El sistema filtrará duplicados en la selección y validará cada ítem contra tu archivo maestro POS.")
 
     uploaded_files = st.file_uploader("Sube tus facturas (Puedes seleccionar varias)", type=["pdf", "png", "jpg", "jpeg"], accept_multiple_files=True, key="batch_files")
 
     if uploaded_files:
         st.info(f"Se han cargado {len(uploaded_files)} archivos en total.")
 
-        if st.button("🚀 Procesar Lote y Filtrar Duplicados", type="primary"):
+        if st.button("🚀 Procesar Lote y Validar con Maestro", type="primary"):
             all_consolidated_items = []
             duplicate_count = 0
             batch_signatures = set()
@@ -354,25 +410,39 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
                 st.success(f"🎉 Se consolidaron exitosamente {len(all_consolidated_items)} ítems de facturas válidas.")
 
                 rows_preview = []
+                unmatched_batch = []
+
                 for idx, item in enumerate(all_consolidated_items, start=1):
+                    desc = str(item.get("descripcion", ""))
+                    orig_code = str(item.get("codigo", "")).strip()
+                    
+                    final_code, status_match = validate_with_master(desc, orig_code)
+                    if "No Encontrado" in status_match:
+                        unmatched_batch.append((desc, orig_code))
+
                     costo = safe_float(item.get("costo_sin_itbis", 0))
                     raw_pv = (costo * 1.25) * 1.18
                     precio_venta = round_to_nearest_5(raw_pv)
                     cant_comprada = safe_int(item.get("cantidad", 1), 1)
                     empaque_val = safe_int(item.get("empaque", 1), 1)
                     stock_val = cant_comprada * empaque_val
-                    codigo_barras = str(item.get("codigo", "")).strip()
                     
                     rows_preview.append({
                         "No.": idx,
-                        "Código Barra": codigo_barras,
-                        "Nombre": str(item.get("descripcion", "")),
+                        "Código Barra POS": final_code,
+                        "Nombre": desc,
                         "Cant. Compra": cant_comprada,
                         "Empaque": empaque_val,
                         "Stock Total": stock_val,
                         "Costo Unit. Sin ITBIS": costo,
-                        "Precio Venta (M5)": precio_venta
+                        "Precio Venta (M5)": precio_venta,
+                        "Estado Maestro": status_match
                     })
+
+                if unmatched_batch:
+                    st.warning(f"⚠️ **Atención en lote:** Hay {len(unmatched_batch)} producto(s) no encontrados en el maestro:")
+                    for u_desc, u_code in unmatched_batch:
+                        st.markdown(f"- *{u_desc}* (Código original: `{u_code}`)")
 
                 df_batch = pd.DataFrame(rows_preview)
                 st.dataframe(df_batch, use_container_width=True, hide_index=True)
@@ -391,28 +461,20 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
                     ws_prod.title = "Productos"
                     ws_prod.append(['Nombre', 'Código Barra', 'Categoría', 'Tipo', 'Precio Venta', 'Costo', 'Stock', 'Stock Mínimo', 'ITBIS', 'Unidad Medida', 'Venta Granel', 'Cantidad Empaque', 'Precio Variable', 'Descuento %', 'Descuento Monto', 'Precio Especial', 'Descuento Activo', 'Descuento Nota'])
 
-                for item_dict in all_consolidated_items:
-                    costo = safe_float(item_dict.get("costo_sin_itbis", 0))
-                    raw_pv = (costo * 1.25) * 1.18
-                    pv = round_to_nearest_5(raw_pv)
-                    cant_comprada = safe_int(item_dict.get("cantidad", 1), 1)
-                    empaque_val = safe_int(item_dict.get("empaque", 1), 1)
-                    stock_val = cant_comprada * empaque_val
-                    codigo_barras = str(item_dict.get("codigo", "")).strip()
-
+                for item_dict in rows_preview:
                     ws_prod.append([
-                        str(item_dict.get("descripcion", "")),
-                        codigo_barras,
+                        item_dict["Nombre"],
+                        item_dict["Código Barra POS"],
                         "General",
                         "producto",
-                        pv,
-                        costo,
-                        stock_val,
+                        item_dict["Precio Venta (M5)"],
+                        item_dict["Costo Unit. Sin ITBIS"],
+                        item_dict["Stock Total"],
                         5,
                         0.18,
                         "unidad",
                         "No",
-                        empaque_val,
+                        item_dict["Empaque"],
                         "No",
                         0,
                         0,
