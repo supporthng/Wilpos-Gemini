@@ -90,29 +90,34 @@ with st.sidebar.expander("Ver Proveedores Aprendidos"):
 
 st.sidebar.markdown("---")
 st.sidebar.title("🗂️ Maestro de Inventario POS")
-master_file_uploaded = st.sidebar.file_uploader("Sube tu archivo Maestro", type=["xlsx", "xls", "csv"], key="master_inv_file")
+default_master_path = "Inventario_Completo_2026-09-06.xlsx"
+master_file_uploaded = st.sidebar.file_uploader("Sube tu archivo Maestro (o usa el predeterminado)", type=["xlsx", "xls", "csv"], key="master_inv_file")
 
 master_dict = {}
 master_names = []
-if master_file_uploaded is not None:
+
+target_master = master_file_uploaded if master_file_uploaded is not None else (default_master_path if os.path.exists(default_master_path) else None)
+
+if target_master is not None:
     try:
-        if master_file_uploaded.name.endswith('.csv'):
-            df_master = pd.read_csv(master_file_uploaded)
+        if hasattr(target_master, 'name') and target_master.name.endswith('.csv'):
+            df_master = pd.read_csv(target_master)
         else:
-            df_master = pd.read_excel(master_file_uploaded)
+            df_master = pd.read_excel(target_master, sheet_name='Productos' if hasattr(target_master, 'name') and target_master.name == default_master_path else 0)
         
-        cols = [c.lower() for c in df_master.columns]
+        cols = [str(c).lower() for c in df_master.columns]
         name_col = next((df_master.columns[i] for i, c in enumerate(cols) if 'nombre' in c or 'descripcion' in c), df_master.columns[0])
         code_col = next((df_master.columns[i] for i, c in enumerate(cols) if 'codigo' in c or 'barra' in c or 'barcode' in c), df_master.columns[1])
         
         for _, row in df_master.iterrows():
             p_name = str(row[name_col]).strip().upper()
             p_code = str(row[code_col]).strip()
-            if p_name and p_name != "NAN":
+            if p_name and p_name != "NAN" and p_name != "NONE":
                 master_dict[p_name] = p_code
-                master_names.append(p_name)
+                if p_name not in master_names:
+                    master_names.append(p_name)
                 
-        st.sidebar.success(f"✅ Maestro cargado: {len(master_dict)} productos.")
+        st.sidebar.success(f"✅ Maestro cargado: {len(master_dict)} productos sincronizados.")
     except Exception as e:
         st.sidebar.error(f"Error al leer el maestro: {e}")
 
@@ -172,7 +177,7 @@ def clean_and_tokenize(text):
         upper_text = upper_text.replace(abbr, full)
         
     cleaned = re.sub(r'[^A-Z0-9\s]', ' ', upper_text)
-    stopwords = {"DE", "EL", "LA", "LOS", "LAS", "Y", "EN", "UN", "UNA", "CON"}
+    stopwords = {"DE", "EL", "LA", "LOS", "LAS", "Y", "EN", "UN", "UNA", "CON", "CMS", "CM"}
     tokens = [t for t in cleaned.split() if t not in stopwords]
     return set(tokens), upper_text
 
@@ -180,24 +185,24 @@ def validate_with_master(item_description, original_code):
     if not master_dict:
         return original_code, "Sin Maestro Cargado"
     
-    desc_tokens, norm_desc = clean_and_tokenize(item_description)
+    norm_desc = str(item_description).upper().strip()
     
-    for m_name, m_code in master_dict.items():
-        if m_name == norm_desc or m_name == item_description.strip().upper():
-            return m_code, "Actualizado (Exacto)"
-            
+    if norm_desc in master_dict:
+        return master_dict[norm_desc], "Actualizado (Exacto)"
+        
+    desc_tokens, _ = clean_and_tokenize(item_description)
     best_match_code = original_code
     best_match_name = ""
     highest_score = 0.0
     
-    for m_name in master_names:
+    for m_name, m_code in master_dict.items():
         m_tokens, _ = clean_and_tokenize(m_name)
         if not desc_tokens or not m_tokens:
             continue
             
         intersection = desc_tokens.intersection(m_tokens)
         union = desc_tokens.union(m_tokens)
-        jaccard_score = len(intersection) / len(union)
+        jaccard_score = len(intersection) / len(union) if union else 0
         
         weight = 1.0
         for token in intersection:
@@ -206,22 +211,21 @@ def validate_with_master(item_description, original_code):
                 
         final_score = jaccard_score * weight
         
-        if final_score > highest_score and len(intersection) >= 2:
+        if final_score > highest_score and len(intersection) >= 1:
             highest_score = final_score
-            best_match_code = master_dict[m_name]
+            best_match_code = m_code
             best_match_name = m_name
             
-    if highest_score >= 0.45:
+    if highest_score >= 0.35:
         return best_match_code, f"Actualizado (IA Semántica: {best_match_name})"
         
-    matches = difflib.get_close_matches(norm_desc, master_names, n=1, cutoff=0.45)
+    matches = difflib.get_close_matches(norm_desc, master_names, n=1, cutoff=0.35)
     if matches:
         matched_name = matches[0]
         return master_dict[matched_name], f"Actualizado (Similitud: {matched_name})"
 
     return original_code, "⚠️ No Encontrado en Maestro"
 
-# Función centralizada con Memoria Inteligente de Proveedores
 def process_invoice_with_ai(file_obj, file_type):
     memory_context = ""
     known_mem = st.session_state["provider_memory"]
@@ -319,7 +323,6 @@ if modulo == "📄 Factura Individual":
     if uploaded_file is not None:
         st.success(f"¡Archivo cargado: {uploaded_file.name}!")
 
-        # 👁️ Botón de Vista Previa (Ojito)
         with st.expander("👁️ Vista Previa del Archivo Cargado"):
             file_type_check = uploaded_file.type if hasattr(uploaded_file, 'type') else ''
             if "image" in file_type_check or uploaded_file.name.lower().endswith(('png', 'jpg', 'jpeg', 'webp')):
@@ -356,12 +359,10 @@ if modulo == "📄 Factura Individual":
             if parsed_data:
                 st.success(success_msg)
                 
-                # Indicador de Proveedor Procesado
                 prov_nombre = parsed_data.get("emisor_nombre", "Desconocido")
                 prov_rnc = parsed_data.get("emisor_rnc", "N/D")
                 st.info(f"🏢 **Proveedor Procesado:** {prov_nombre} | **RNC:** `{prov_rnc}`")
 
-                # Mostrar Totales de la Factura
                 st.markdown("### 📋 Resumen de Totales de la Factura")
                 c_t1, c_t2, c_t3 = st.columns(3)
                 c_t1.metric("Subtotal", f"RD$ {safe_float(parsed_data.get('subtotal', 0)):,.2f}")
@@ -374,6 +375,7 @@ if modulo == "📄 Factura Individual":
                 data_items = parsed_data.get("items", [])
                 rows_preview = []
                 unmatched_items = []
+                matched_count = 0
 
                 for idx, item in enumerate(data_items, start=1):
                     desc = str(item.get("descripcion", ""))
@@ -381,7 +383,14 @@ if modulo == "📄 Factura Individual":
                     
                     final_code, status_match = validate_with_master(desc, orig_code)
                     if "No Encontrado" in status_match:
-                        unmatched_items.append((desc, orig_code))
+                        unmatched_items.append({
+                            "No.": idx,
+                            "Descripción Proveedor": desc,
+                            "Código Original": orig_code,
+                            "Estado": status_match
+                        })
+                    else:
+                        matched_count += 1
 
                     costo = safe_float(item.get("costo_sin_itbis", 0))
                     raw_pv = (costo * 1.25) * 1.18
@@ -402,11 +411,16 @@ if modulo == "📄 Factura Individual":
                         "Estado Maestro": status_match
                     })
                 
-                if unmatched_items:
-                    st.warning(f"⚠️ **Atención:** Hay {len(unmatched_items)} producto(s) que no se encontraron en tu archivo maestro y conservan su código original:")
-                    for u_desc, u_code in unmatched_items:
-                        st.markdown(f"- *{u_desc}* (Código original: `{u_code}`)")
+                # Resumen de actualización
+                c_m1, c_m2 = st.columns(2)
+                c_m1.metric("✅ Actualizados Exitosamente", f"{matched_count} ítems")
+                c_m2.metric("⚠️ No Encontrados (Sin Match)", f"{len(unmatched_items)} ítems")
 
+                if unmatched_items:
+                    with st.expander(f"⚠️ Ver detalle de los {len(unmatched_items)} productos NO actualizados (requieren revisión o regla de equivalencia)"):
+                        st.dataframe(pd.DataFrame(unmatched_items), use_container_width=True, hide_index=True)
+
+                st.markdown("#### Tabla Completa Procesada")
                 df_resultado = pd.DataFrame(rows_preview)
                 st.dataframe(df_resultado, use_container_width=True, hide_index=True)
                 
@@ -462,8 +476,8 @@ if modulo == "📄 Factura Individual":
 # MÓDULO 2: MÚLTIPLES FACTURAS (LOTE)
 # ==========================================
 elif modulo == "📂 Múltiples Facturas (Lote)":
-    st.title("📂 Procesador por Lotes (Con Proveedores Identificados)")
-    st.markdown("Sube varias facturas. El sistema validará los ítems, listará los proveedores procesados y consolidará el inventario sin duplicados.")
+    st.title("📂 Procesador por Lotes (Sincronizado con Maestro y Desglose)")
+    st.markdown("Sube varias facturas. El sistema validará los ítems, clasificará los actualizados vs no actualizados y consolidará el inventario.")
 
     if st.session_state["quota_exceeded"]:
         @st.dialog("⚠️ Confirmación Requerida: Límite de Cuota Alcanzado")
@@ -488,7 +502,6 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
     if uploaded_files:
         st.info(f"Se han cargado {len(uploaded_files)} archivos en total.")
 
-        # 👁️ Vista previa múltiple (Ojito para Lotes)
         with st.expander("👁️ Vista Previa de los Archivos en Lote"):
             for f_item in uploaded_files:
                 st.markdown(f"**Archivo:** `{f_item.name}`")
@@ -529,7 +542,6 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
                     else:
                         batch_signatures.add(doc_signature)
                         
-                        # Registrar resumen de totales y proveedor de esta factura
                         invoice_totals_summary.append({
                             "Proveedor": nombre_emisor if nombre_emisor and nombre_emisor != "None" else f"RNC: {rnc_emisor}",
                             "Archivo": file.name,
@@ -555,7 +567,6 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
                 df_totales = pd.DataFrame(invoice_totals_summary)
                 st.dataframe(df_totales, use_container_width=True, hide_index=True)
                 
-                # Totales generales acumulados del lote
                 t_sub = sum(x["Subtotal"] for x in invoice_totals_summary)
                 t_itbis = sum(x["ITBIS"] for x in invoice_totals_summary)
                 t_gen = sum(x["Total General"] for x in invoice_totals_summary)
@@ -571,6 +582,7 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
 
                 rows_preview = []
                 unmatched_batch = []
+                matched_batch_count = 0
 
                 for idx, item in enumerate(all_consolidated_items, start=1):
                     desc = str(item.get("descripcion", ""))
@@ -578,7 +590,14 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
                     
                     final_code, status_match = validate_with_master(desc, orig_code)
                     if "No Encontrado" in status_match:
-                        unmatched_batch.append((desc, orig_code))
+                        unmatched_batch.append({
+                            "No.": idx,
+                            "Descripción Proveedor": desc,
+                            "Código Original": orig_code,
+                            "Estado": status_match
+                        })
+                    else:
+                        matched_batch_count += 1
 
                     costo = safe_float(item.get("costo_sin_itbis", 0))
                     raw_pv = (costo * 1.25) * 1.18
@@ -599,11 +618,15 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
                         "Estado Maestro": status_match
                     })
 
-                if unmatched_batch:
-                    st.warning(f"⚠️ **Atención en lote:** Hay {len(unmatched_batch)} producto(s) no encontrados en el maestro:")
-                    for u_desc, u_code in unmatched_batch:
-                        st.markdown(f"- *{u_desc}* (Código original: `{u_code}`)")
+                c_b1, c_b2 = st.columns(2)
+                c_b1.metric("✅ Ítems Actualizados con Maestro", f"{matched_batch_count} ítems")
+                c_b2.metric("⚠️ Ítems No Encontrados (Sin Match)", f"{len(unmatched_batch)} ítems")
 
+                if unmatched_batch:
+                    with st.expander(f"⚠️ Ver detalle de los {len(unmatched_batch)} productos NO encontrados en el maestro"):
+                        st.dataframe(pd.DataFrame(unmatched_batch), use_container_width=True, hide_index=True)
+
+                st.markdown("#### Tabla Consolidada Completa")
                 df_batch = pd.DataFrame(rows_preview)
                 st.dataframe(df_batch, use_container_width=True, hide_index=True)
 
