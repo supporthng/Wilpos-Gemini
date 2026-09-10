@@ -1,13 +1,14 @@
 import streamlit as st
 import pandas as pd
 import pdfplumber
+from PIL import Image
 import io
 
 # Configuración de la página
 st.set_page_config(page_title="WilPOS - Procesador de Facturas e Inventario", page_icon="🧾", layout="wide")
 
 st.title("🧾 WilPOS - Sistema de Procesamiento y Carga de Facturas")
-st.write("Carga tus facturas en PDF o procesa los datos de manera individual y masiva para actualizar tu inventario.")
+st.write("Carga tus facturas en PDF o en formato de imagen (PNG, JPG), o procesa los datos de manera individual y masiva.")
 
 # Sidebar global para parámetros fiscales y de conversión
 st.sidebar.header("⚙️ Parámetros Globales")
@@ -21,23 +22,31 @@ tab_individual, tab_multiple = st.tabs([
 ])
 
 # =============================================================
-# MÓDULO 1: FACTURA INDIVIDUAL (CON CARGA DE PDF)
+# MÓDULO 1: FACTURA INDIVIDUAL (CON SOPORTE PDF E IMÁGENES)
 # =============================================================
 with tab_individual:
     st.subheader("Módulo de Factura Individual")
-    st.write("Sube el archivo PDF de la factura o cotización para extraer y auditar su contenido a detalle.")
+    st.write("Sube el archivo de la factura (PDF o imagen PNG/JPG) para auditar y registrar su contenido.")
     
-    # Widget para cargar el archivo PDF
-    archivo_pdf = st.file_uploader("📂 Cargar Factura en PDF", type=["pdf"], key="uploader_ind")
+    # Widget de carga actualizado para aceptar PDFs e Imágenes
+    archivo_subido = st.file_uploader("📂 Cargar Factura (PDF o Imagen)", type=["pdf", "png", "jpg", "jpeg"], key="uploader_ind")
     
-    texto_extraido = ""
-    if archivo_pdf is not None:
-        with pdfplumber.open(archivo_pdf) as pdf:
-            for pagina in pdf.pages:
-                texto_extraido += pagina.extract_text() or ""
-        st.success("¡Factura PDF cargada y leída con éxito!")
-        with st.expander("🔍 Ver texto bruto extraído del PDF"):
-            st.text(texto_extraido)
+    if archivo_subido is not None:
+        extension = archivo_subido.name.split('.')[-1].lower()
+        
+        if extension == "pdf":
+            texto_extraido = ""
+            with pdfplumber.open(archivo_subido) as pdf:
+                for pagina in pdf.pages:
+                    texto_extraido += pagina.extract_text() or ""
+            st.success("¡Factura PDF cargada y leída con éxito!")
+            with st.expander("🔍 Ver texto bruto extraído del PDF"):
+                st.text(texto_extraido)
+                
+        elif extension in ["png", "jpg", "jpeg"]:
+            imagen = Image.open(archivo_subido)
+            st.success("¡Imagen de factura cargada con éxito!")
+            st.image(imagen, caption=f"Vista previa: {archivo_subido.name}", use_column_width=True)
 
     st.divider()
     
@@ -51,11 +60,10 @@ with tab_individual:
 
     st.divider()
     
-    # Tabla editable basada en lo que el usuario suba o ingrese
     df_ind_init = pd.DataFrame([
         {
             "Código": "", 
-            "Descripción": "Sube un PDF o escribe los datos aquí", 
+            "Descripción": "Sube un archivo o escribe los datos aquí", 
             "Cantidad Empaques": 1.0, 
             "Unidades por Caja": 1, 
             "Precio Lista / Caja": 0.0, 
@@ -106,7 +114,7 @@ with tab_individual:
         itbis_total_dop = subtotal_neto_dop * (itbis_porcentaje / 100.0)
         total_general_dop = subtotal_neto_dop + itbis_total_dop
         
-        st.success(f"¡Factura procesada con éxito!")
+        st.success("¡Factura procesada con éxito!")
         st.dataframe(df_res_ind, use_container_width=True)
         
         c1, c2, c3 = st.columns(3)
@@ -119,11 +127,11 @@ with tab_individual:
 # =============================================================
 with tab_multiple:
     st.subheader("Módulo de Múltiples Facturas (Lote Masivo)")
-    st.write("Puedes subir varios archivos PDF de factura o administrar múltiples filas de diferentes proveedores en una sola tabla.")
+    st.write("Puedes subir varios archivos (PDF o imágenes) o administrar múltiples filas en la tabla de consolidación.")
     
-    archivos_multiples = st.file_uploader("📂 Cargar múltiples facturas en PDF", type=["pdf"], accept_multiple_files=True, key="uploader_multi")
+    archivos_multiples = st.file_uploader("📂 Cargar múltiples archivos de factura", type=["pdf", "png", "jpg", "jpeg"], accept_multiple_files=True, key="uploader_multi")
     if archivos_multiples:
-        st.info(f"Se han cargado {len(archivos_multiples)} documentos PDF para lote.")
+        st.info(f"Se han cargado {len(archivos_multiples)} documentos para el lote.")
 
     df_multi_init = pd.DataFrame([
         {"No. Factura": "", "Proveedor": "", "Código": "", "Descripción": "", "Cantidad": 0.0, "Moneda": "DOP", "Precio Unitario": 0.0}
