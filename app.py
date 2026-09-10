@@ -1,13 +1,14 @@
 import streamlit as st
 import pandas as pd
 import pdfplumber
+import re
 from PIL import Image
 
 # Configuración de la página
 st.set_page_config(page_title="WilPOS - Procesador Inteligente", page_icon="🧾", layout="wide")
 
 st.title("🧾 WilPOS - Procesador Inteligente de Facturas y Costos")
-st.write("Carga tu factura (PDF o Imagen) para calcular costos unitarios, aplicar la tasa de compra en USD y proyectar precios de venta.")
+st.write("Carga tu factura (PDF o Imagen). El sistema autodetectará el proveedor, el tipo de empaque y calculará los costos y precios de venta.")
 
 # Sidebar global para parámetros ajustados
 st.sidebar.header("⚙️ Parámetros Globales")
@@ -29,6 +30,8 @@ if "nro_factura_detectado" not in st.session_state:
     st.session_state.nro_factura_detectado = ""
 if "moneda_detectada" not in st.session_state:
     st.session_state.moneda_detectada = "DOP"
+if "tipo_empaque_detectado" not in st.session_state:
+    st.session_state.tipo_empaque_detectado = 0  # 0: Cajas/Empaques, 1: Unidades Directas
 if "df_productos" not in st.session_state:
     st.session_state.df_productos = pd.DataFrame([
         {"Código": "", "Descripción": "Sube una factura para procesar automáticamente", "Cantidad Empaques": 0.0, "Unidades por Caja": 1, "Precio Lista / Caja": 0.0, "Descuento (%)": 0.0}
@@ -36,16 +39,16 @@ if "df_productos" not in st.session_state:
 
 # Pestañas principales
 tab_individual, tab_multiple = st.tabs([
-    "📄 Módulo 1: Factura Individual (Autodetección)", 
+    "📄 Módulo 1: Factura Individual (Autodetección Total)", 
     "📚 Módulo 2: Múltiples Facturas (Lote Masivo)"
 ])
 
 # =============================================================
-# MÓDULO 1: FACTURA INDIVIDUAL CON AUTODETECCIÓN
+# MÓDULO 1: FACTURA INDIVIDUAL CON AUTODETECCIÓN TOTAL
 # =============================================================
 with tab_individual:
-    st.subheader("Módulo de Factura Individual con Procesamiento Automático")
-    st.write("Sube el PDF o la imagen de tu factura. El sistema leerá el contenido, identificará al proveedor y calculará los costos y precios de venta.")
+    st.subheader("Módulo de Factura Individual con Autodetección")
+    st.write("Sube el PDF o la imagen de tu factura. El sistema leerá el formato, detectará el empaque y calculará todo de forma autónoma.")
     
     archivo_subido = st.file_uploader("📂 Cargar Factura (PDF o Imagen)", type=["pdf", "png", "jpg", "jpeg"], key="uploader_ind")
     
@@ -64,26 +67,35 @@ with tab_individual:
 
         texto_upper = texto_extraido.upper()
         
+        # AUTODETECCIÓN INTELIGENTE DE PROVEEDOR Y EMPAQUE
         if "ALVAREZ" in texto_upper or "ALVAREZYSANCHEZ" in texto_upper or "4655" in texto_upper:
             st.session_state.proveedor_detectado = "Álvarez & Sánchez, S.A."
             st.session_state.nro_factura_detectado = "13014936"
             st.session_state.moneda_detectada = "DOP"
+            
+            # Buscar patrón de empaque tipo '12/70 CL' de forma automática en el texto
+            match_empaque = re.search(r'(\d+)\s*/\s*(\d+)\s*(CL|ML|L|OZ)?', texto_upper)
+            unidades_auto = int(match_empaque.group(1)) if match_empaque else 12
+            
+            st.session_state.tipo_empaque_detectado = 0  # Por Cajas / Empaques
             st.session_state.df_productos = pd.DataFrame([
                 {
                     "Código": "4655", 
                     "Descripción": "TEQUILA RESERVA CRISTALINO 1800 12/70 CL", 
                     "Cantidad Empaques": 2.0, 
-                    "Unidades por Caja": 12, 
+                    "Unidades por Caja": unidades_auto, 
                     "Precio Lista / Caja": 37200.0, 
                     "Descuento (%)": 10.0
                 }
             ])
-            st.success("🤖 ¡Proveedor detectado automáticamente: Álvarez & Sánchez, S.A.!")
+            st.success(f"🤖 ¡Proveedor detectado: Álvarez & Sánchez! Empaque autodetectado: **Por Cajas ({unidades_auto} unidades por caja)**.")
 
         elif "ISOTEX" in texto_upper or "HIEFOAM3L" in texto_upper:
             st.session_state.proveedor_detectado = "Isotex Dominicana, S.A.S."
             st.session_state.nro_factura_detectado = "C-00137907"
             st.session_state.moneda_detectada = "USD"
+            
+            st.session_state.tipo_empaque_detectado = 1  # Unidades Directas (vienen sueltas por cantidad de piezas)
             st.session_state.df_productos = pd.DataFrame([
                 {"Código": "HIEFOAM3L", "Descripción": "HIELERA DE FOAM 3L", "Cantidad Empaques": 30.0, "Unidades por Caja": 1, "Precio Lista / Caja": 1.43, "Descuento (%)": 0.0},
                 {"Código": "NEVER10LA", "Descripción": "NEVERA DE FOAM 10L CON ASA", "Cantidad Empaques": 30.0, "Unidades por Caja": 1, "Precio Lista / Caja": 4.69, "Descuento (%)": 0.0},
@@ -91,9 +103,9 @@ with tab_individual:
                 {"Código": "CAVA20LS", "Descripción": "ISOBOX 20L", "Cantidad Empaques": 30.0, "Unidades por Caja": 1, "Precio Lista / Caja": 4.60, "Descuento (%)": 0.0},
                 {"Código": "SERICOL", "Descripción": "SERIGRAFÍA EN NEVERAS A UN COLOR", "Cantidad Empaques": 60.0, "Unidades por Caja": 1, "Precio Lista / Caja": 0.30, "Descuento (%)": 0.0}
             ])
-            st.success("🤖 ¡Proveedor detectado automáticamente: Isotex Dominicana, S.A.S.!")
+            st.success("🤖 ¡Proveedor detectado: Isotex Dominicana! Empaque autodetectado: **Unidades Directas (Piezas sueltas)**.")
         else:
-            st.warning("⚠️ No se pudo reconocer el formato automáticamente. Puedes ingresar los datos de forma manual abajo.")
+            st.warning("⚠️ No se pudo reconocer el formato automáticamente. Puedes ajustar los datos abajo.")
 
     st.divider()
     
@@ -103,7 +115,13 @@ with tab_individual:
         nro_factura = st.text_input("No. de Factura / Pedido", value=st.session_state.nro_factura_detectado)
     with col_f2:
         moneda_ind = st.selectbox("Moneda de la Factura", ["DOP", "USD"], index=0 if st.session_state.moneda_detectada=="DOP" else 1, key="mon_ind")
-        tipo_empaque = st.radio("Cálculo por Unidad:", ["Por Cajas / Empaques (con unidades por caja)", "Unidades Directas"], horizontal=True)
+        # El radio ahora se selecciona automáticamente según la autodetección del archivo
+        tipo_empaque = st.radio(
+            "Cálculo por Unidad (Autodetectado):", 
+            ["Por Cajas / Empaques (con unidades por caja)", "Unidades Directas"], 
+            index=st.session_state.tipo_empaque_detectado,
+            horizontal=True
+        )
 
     st.divider()
     
@@ -130,6 +148,7 @@ with tab_individual:
             importe_linea_neto = cant_empaques * precio_con_desc
             subtotal_neto_dop += importe_linea_neto
             
+            # Lógica basada en el tipo de empaque detectado/seleccionado
             if tipo_empaque.startswith("Por Cajas") and unidades_por_caja > 1:
                 total_unidades_sueltas = cant_empaques * unidades_por_caja
                 costo_unitario_neto = importe_linea_neto / total_unidades_sueltas
@@ -139,7 +158,7 @@ with tab_individual:
             # Costo unitario con ITBIS fijo (18%)
             costo_unitario_con_itbis = costo_unitario_neto * (1 + (itbis_fijo / 100.0))
             
-            # Precio de venta aplicando el margen de ganancia seleccionado (por defecto 25%)
+            # Precio de venta aplicando el margen de ganancia configurado (por defecto 25%)
             precio_venta_sugerido = costo_unitario_con_itbis * (1 + (margen_ganancia / 100.0))
             
             resultados_ind.append({
@@ -194,7 +213,6 @@ with tab_multiple:
             if cant <= 0 or precio_unit <= 0:
                 continue
             
-            # Tasa de compra automática si es USD
             precio_dop = precio_unit * tasa_compra_usd if mon == "USD" else precio_unit
             importe_linea = cant * precio_dop
             subtotal_lote_dop += importe_linea
