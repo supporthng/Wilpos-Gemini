@@ -111,7 +111,6 @@ master_names = []
 master_by_code = {}
 master_upload_date_str = "No disponible"
 
-# Guardar nuevo maestro si el usuario lo subió
 if master_file_uploaded is not None:
     try:
         bytes_data = master_file_uploaded.getvalue()
@@ -127,7 +126,6 @@ if master_file_uploaded is not None:
     except Exception as ex:
         st.sidebar.error(f"Error al guardar maestro: {ex}")
 
-# Cargar maestro activo (del archivo guardado o predeterminado local)
 target_master_path = None
 if os.path.exists(SAVED_MASTER_FILE):
     target_master_path = SAVED_MASTER_FILE
@@ -173,7 +171,6 @@ if target_master_path is not None:
 else:
     st.sidebar.warning("⚠️ No se detectó ningún archivo maestro cargado.")
 
-# Diccionario de equivalencias personalizables guardado en session_state
 if "custom_equivalences" not in st.session_state:
     st.session_state["custom_equivalences"] = {
         "BARCELO 40 ANIVERSARIO": "IMPERIAL PREMIUM BLEND 40 AÑOS",
@@ -380,24 +377,8 @@ def process_invoice_with_ai(file_obj, file_type):
     except Exception as e:
         err_str = str(e)
         if ("429" in err_str or "Quota exceeded" in err_str) and not st.session_state["use_paid_now"]:
-            try:
-                genai.configure(api_key=free_key_2 if free_key_2 else paid_api_key)
-                model2 = genai.GenerativeModel('gemini-3.6-flash')
-                file_obj.seek(0)
-                response = model2.generate_content([
-                    {'mime_type': file_type, 'data': file_obj.read()},
-                    prompt_text
-                ])
-                raw_text = response.text.strip()
-                if raw_text.startswith("```json"):
-                    raw_text = raw_text[7:]
-                if raw_text.endswith("```"):
-                    raw_text = raw_text[:-3]
-                parsed_data = json.loads(raw_text.strip())
-                success_msg = "✅ ¡Factura procesada usando el respaldo gratuito #2!"
-            except Exception:
-                st.session_state["quota_exceeded"] = True
-                st.rerun()
+            st.session_state["quota_exceeded"] = True
+            st.rerun()
         else:
             st.error(f"Error al procesar: {e}")
 
@@ -492,22 +473,17 @@ if modulo == "📄 Factura Individual":
                 st.info(f"El archivo '{uploaded_file.name}' está cargado y listo para procesamiento.")
 
         if st.session_state["quota_exceeded"]:
-            @st.dialog("⚠️ Confirmación Requerida: Límite de Cuota Alcanzado")
-            def quota_modal():
-                st.write("Se ha agotado la cuota de las cuentas gratuitas de Gemini (Error 429 / Quota Exceeded).")
-                st.write("¿Deseas confirmar el uso de la versión de pago para procesar esta factura?")
-                
-                col_m1, col_m2 = st.columns(2)
-                with col_m1:
-                    if st.button("✅ Sí, Confirmar", type="primary"):
-                        st.session_state["use_paid_now"] = True
-                        st.session_state["quota_exceeded"] = False
-                        st.rerun()
-                with col_m2:
-                    if st.button("❌ Cancelar"):
-                        st.session_state["quota_exceeded"] = False
-                        st.rerun()
-            quota_modal()
+            st.warning("⚠️ **Límite de Cuota Alcanzado (Error 429)**: Se ha agotado la cuota gratuita de Gemini.")
+            col_w1, col_w2 = st.columns(2)
+            with col_w1:
+                if st.button("✅ Usar Versión de Pago", type="primary", key="btn_pay_single"):
+                    st.session_state["use_paid_now"] = True
+                    st.session_state["quota_exceeded"] = False
+                    st.rerun()
+            with col_w2:
+                if st.button("❌ Cancelar / Descartar", key="btn_cancel_single"):
+                    st.session_state["quota_exceeded"] = False
+                    st.rerun()
 
         if st.button("🚀 Procesar Factura") or st.session_state["use_paid_now"]:
             file_type = uploaded_file.type if hasattr(uploaded_file, 'type') else 'image/jpeg'
@@ -639,22 +615,17 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
     st.markdown("Sube varias facturas. El sistema validará todas las presentaciones cruzadas, consolidará duplicados y te notificará los cruces.")
 
     if st.session_state["quota_exceeded"]:
-        @st.dialog("⚠️ Confirmación Requerida: Límite de Cuota Alcanzado")
-        def quota_modal_batch():
-            st.write("Se ha agotado la cuota de las cuentas gratuitas de Gemini (Error 429 / Quota Exceeded).")
-            st.write("¿Deseas confirmar el uso de la versión de pago para procesar este lote?")
-            
-            col_m1, col_m2 = st.columns(2)
-            with col_m1:
-                if st.button("✅ Sí, Confirmar", type="primary"):
-                    st.session_state["use_paid_now"] = True
-                    st.session_state["quota_exceeded"] = False
-                    st.rerun()
-            with col_m2:
-                if st.button("❌ Cancelar"):
-                    st.session_state["quota_exceeded"] = False
-                    st.rerun()
-        quota_modal_batch()
+        st.warning("⚠️ **Límite de Cuota Alcanzado (Error 429)**: Se ha agotado la cuota gratuita de Gemini.")
+        col_bw1, col_bw2 = st.columns(2)
+        with col_bw1:
+            if st.button("✅ Usar Versión de Pago", type="primary", key="btn_pay_batch"):
+                st.session_state["use_paid_now"] = True
+                st.session_state["quota_exceeded"] = False
+                st.rerun()
+        with col_bw2:
+            if st.button("❌ Cancelar / Descartar", key="btn_cancel_batch"):
+                st.session_state["quota_exceeded"] = False
+                st.rerun()
 
     uploaded_files = st.file_uploader("Sube tus facturas (Puedes seleccionar varias)", type=["pdf", "png", "jpg", "jpeg"], accept_multiple_files=True, key="batch_files")
 
