@@ -182,16 +182,15 @@ def validate_with_master(item_description, original_code):
 
     return original_code, "⚠️ No Encontrado en Maestro"
 
-# Función centralizada para procesar facturas con IA (Prompt reforzado para costo unitario real y nombres limpios)
+# Función centralizada para procesar facturas con IA (Prompt reforzado para cálculo estricto de empaques y costos unitarios)
 def process_invoice_with_ai(file_obj, file_type):
     prompt_text = (
         "Analiza esta factura detalladamente. Extrae los datos de cabecera: 'emisor_rnc', 'numero_documento', 'fecha', 'subtotal', 'itbis', 'total'. "
-        "Para cada ítem, extrae con absoluta precisión: 'codigo', 'descripcion', 'cantidad', 'empaque', y 'costo_sin_itbis'. "
-        "REGLA CRÍTICA 1 (COSTO UNITARIO): El valor numérico asignado a 'costo_sin_itbis' DEBE SER OBLIGATORIAMENTE EL COSTO POR CADA UNIDAD INDIVIDUAL (sin incluir impuestos). Si la factura muestra un precio total de línea por un conjunto de unidades, divídelo estrictamente entre la cantidad para reflejar el costo unitario real. "
-        "REGLA CRÍTICA 2 (NOMBRE Y PRESENTACIÓN): La 'descripcion' debe limpiarse radicalmente para dejar ÚNICAMENTE el nombre comercial del producto y su presentación/tamaño (ej: 'VINO BARBERA BORDEAUX 38 CM', 'GINGER BEER SPICY 207 ML', 'BLUE LABEL 750 ML'). Elimina por completo códigos internos entre corchetes (ej: [C071904]), rutas de correo, correos electrónicos, teléfonos o texto redundante. "
+        "Para cada ítem, extrae con absoluta precisión: 'codigo', 'descripcion', 'cantidad' (cantidad de cajas/unidades de empaque compradas), 'empaque' (número exacto de unidades individuales que trae cada caja según la descripción, ej: en '12/75 CL' el empaque es 12, en '6/4PACK' el empaque es 24 o 6 según aplique, si es unidad directa pon 1), y 'costo_sin_itbis' (EL COSTO UNITARIO REAL POR CADA PIEZA INDIVIDUAL: toma el precio neto total de la línea y divídelo estrictamente entre cantidad * empaque). "
+        "REGLA CRÍTICA PARA LA DESCRIPCIÓN: Limpia el texto de cada producto para incluir ÚNICAMENTE el nombre comercial del producto y su presentación o tamaño limpio (ej: 'EVIAN 75 CL', 'GINGER BEER SPICY 207 ML', 'BLUE LABEL 750 ML'), eliminando códigos internos, diagonales de empaque y textos redundantes. "
         "Devuelve la información estrictamente en formato JSON con la siguiente estructura exacta: "
         '{"emisor_rnc": "...", "numero_documento": "...", "fecha": "...", "subtotal": 0.0, "itbis": 0.0, "total": 0.0, "items": [{"codigo": "...", "descripcion": "...", "cantidad": 1, "empaque": 1, "costo_sin_itbis": 0.0}]}. '
-        "REGLA CRÍTICA 3: Preserva todos los ceros a la izquierda como texto. Respuesta JSON pura sin texto adicional."
+        "REGLA CRÍTICA: Preserva todos los ceros a la izquierda como texto. Respuesta JSON pura sin texto adicional."
     )
 
     parsed_data = None
@@ -293,7 +292,7 @@ if modulo == "📄 Factura Individual":
         if st.button("🚀 Procesar Factura") or st.session_state["use_paid_now"]:
             file_type = uploaded_file.type if hasattr(uploaded_file, 'type') else 'image/jpeg'
             
-            with st.spinner("Analizando factura, validando maestro y calculando costos..."):
+            with st.spinner("Analizando factura, validando maestro y calculando costos de empaque..."):
                 parsed_data, success_msg = process_invoice_with_ai(uploaded_file, file_type)
 
             if parsed_data:
