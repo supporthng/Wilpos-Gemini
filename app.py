@@ -2,6 +2,7 @@ import io
 import json
 import os
 import hashlib
+import re
 import difflib
 import google.generativeai as genai
 from PIL import Image
@@ -96,17 +97,15 @@ if master_file_uploaded is not None:
 # Diccionario de equivalencias personalizables guardado en session_state
 if "custom_equivalences" not in st.session_state:
     st.session_state["custom_equivalences"] = {
-        "EVIAN 24/0.5 LT": "EVIAN 500ML",
-        "JW BLUE": "BLUE LABEL",
-        "BUCHANANS 12": "BUCHANAN'S 12 AÑOS"
+        "BARCELO 40 ANIVERSARIO": "IMPERIAL PREMIUM BLEND 40 AÑOS",
+        "BARCELO IMPERIAL PORTO": "IMPERIAL PORTO"
     }
 
 st.sidebar.markdown("---")
 st.sidebar.title("🔄 Equivalencias y Sinónimos")
-st.sidebar.markdown("Mapea términos de proveedores a tu formato POS:")
 with st.sidebar.expander("Ver / Editar Equivalencias"):
-    eq_key = st.text_input("Término del Proveedor (ej: EVIAN 24/0.5 LT)")
-    eq_val = st.text_input("Equivalente en tu POS (ej: EVIAN 500ML)")
+    eq_key = st.text_input("Término del Proveedor")
+    eq_val = st.text_input("Equivalente en tu POS")
     if st.button("➕ Agregar Regla"):
         if eq_key and eq_val:
             st.session_state["custom_equivalences"][eq_key.strip().upper()] = eq_val.strip().upper()
@@ -125,66 +124,86 @@ with st.sidebar.expander("Ver / Editar Equivalencias"):
             st.rerun()
 
 # ==========================================
-# MOTOR DE NORMALIZACIÓN Y COMPARACIÓN ROBUSTA
+# MOTOR DE NORMALIZACIÓN Y COINCIDENCIA AVANZADA
 # ==========================================
 SYNONYMS_MAP = {
     "JW ": "JOHNNIE WALKER ",
     "JW.": "JOHNNIE WALKER",
     "BUCH ": "BUCHANANS ",
     "BUCHANAN": "BUCHANANS",
-    "VODKA ABSOLUT": "ABSOLUT VODKA",
     "0.5 LT": "500ML",
     "0.5LT": "500ML",
     "1 LT": "1000ML",
-    "1LT": "1000ML"
+    "1LT": "1000ML",
+    "RON ": "",
+    "BOTELLA ": "",
+    "BOTELL ": ""
 }
 
-def normalize_product_name(name):
-    clean = str(name).strip().upper()
-    
-    # 1. Aplicar reglas de equivalencia personalizadas del usuario
-    for prov_term, pos_term in st.session_state["custom_equivalences"].items():
-        if prov_term in clean:
-            clean = clean.replace(prov_term, pos_term)
+def clean_and_tokenize(text):
+    upper_text = str(text).upper()
+    # Aplicar equivalencias personalizadas
+    for prov, pos in st.session_state["custom_equivalences"].items():
+        if prov in upper_text:
+            upper_text = upper_text.replace(prov, pos)
             
-    # 2. Reemplazar abreviaturas comunes y conversiones de unidades
+    # Aplicar mapa de sinónimos
     for abbr, full in SYNONYMS_MAP.items():
-        clean = clean.replace(abbr, full)
+        upper_text = upper_text.replace(abbr, full)
         
-    return clean
+    # Remover símbolos especiales y palabras vacías (stopwords)
+    cleaned = re.sub(r'[^A-Z0-9\s]', ' ', upper_text)
+    stopwords = {"DE", "EL", "LA", "LOS", "LAS", "Y", "EN", "UN", "UNA", "CON"}
+    tokens = [t for t in cleaned.split() if t not in stopwords]
+    return set(tokens), upper_text
 
 def validate_with_master(item_description, original_code):
     if not master_dict:
         return original_code, "Sin Maestro Cargado"
     
-    norm_desc = normalize_product_name(item_description)
+    desc_tokens, norm_desc = clean_and_tokenize(item_description)
     
     # 1. Búsqueda exacta normalizada
-    if norm_desc in master_dict:
-        return master_dict[norm_desc], "Actualizado (Exacto Normalizado)"
+    for m_name, m_code in master_dict.items():
+        if m_name == norm_desc or m_name == item_description.strip().upper():
+            return m_code, "Actualizado (Exacto)"
+            
+    # 2. Coincidencia Inteligente por Coeficiente de Jaccard y Solapamiento de Tokens Clave
+    best_match_code = original_code
+    best_match_name = ""
+    highest_score = 0.0
     
-    # 2. Búsqueda difusa estándar (Fuzzy matching)
-    matches = difflib.get_close_matches(norm_desc, master_names, n=1, cutoff=0.50)
+    for m_name in master_names:
+        m_tokens, _ = clean_and_tokenize(m_name)
+        if not desc_tokens or not m_tokens:
+            continue
+            
+        intersection = desc_tokens.intersection(m_tokens)
+        union = desc_tokens.union(m_tokens)
+        jaccard_score = len(intersection) / len(union)
+        
+        # Ponderación extra si coinciden números clave (ej: 40, 12, 700, 750) o palabras críticas (IMPERIAL, PORTO, BLUE)
+        weight = 1.0
+        for token in intersection:
+            if token.isdigit() or len(token) > 3:
+                weight += 0.25
+                
+        final_score = jaccard_score * weight
+        
+        if final_score > highest_score and len(intersection) >= 2:
+            highest_score = final_score
+            best_match_code = master_dict[m_name]
+            best_match_name = m_name
+            
+    # Umbral de confianza para dar por válido el match inteligente
+    if highest_score >= 0.45:
+        return best_match_code, f"Actualizado (IA Semántica: {best_match_name})"
+        
+    # 3. Respaldo por Difusa Tradicional (Fuzzy)
+    matches = difflib.get_close_matches(norm_desc, master_names, n=1, cutoff=0.45)
     if matches:
         matched_name = matches[0]
         return master_dict[matched_name], f"Actualizado (Similitud: {matched_name})"
-    
-    # 3. Búsqueda avanzada por tokens (palabras clave cruzadas)
-    desc_tokens = set(norm_desc.split())
-    best_match_code = original_code
-    best_match_reason = "⚠️ No Encontrado en Maestro"
-    max_shared_tokens = 0
-    
-    for m_name in master_names:
-        m_tokens = set(m_name.split())
-        shared = desc_tokens.intersection(m_tokens)
-        if len(shared) >= 2 and len(shared) > max_shared_tokens:
-            max_shared_tokens = len(shared)
-            best_match_code = master_dict[m_name]
-            best_match_reason = f"Actualizado (Tokens Clave: {m_name})"
-            
-    if max_shared_tokens >= 2:
-        return best_match_code, best_match_reason
 
     return original_code, "⚠️ No Encontrado en Maestro"
 
@@ -218,7 +237,7 @@ if modulo == "📄 Factura Individual":
                 prompt_text = (
                     "Analiza esta factura detalladamente. Extrae los datos de cabecera: 'emisor_rnc', 'numero_documento', 'fecha', 'subtotal', 'itbis', 'total'. "
                     "Para cada ítem, extrae: 'codigo', 'descripcion', 'cantidad', 'empaque', y 'costo_sin_itbis'. "
-                    "REGLA ESTRICTA PARA LA DESCRIPCIÓN: Limpia el texto de cada producto para incluir ÚNICAMENTE el nombre del producto y su presentación o tamaño (ej: 'EVIAN 500ML' o 'BLUE LABEL 750ML'), eliminando códigos internos innecesarios o textos redundantes. "
+                    "REGLA ESTRICTA PARA LA DESCRIPCIÓN: Limpia el texto de cada producto para incluir ÚNICAMENTE el nombre del producto y su presentación o tamaño (ej: 'RON BARCELO IMPERIAL 40 ANIVERSARIO 700 ML'), eliminando códigos internos innecesarios o textos redundantes. "
                     "Devuelve la información estrictamente en formato JSON con la siguiente estructura exacta: "
                     '{"emisor_rnc": "...", "numero_documento": "...", "fecha": "...", "subtotal": 0.0, "itbis": 0.0, "total": 0.0, "items": [{"codigo": "...", "descripcion": "...", "cantidad": 1, "empaque": 1, "costo_sin_itbis": 0.0}]}. '
                     "REGLA CRÍTICA: Preserva todos los ceros a la izquierda como texto. Respuesta JSON pura sin texto adicional."
@@ -386,8 +405,8 @@ if modulo == "📄 Factura Individual":
 # MÓDULO 2: MÚLTIPLES FACTURAS (LOTE)
 # ==========================================
 elif modulo == "📂 Múltiples Facturas (Lote)":
-    st.title("📂 Procesador por Lotes (Con Validación Avanzada de Maestro POS)")
-    st.markdown("Sube varias facturas. El sistema filtrará duplicados y validará cada ítem contra tu maestro usando sinónimos y equivalencias.")
+    st.title("📂 Procesador por Lotes (Con Coincidencia Semántica Avanzada)")
+    st.markdown("Sube varias facturas. El sistema validará los ítems contra tu maestro mediante fichas de tokens y sinónimos cruzados.")
 
     uploaded_files = st.file_uploader("Sube tus facturas (Puedes seleccionar varias)", type=["pdf", "png", "jpg", "jpeg"], accept_multiple_files=True, key="batch_files")
 
@@ -468,124 +487,4 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
                                 raw_txt = response.text.strip()
                                 if raw_txt.startswith("```json"):
                                     raw_txt = raw_txt[7:]
-                                if raw_txt.endswith("```"):
-                                    raw_txt = raw_txt[:-3]
-                                parsed_data = json.loads(raw_txt.strip())
-                        except Exception as batch_err:
-                            st.warning(f"No se pudo procesar el archivo {file.name}: {batch_err}")
-
-                if parsed_data and isinstance(parsed_data, dict):
-                    rnc_emisor = str(parsed_data.get("emisor_rnc", "")).strip()
-                    num_doc = str(parsed_data.get("numero_documento", "")).strip()
-                    fecha_doc = str(parsed_data.get("fecha", "")).strip()
-                    total_doc = str(parsed_data.get("total", "")).strip()
-                    
-                    signature_string = f"{rnc_emisor}_{num_doc}_{fecha_doc}_{total_doc}"
-                    doc_signature = hashlib.md5(signature_string.encode('utf-8')).hexdigest()
-                    
-                    if doc_signature in batch_signatures:
-                        duplicate_count += 1
-                        st.warning(f"⚠️ Archivo omitido por estar duplicado en este lote: **{file.name}** (Doc: {num_doc}, Total: {total_doc})")
-                    else:
-                        batch_signatures.add(doc_signature)
-                        items = parsed_data.get("items", [])
-                        if isinstance(items, list):
-                            all_consolidated_items.extend(items)
-
-                progress_bar.progress((i + 1) / len(uploaded_files))
-
-            status_text.text("¡Procesamiento por lotes completado!")
-            
-            if duplicate_count > 0:
-                st.error(f"🚨 Se detectaron y filtraron **{duplicate_count} archivo(s) duplicado(s)** dentro de la selección actual.")
-
-            if all_consolidated_items:
-                st.success(f"🎉 Se consolidaron exitosamente {len(all_consolidated_items)} ítems de facturas válidas.")
-
-                rows_preview = []
-                unmatched_batch = []
-
-                for idx, item in enumerate(all_consolidated_items, start=1):
-                    desc = str(item.get("descripcion", ""))
-                    orig_code = str(item.get("codigo", "")).strip()
-                    
-                    final_code, status_match = validate_with_master(desc, orig_code)
-                    if "No Encontrado" in status_match:
-                        unmatched_batch.append((desc, orig_code))
-
-                    costo = safe_float(item.get("costo_sin_itbis", 0))
-                    raw_pv = (costo * 1.25) * 1.18
-                    precio_venta = round_to_nearest_5(raw_pv)
-                    cant_comprada = safe_int(item.get("cantidad", 1), 1)
-                    empaque_val = safe_int(item.get("empaque", 1), 1)
-                    stock_val = cant_comprada * empaque_val
-                    
-                    rows_preview.append({
-                        "No.": idx,
-                        "Código Barra POS": final_code,
-                        "Nombre": desc,
-                        "Cant. Compra": cant_comprada,
-                        "Empaque": empaque_val,
-                        "Stock Total": stock_val,
-                        "Costo Unit. Sin ITBIS": costo,
-                        "Precio Venta (M5)": precio_venta,
-                        "Estado Maestro": status_match
-                    })
-
-                if unmatched_batch:
-                    st.warning(f"⚠️ **Atención en lote:** Hay {len(unmatched_batch)} producto(s) no encontrados en el maestro:")
-                    for u_desc, u_code in unmatched_batch:
-                        st.markdown(f"- *{u_desc}* (Código original: `{u_code}`)")
-
-                df_batch = pd.DataFrame(rows_preview)
-                st.dataframe(df_batch, use_container_width=True, hide_index=True)
-
-                template_path = "Plantilla_Inventario_WilPOS_2.xlsx"
-                if not os.path.exists(template_path):
-                    template_path = "Plantilla_Inventario_WilPOS.xlsx"
-                    
-                if os.path.exists(template_path):
-                    wb = openpyxl.load_workbook(template_path)
-                    ws_prod = wb['Productos']
-                    ws_prod.delete_rows(2, ws_prod.max_row)
-                else:
-                    wb = openpyxl.Workbook()
-                    ws_prod = wb.active
-                    ws_prod.title = "Productos"
-                    ws_prod.append(['Nombre', 'Código Barra', 'Categoría', 'Tipo', 'Precio Venta', 'Costo', 'Stock', 'Stock Mínimo', 'ITBIS', 'Unidad Medida', 'Venta Granel', 'Cantidad Empaque', 'Precio Variable', 'Descuento %', 'Descuento Monto', 'Precio Especial', 'Descuento Activo', 'Descuento Nota'])
-
-                for item_dict in rows_preview:
-                    ws_prod.append([
-                        item_dict["Nombre"],
-                        item_dict["Código Barra POS"],
-                        "General",
-                        "producto",
-                        item_dict["Precio Venta (M5)"],
-                        item_dict["Costo Unit. Sin ITBIS"],
-                        item_dict["Stock Total"],
-                        5,
-                        0.18,
-                        "unidad",
-                        "No",
-                        item_dict["Empaque"],
-                        "No",
-                        0,
-                        0,
-                        None,
-                        "No",
-                        None
-                    ])
-                    ws_prod.cell(row=ws_prod.max_row, column=2).number_format = '@'
-
-                output = io.BytesIO()
-                wb.save(output)
-                excel_data_batch = output.getvalue()
-
-                st.download_button(
-                    label="📥 Descargar Excel Consolidado Sin Duplicados",
-                    data=excel_data_batch,
-                    file_name="Inventario_WilPOS_Consolidado_Lote.xlsx",
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                )
-            else:
-                st.warning("No hay ítems válidos para consolidar.")
+                                if raw_txt.endswith("
