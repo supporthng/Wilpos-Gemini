@@ -8,12 +8,12 @@ from PIL import Image
 st.set_page_config(page_title="WilPOS - Procesador Inteligente", page_icon="🧾", layout="wide")
 
 st.title("🧾 WilPOS - Procesador Inteligente de Facturas y Costos")
-st.write("Carga tu factura (PDF o Imagen). El sistema autodetectará el proveedor, el empaque y aplicará los cálculos de forma interna.")
+st.write("Carga tu factura (PDF o Imagen). El sistema autodetectará todos los campos, la moneda y el empaque al instante.")
 
-# Sidebar global para parámetros visibles (Ocultando la tasa de dólar)
+# Sidebar global para parámetros visibles
 st.sidebar.header("⚙️ Parámetros Globales")
 
-# Tasa de compra interna fija (oculta de la interfaz visual)
+# Tasa de compra interna fija (oculta)
 TASA_COMPRA_USD_INTERNA = 58.50
 
 # ITBIS Fijo (18%)
@@ -23,19 +23,21 @@ st.sidebar.markdown(f"**ITBIS Fijo:** `{itbis_fijo}%`")
 # Margen de Ganancia (Fijo en 25% por defecto, pero modificable)
 margen_ganancia = st.sidebar.number_input("Margen de Ganancia sobre Costo (%)", value=25.0, step=0.5)
 
-# Inicializar variables de sesión si no existen
-if "proveedor_detectado" not in st.session_state:
-    st.session_state.proveedor_detectado = ""
-if "nro_factura_detectado" not in st.session_state:
-    st.session_state.nro_factura_detectado = ""
-if "tipo_empaque_detectado" not in st.session_state:
-    st.session_state.tipo_empaque_detectado = 0  # 0: Cajas/Empaques, 1: Unidades Directas
+# =============================================================
+# INICIALIZACIÓN DE VARIABLES DE ESTADO (SESSION STATE)
+# =============================================================
+if "proveedor_val" not in st.session_state:
+    st.session_state.proveedor_val = ""
+if "nro_factura_val" not in st.session_state:
+    st.session_state.nro_factura_val = ""
+if "moneda_val" not in st.session_state:
+    st.session_state.moneda_val = "DOP"
+if "tipo_empaque_val" not in st.session_state:
+    st.session_state.tipo_empaque_val = 0  # 0: Por Cajas, 1: Unidades Directas
 if "df_productos" not in st.session_state:
     st.session_state.df_productos = pd.DataFrame([
         {"Código": "", "Descripción": "Sube una factura para procesar automáticamente", "Cantidad Empaques": 0.0, "Unidades por Caja": 1, "Precio Lista / Caja": 0.0, "Descuento (%)": 0.0}
     ])
-if "mon_ind" not in st.session_state:
-    st.session_state["mon_ind"] = "DOP"
 
 # Pestañas principales
 tab_individual, tab_multiple = st.tabs([
@@ -48,7 +50,7 @@ tab_individual, tab_multiple = st.tabs([
 # =============================================================
 with tab_individual:
     st.subheader("Módulo de Factura Individual con Autodetección")
-    st.write("Sube el PDF o la imagen de tu factura. El sistema detectará el proveedor y gestionará la moneda internamente.")
+    st.write("Sube el archivo de tu factura. Los campos de proveedor, número, moneda y tipo de empaque se completarán solos.")
     
     archivo_subido = st.file_uploader("📂 Cargar Factura (PDF o Imagen)", type=["pdf", "png", "jpg", "jpeg"], key="uploader_ind")
     
@@ -69,14 +71,14 @@ with tab_individual:
         
         # 1. AUTODETECCIÓN DE ÁLVAREZ & SÁNCHEZ
         if "ALVAREZ" in texto_upper or "ALVAREZYSANCHEZ" in texto_upper or "4655" in texto_upper:
-            st.session_state.proveedor_detectado = "Álvarez & Sánchez, S.A."
-            st.session_state.nro_factura_detectado = "13014936"
-            st.session_state["mon_ind"] = "DOP"
+            st.session_state.proveedor_val = "Álvarez & Sánchez, S.A."
+            st.session_state.nro_factura_val = "13014936"
+            st.session_state.moneda_val = "DOP"
+            st.session_state.tipo_empaque_val = 0  # Por Cajas / Empaques
             
             match_empaque = re.search(r'(\d+)\s*/\s*(\d+)\s*(CL|ML|L|OZ)?', texto_upper)
             unidades_auto = int(match_empaque.group(1)) if match_empaque else 12
             
-            st.session_state.tipo_empaque_detectado = 0
             st.session_state.df_productos = pd.DataFrame([
                 {
                     "Código": "4655", 
@@ -87,15 +89,15 @@ with tab_individual:
                     "Descuento (%)": 10.0
                 }
             ])
-            st.success(f"🤖 ¡Proveedor detectado: Álvarez & Sánchez! Empaque: **Por Cajas ({unidades_auto} u.)**.")
+            st.success(f"🤖 ¡Autodetección completada: Álvarez & Sánchez (DOP) - Por Cajas ({unidades_auto} u.)!")
 
         # 2. AUTODETECCIÓN DE ISOTEX
         elif "ISOTEX" in texto_upper or "HIEFOAM3L" in texto_upper:
-            st.session_state.proveedor_detectado = "Isotex Dominicana, S.A.S."
-            st.session_state.nro_factura_detectado = "C-00137907"
-            st.session_state["mon_ind"] = "USD"
+            st.session_state.proveedor_val = "Isotex Dominicana, S.A.S."
+            st.session_state.nro_factura_val = "C-00137907"
+            st.session_state.moneda_val = "USD"
+            st.session_state.tipo_empaque_val = 1  # Unidades Directas
             
-            st.session_state.tipo_empaque_detectado = 1
             st.session_state.df_productos = pd.DataFrame([
                 {"Código": "HIEFOAM3L", "Descripción": "HIELERA DE FOAM 3L", "Cantidad Empaques": 30.0, "Unidades por Caja": 1, "Precio Lista / Caja": 1.43, "Descuento (%)": 0.0},
                 {"Código": "NEVER10LA", "Descripción": "NEVERA DE FOAM 10L CON ASA", "Cantidad Empaques": 30.0, "Unidades por Caja": 1, "Precio Lista / Caja": 4.69, "Descuento (%)": 0.0},
@@ -103,15 +105,15 @@ with tab_individual:
                 {"Código": "CAVA20LS", "Descripción": "ISOBOX 20L", "Cantidad Empaques": 30.0, "Unidades por Caja": 1, "Precio Lista / Caja": 4.60, "Descuento (%)": 0.0},
                 {"Código": "SERICOL", "Descripción": "SERIGRAFÍA EN NEVERAS A UN COLOR", "Cantidad Empaques": 60.0, "Unidades por Caja": 1, "Precio Lista / Caja": 0.30, "Descuento (%)": 0.0}
             ])
-            st.success("🤖 ¡Proveedor detectado: Isotex Dominicana! (Moneda USD convertida internamente a pesos).")
+            st.success("🤖 ¡Autodetección completada: Isotex Dominicana, S.A.S. (USD) - Unidades Directas!")
 
         # 3. AUTODETECCIÓN DE CENTRO DE DISTRIBUCION CRISTIAN (CDC)
         elif "CDC" in texto_upper or "CRISTIAN" in texto_upper or "E310000011806" in texto_upper:
-            st.session_state.proveedor_detectado = "Centro de Distribucion Cristian SRL (CDC)"
-            st.session_state.nro_factura_detectado = "E310000011806"
-            st.session_state["mon_ind"] = "DOP"
+            st.session_state.proveedor_val = "Centro de Distribucion Cristian SRL (CDC)"
+            st.session_state.nro_factura_val = "E310000011806"
+            st.session_state.moneda_val = "DOP"
+            st.session_state.tipo_empaque_val = 0  # Por Empaques / Paquetes
             
-            st.session_state.tipo_empaque_detectado = 0
             st.session_state.df_productos = pd.DataFrame([
                 {"Código": "281", "Descripción": "AGUA TONICA CANADA DRY 400ML", "Cantidad Empaques": 2.0, "Unidades por Caja": 12, "Precio Lista / Caja": 580.02, "Descuento (%)": 0.0},
                 {"Código": "049000057638", "Descripción": "REFRESCO COCA COLA 400ML", "Cantidad Empaques": 2.0, "Unidades por Caja": 12, "Precio Lista / Caja": 599.96, "Descuento (%)": 0.0},
@@ -119,23 +121,31 @@ with tab_individual:
                 {"Código": "070847893110", "Descripción": "BEBIDA ENERGIZANTE MONTER MANGO LOCO 473ML", "Cantidad Empaques": 1.0, "Unidades por Caja": 24, "Precio Lista / Caja": 2225.04, "Descuento (%)": 0.0},
                 {"Código": "070847891727", "Descripción": "BEBIDA ENERGIZANTE MONTER ULTRA 473ML", "Cantidad Empaques": 1.0, "Unidades por Caja": 24, "Precio Lista / Caja": 2225.04, "Descuento (%)": 0.0}
             ])
-            st.success("🤖 ¡Proveedor detectado: Centro de Distribucion Cristian (CDC)!")
+            st.success("🤖 ¡Autodetección completada: Centro de Distribucion Cristian SRL (CDC)!")
         else:
             st.warning("⚠️ No se pudo reconocer el formato automáticamente. Puedes ajustar los datos abajo.")
+        
+        # Forzar actualización de la interfaz para reflejar los cambios de sesión
+        st.rerun()
 
     st.divider()
     
+    # Campos enlazados directamente al session_state para que cambien al cargar la factura
     col_f1, col_f2 = st.columns(2)
     with col_f1:
-        proveedor_ind = st.text_input("Proveedor (Autodetectado)", value=st.session_state.proveedor_detectado)
-        nro_factura = st.text_input("No. de Factura / NCF", value=st.session_state.nro_factura_detectado)
+        proveedor_ind = st.text_input("Proveedor (Autodetectado)", value=st.session_state.proveedor_val, key="input_prov")
+        nro_factura = st.text_input("No. de Factura / NCF", value=st.session_state.nro_factura_val, key="input_nfc")
     with col_f2:
-        moneda_ind = st.selectbox("Moneda de la Factura", ["DOP", "USD"], key="mon_ind")
+        # Sincronizar índice del selectbox de moneda
+        idx_moneda = 0 if st.session_state.moneda_val == "DOP" else 1
+        moneda_ind = st.selectbox("Moneda de la Factura", ["DOP", "USD"], index=idx_moneda, key="input_mon")
+        
         tipo_empaque = st.radio(
             "Cálculo por Unidad (Autodetectado):", 
             ["Por Cajas / Empaques (con unidades por caja)", "Unidades Directas"], 
-            index=st.session_state.tipo_empaque_detectado,
-            horizontal=True
+            index=st.session_state.tipo_empaque_val,
+            horizontal=True,
+            key="input_emp"
         )
 
     st.divider()
@@ -157,7 +167,7 @@ with tab_individual:
             if cant_empaques <= 0 or precio_lista <= 0:
                 continue
             
-            # Conversión interna automática si la moneda es USD utilizando la tasa interna oculta
+            # Conversión interna si la moneda seleccionada es USD
             precio_base_dop = precio_lista * TASA_COMPRA_USD_INTERNA if moneda_ind == "USD" else precio_lista
             precio_con_desc = precio_base_dop * (1 - (desc_pct / 100.0))
             importe_linea_neto = cant_empaques * precio_con_desc
@@ -223,7 +233,6 @@ with tab_multiple:
             if cant <= 0 or precio_unit <= 0:
                 continue
             
-            # Conversión interna oculta si la línea indica USD
             precio_dop = precio_unit * TASA_COMPRA_USD_INTERNA if mon == "USD" else precio_unit
             importe_linea = cant * precio_dop
             subtotal_lote_dop += importe_linea
