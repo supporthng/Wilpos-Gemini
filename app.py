@@ -170,7 +170,7 @@ with st.sidebar.expander("Ver / Editar Equivalencias"):
             st.rerun()
 
 # ==========================================
-# MOTOR GENERALIZADO DE NORMALIZACIÓN Y SIMILITUD
+# MOTOR DE NORMALIZACIÓN Y COMPARACIÓN CRUZADA DE PRESENTACIONES
 # ==========================================
 GLOBAL_SYNONYMS = {
     "JW ": "JOHNIE WALKER ",
@@ -180,16 +180,6 @@ GLOBAL_SYNONYMS = {
     "BUCHANAN": "BUCHANANS",
     "CHIV ": "CHIVAS REGAL ",
     "CHIVAS": "CHIVAS REGAL",
-    "0.5 LT": "500ML",
-    "0.5LT": "500ML",
-    "1 LT": "1000ML",
-    "1LT": "1000ML",
-    "75 CL": "750ML",
-    "75CL": "750ML",
-    "1 L": "1000ML",
-    "1L": "1000ML",
-    "37.5 CL": "375ML",
-    "375 ML": "375ML",
     "RON ": "",
     "WHISKY ": "",
     "WISKY ": "",
@@ -208,10 +198,32 @@ def normalize_text(text):
     cleaned = re.sub(r'[^A-Z0-9\s]', ' ', upper)
     return re.sub(r'\s+', ' ', cleaned).strip()
 
+def extract_and_normalize_size(text):
+    """Extrae y estandariza cualquier presentación/volumen (ej: 700ml, 1L, 1.75LT -> 700ML, 1000ML, 1750ML)."""
+    match = re.search(r'(\d+(?:\.\d+)?\s*(?:ML|L|LT|CL|OZ))', str(text), re.IGNORECASE)
+    if not match:
+        return None
+    raw = re.sub(r'\s+', '', match.group(1)).upper()
+    if raw.endswith("LT") or (raw.endswith("L") and not raw.endswith("ML") and not raw.endswith("CL") and not raw.endswith("OZ")):
+        num_str = raw.replace("LT", "").replace("L", "")
+        try:
+            val = float(num_str)
+            ml_val = int(val * 1000)
+            return f"{ml_val}ML"
+        except ValueError:
+            pass
+    elif raw.endswith("CL"):
+        try:
+            val = float(raw.replace("CL", ""))
+            return f"{int(val * 10)}ML"
+        except ValueError:
+            pass
+    return raw
+
 def get_tokens(text):
     norm = normalize_text(text)
-    stopwords = {"DE", "EL", "LA", "LOS", "LAS", "Y", "EN", "UN", "UNA", "CON", "CMS", "CM", "ML", "L", "BOT", "SCATOLA"}
-    tokens = [t for t in norm.split() if t not in stopwords]
+    stopwords = {"DE", "EL", "LA", "LOS", "LAS", "Y", "EN", "UN", "UNA", "CON", "CMS", "CM", "ML", "L", "LT", "CL", "BOT", "SCATOLA"}
+    tokens = [t for t in norm.split() if t not in stopwords and not t.isdigit()]
     return set(tokens), norm
 
 def validate_with_master(item_description, original_code):
@@ -225,13 +237,23 @@ def validate_with_master(item_description, original_code):
     if norm_desc in master_dict:
         return master_dict[norm_desc], "Actualizado (Exacto Normalizado)"
         
-    desc_tokens, desc_clean = get_tokens(item_description)
+    inv_size = extract_and_normalize_size(item_description)
+    desc_tokens, _ = get_tokens(item_description)
+    
     best_match_code = original_code
     best_match_name = ""
     highest_score = 0.0
     
+    # REVISIÓN CRUZADA DE TODAS LAS PRESENTACIONES EN EL MAESTRO
     for m_name, m_code in master_dict.items():
-        m_tokens, m_clean = get_tokens(m_name)
+        m_size = extract_and_normalize_size(m_name)
+        
+        # COMPARACIÓN CRUZADA ESTRICTA DE PRESENTACIONES:
+        # Si la factura trae un tamaño/volumen y el maestro tiene otro tamaño para la misma marca, se bloquea estrictamente.
+        if inv_size and m_size and inv_size != m_size:
+            continue
+            
+        m_tokens, _ = get_tokens(m_name)
         if not desc_tokens or not m_tokens:
             continue
             
@@ -241,11 +263,15 @@ def validate_with_master(item_description, original_code):
         
         weight = 1.0
         for token in intersection:
-            if token.isdigit() or len(token) > 3:
-                weight += 0.35
-            elif len(token) <= 3:
+            if len(token) > 3:
+                weight += 0.40
+            else:
                 weight += 0.10
                 
+        # Bono adicional si el tamaño coincide perfectamente
+        if inv_size and m_size and inv_size == m_size:
+            weight += 0.50
+            
         score = jaccard * weight
         
         if score > highest_score and len(intersection) >= 1:
@@ -253,15 +279,17 @@ def validate_with_master(item_description, original_code):
             best_match_code = m_code
             best_match_name = m_name
             
-    if highest_score >= 0.22:
-        return best_match_code, f"Actualizado (IA Semántica: {best_match_name})"
+    if highest_score >= 0.28:
+        return best_match_code, f"Actualizado (IA Presentación Cruzada: {best_match_name})"
         
-    matches = difflib.get_close_matches(norm_desc, list(master_dict.keys()), n=1, cutoff=0.25)
+    matches = difflib.get_close_matches(norm_desc, list(master_dict.keys()), n=1, cutoff=0.30)
     if matches:
         matched_name = matches[0]
-        return master_dict[matched_name], f"Actualizado (Similitud: {matched_name})"
+        m_size = extract_and_normalize_size(matched_name)
+        if not inv_size or not m_size or inv_size == m_size:
+            return master_dict[matched_name], f"Actualizado (Similitud: {matched_name})"
 
-    return original_code, "⚠️ No Encontrado en Maestro"
+    return original_code, "⚠️ No Encontrado en Maestro (Presentación Única / Sin Coincidencia)"
 
 def process_invoice_with_ai(file_obj, file_type):
     memory_context = ""
@@ -274,7 +302,7 @@ def process_invoice_with_ai(file_obj, file_type):
     prompt_text = (
         f"{memory_context}\n"
         "Analiza esta factura detalladamente. Extrae los datos de cabecera con absoluta precisión: 'emisor_rnc', 'emisor_nombre', 'numero_documento', 'fecha', 'subtotal', 'itbis', 'total'. "
-        "Para cada ítem, extrae con extrema precisión: 'codigo' (el código interno entre corchetes, ej: C071904), 'descripcion' (nombre del producto limpio), 'cantidad' (número de unidades o cajas compradas), 'empaque' (unidades individuales por caja, por defecto 1), y 'costo_sin_itbis' (EL COSTO UNITARIO REAL EXACTO POR UNIDAD: si la factura muestra el monto total de la línea y la cantidad, divide el total de la línea entre la cantidad para obtener el costo unitario exacto por pieza, sin redondear ni omitir decimales). "
+        "Para cada ítem, extrae con extrema precisión: 'codigo' (código interno entre corchetes, ej: C071904), 'descripcion' (nombre completo del producto incluyendo su volumen exacto o presentación, ej: GREY GOOSE 50ml, VINO 750ml), 'cantidad' (número de unidades o cajas compradas), 'empaque' (unidades individuales por caja, por defecto 1), y 'costo_sin_itbis' (EL COSTO UNITARIO REAL EXACTO POR CADA PIEZA INDIVIDUAL: si la factura muestra el monto total de la línea, divídelo estrictamente entre Cantidad * Empaque para obtener el costo de una sola pieza suelta). "
         "Devuelve la información estrictamente en formato JSON con la siguiente estructura exacta: "
         '{"emisor_rnc": "...", "emisor_nombre": "...", "numero_documento": "...", "fecha": "...", "subtotal": 0.0, "itbis": 0.0, "total": 0.0, "items": [{"codigo": "...", "descripcion": "...", "cantidad": 1, "empaque": 1, "costo_sin_itbis": 0.0}]}. '
         "REGLA CRÍTICA: Respuesta JSON pura sin texto adicional."
@@ -314,7 +342,7 @@ def process_invoice_with_ai(file_obj, file_type):
         if rnc_key and rnc_key not in st.session_state["provider_memory"]:
             st.session_state["provider_memory"][rnc_key] = {
                 "nombre": nombre_prov if nombre_prov and nombre_prov != "None" else f"Proveedor RNC {rnc_key}",
-                "nota_formato": "Formato de cajas con empaques y costos unitarios procesados exitosamente."
+                "nota_formato": "Formato de cajas con empaques y costos unitarios por pieza procesados exitosamente."
             }
             save_provider_memory(st.session_state["provider_memory"])
 
@@ -348,11 +376,66 @@ def process_invoice_with_ai(file_obj, file_type):
     return parsed_data, success_msg
 
 # ==========================================
+# CONSOLIDACIÓN Y NOTIFICACIÓN DE CRUCES ENTRE FACTURAS
+# ==========================================
+def consolidate_items_with_tracking(raw_items_with_source):
+    consolidated_dict = {}
+    cross_notifications = []
+    
+    for entry in raw_items_with_source:
+        invoice_name = entry["invoice_name"]
+        item = entry["item"]
+        
+        desc = str(item.get("descripcion", ""))
+        orig_code = str(item.get("codigo", "")).strip()
+        final_code, status_match = validate_with_master(desc, orig_code)
+        
+        key = final_code if final_code and "No Encontrado" not in status_match else desc.upper()
+        
+        cant = safe_int(item.get("cantidad", 1), 1)
+        empaque = safe_int(item.get("empaque", 1), 1)
+        stock = cant * empaque
+        costo = safe_float(item.get("costo_sin_itbis", 0))
+        
+        if key in consolidated_dict:
+            existing = consolidated_dict[key]
+            total_stock_prev = existing["stock_total"]
+            new_total_stock = total_stock_prev + stock
+            
+            total_cost_spent = (existing["costo"] * total_stock_prev) + (costo * stock)
+            avg_cost = total_cost_spent / new_total_stock if new_total_stock > 0 else costo
+            
+            existing["stock_total"] = new_total_stock
+            existing["cantidad_comprada"] += cant
+            existing["costo"] = round(avg_cost, 4)
+            existing["sources"].append(invoice_name)
+            
+            cross_notifications.append({
+                "producto": desc,
+                "codigo": final_code,
+                "factura": invoice_name,
+                "stock_agregado": stock
+            })
+        else:
+            consolidated_dict[key] = {
+                "codigo_barra": final_code,
+                "nombre": desc,
+                "cantidad_comprada": cant,
+                "empaque": empaque,
+                "stock_total": stock,
+                "costo": costo,
+                "estado_maestro": status_match,
+                "sources": [invoice_name]
+            }
+            
+    return list(consolidated_dict.values()), cross_notifications
+
+# ==========================================
 # MÓDULO 1: FACTURA INDIVIDUAL
 # ==========================================
 if modulo == "📄 Factura Individual":
     st.title("📊 Automatizador de Facturas para WilPOS (Individual)")
-    st.markdown("Sube tu factura para extraer sus ítems, validar códigos con tu maestro POS y generar la plantilla actualizada.")
+    st.markdown("Sube tu factura para extraer sus ítems, validar presentaciones con tu maestro POS y generar la plantilla actualizada.")
 
     uploaded_file = st.file_uploader("Sube tu factura (PDF o Imagen)", type=["pdf", "png", "jpg", "jpeg"], key="single_file")
 
@@ -400,7 +483,7 @@ if modulo == "📄 Factura Individual":
         if st.button("🚀 Procesar Factura") or st.session_state["use_paid_now"]:
             file_type = uploaded_file.type if hasattr(uploaded_file, 'type') else 'image/jpeg'
             
-            with st.spinner("Analizando factura y calculando costos exactos..."):
+            with st.spinner("Analizando factura y realizando comparación cruzada de presentaciones..."):
                 parsed_data, success_msg = process_invoice_with_ai(uploaded_file, file_type)
 
             if parsed_data:
@@ -522,8 +605,8 @@ if modulo == "📄 Factura Individual":
 # MÓDULO 2: MÚLTIPLES FACTURAS (LOTE)
 # ==========================================
 elif modulo == "📂 Múltiples Facturas (Lote)":
-    st.title("📂 Procesador por Lotes (Sincronizado con Maestro y Desglose)")
-    st.markdown("Sube varias facturas. El sistema validará los ítems, clasificará los actualizados vs no actualizados y consolidará el inventario.")
+    st.title("📂 Procesador por Lotes (Validación de Presentaciones y Trazabilidad)")
+    st.markdown("Sube varias facturas. El sistema validará todas las presentaciones cruzadas, consolidará duplicados y te notificará los cruces.")
 
     if st.session_state["quota_exceeded"]:
         @st.dialog("⚠️ Confirmación Requerida: Límite de Cuota Alcanzado")
@@ -569,8 +652,8 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
                 else:
                     st.info(f"El archivo '{f_item.name}' está cargado correctamente.")
 
-        if st.button("🚀 Procesar Lote y Validar con Maestro", type="primary"):
-            all_consolidated_items = []
+        if st.button("🚀 Procesar Lote, Consolidar y Validar Presentaciones", type="primary"):
+            all_raw_items_with_source = []
             invoice_totals_summary = []
             duplicate_count = 0
             batch_signatures = set()
@@ -582,7 +665,6 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
                 status_text.text(f"Analizando archivo {i+1} de {len(uploaded_files)}: {file.name}...")
                 file_type = file.type if hasattr(file, 'type') else 'image/jpeg'
                 
-                # REINICIO CRÍTICO DEL BÚFER ANTES DE PROCESAR
                 file.seek(0)
                 parsed_data, _ = process_invoice_with_ai(file, file_type)
 
@@ -615,14 +697,28 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
 
                         items = parsed_data.get("items", [])
                         if isinstance(items, list):
-                            all_consolidated_items.extend(items)
+                            for it in items:
+                                all_raw_items_with_source.append({
+                                    "invoice_name": file.name,
+                                    "item": it
+                                })
 
                 progress_bar.progress((i + 1) / len(uploaded_files))
 
-            status_text.text("¡Procesamiento por lotes completado!")
+            status_text.text("Consolidando ítems, validando presentaciones y detectando cruces...")
+            consolidated_items, cross_notifications = consolidate_items_with_tracking(all_raw_items_with_source)
+
+            status_text.text("¡Procesamiento completo!")
             
             if duplicate_count > 0:
                 st.error(f"🚨 Se detectaron y filtraron **{duplicate_count} archivo(s) duplicado(s)** dentro de la selección actual.")
+
+            if cross_notifications:
+                st.markdown("### 🔔 Notificación de Productos Cruzados (Múltiples Facturas)")
+                st.info(f"Se detectaron **{len(cross_notifications)} coincidencias** de productos repetidos en distintas facturas del lote. Sus stocks se han sumado y sus costos se han promediado ponderadamente.")
+                df_cross = pd.DataFrame(cross_notifications)
+                df_cross.columns = ["Descripción del Producto", "Código Barra / Ref", "Factura de Cruce", "Stock Añadido"]
+                st.dataframe(df_cross, use_container_width=True, hide_index=True)
 
             if invoice_totals_summary:
                 st.markdown("### 🏢 Proveedores Identificados y Totales por Factura")
@@ -638,45 +734,45 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
                 c_l2.metric("ITBIS Acumulado Lote", f"RD$ {t_itbis:,.2f}")
                 c_l3.metric("Total General Acumulado", f"RD$ {t_gen:,.2f}")
 
-            if all_consolidated_items:
+            if consolidated_items:
                 st.markdown("---")
-                st.markdown(f"### 📦 Consolidado de Ítems ({len(all_consolidated_items)} productos totales)")
+                st.markdown(f"### 📦 Consolidado Único de Productos ({len(consolidated_items)} productos finales)")
 
                 rows_preview = []
                 unmatched_batch = []
                 matched_batch_count = 0
 
-                for idx, item in enumerate(all_consolidated_items, start=1):
-                    desc = str(item.get("descripcion", ""))
-                    orig_code = str(item.get("codigo", "")).strip()
+                for idx, c_item in enumerate(consolidated_items, start=1):
+                    desc = c_item["nombre"]
+                    final_code = c_item["codigo_barra"]
+                    status_match = c_item["estado_maestro"]
                     
-                    final_code, status_match = validate_with_master(desc, orig_code)
                     if "No Encontrado" in status_match or "Sin Maestro" in status_match:
                         unmatched_batch.append({
                             "No.": idx,
                             "Descripción Proveedor": desc,
-                            "Código Original": orig_code,
+                            "Código Original": final_code,
                             "Estado": status_match
                         })
                     else:
                         matched_batch_count += 1
 
-                    costo = safe_float(item.get("costo_sin_itbis", 0))
+                    costo = c_item["costo"]
                     raw_pv = (costo * 1.25) * 1.18
                     precio_venta = round_to_nearest_5(raw_pv)
-                    cant_comprada = safe_int(item.get("cantidad", 1), 1)
-                    empaque_val = safe_int(item.get("empaque", 1), 1)
-                    stock_val = cant_comprada * empaque_val
+                    stock_val = c_item["stock_total"]
+                    empaque_val = c_item["empaque"]
                     
                     rows_preview.append({
                         "No.": idx,
                         "Código Barra POS": final_code,
                         "Nombre": desc,
-                        "Cant. Compra": cant_comprada,
+                        "Cant. Compra": c_item["cantidad_comprada"],
                         "Empaque": empaque_val,
                         "Stock Total": stock_val,
                         "Costo Unit. Sin ITBIS": costo,
                         "Precio Venta (M5)": precio_venta,
+                        "Fuentes": ", ".join(set(c_item["sources"])),
                         "Estado Maestro": status_match
                     })
 
