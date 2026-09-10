@@ -54,20 +54,20 @@ with tab_individual:
     
     archivo_subido = st.file_uploader("📂 Cargar Factura (PDF o Imagen)", type=["pdf", "png", "jpg", "jpeg"], key="uploader_ind")
     
+    texto_extraido_debug = ""
     if archivo_subido is not None:
         extension = archivo_subido.name.split('.')[-1].lower()
-        texto_extraido = ""
         
         if extension == "pdf":
             with pdfplumber.open(archivo_subido) as pdf:
                 for pagina in pdf.pages:
-                    texto_extraido += pagina.extract_text() or ""
+                    texto_extraido_debug += pagina.extract_text() or ""
         else:
             imagen = Image.open(archivo_subido)
             st.image(imagen, caption=f"Vista previa: {archivo_subido.name}", use_container_width=True)
-            texto_extraido = "IMAGEN_CARGADA"
+            texto_extraido_debug = "IMAGEN_CARGADA"
 
-        texto_upper = texto_extraido.upper()
+        texto_upper = texto_extraido_debug.upper()
         
         # 1. AUTODETECCIÓN DE ÁLVAREZ & SÁNCHEZ
         if "ALVAREZ" in texto_upper or "ALVAREZYSANCHEZ" in texto_upper or "4655" in texto_upper:
@@ -123,24 +123,29 @@ with tab_individual:
             ])
             st.success("🤖 ¡Autodetección completada: Centro de Distribucion Cristian SRL (CDC)!")
         else:
-            st.warning("⚠️ No se pudo reconocer el formato automáticamente. Puedes ajustar los datos abajo.")
-
-        st.rerun()
+            st.warning("⚠️ No se pudo reconocer el formato automáticamente. Revisa el texto extraído abajo para ver qué palabras contiene.")
+            if texto_extraido_debug and texto_extraido_debug != "IMAGEN_CARGADA":
+                with st.expander("🔍 Ver texto bruto extraído del PDF (para depuración)"):
+                    st.text(texto_extraido_debug)
 
     st.divider()
     
     col_f1, col_f2 = st.columns(2)
     with col_f1:
-        # Usar key vinculada directamente al session_state para que se actualice visualmente
-        st.text_input("Proveedor (Autodetectado)", key="prov_val")
-        st.text_input("No. de Factura / NCF", key="nfc_val")
+        proveedor_ind = st.text_input("Proveedor (Autodetectado)", value=st.session_state.prov_val)
+        nro_factura = st.text_input("No. de Factura / NCF", value=st.session_state.nfc_val)
     with col_f2:
-        st.selectbox("Moneda de la Factura", ["DOP", "USD"], key="mon_val")
-        st.radio(
+        mon_options = ["DOP", "USD"]
+        mon_index = mon_options.index(st.session_state.mon_val) if st.session_state.mon_val in mon_options else 0
+        moneda_ind = st.selectbox("Moneda de la Factura", mon_options, index=mon_index)
+        
+        emp_options = ["Por Cajas / Empaques (con unidades por caja)", "Unidades Directas"]
+        emp_index = emp_options.index(st.session_state.emp_val) if st.session_state.emp_val in emp_options else 0
+        tipo_empaque = st.radio(
             "Cálculo por Unidad (Autodetectado):", 
-            ["Por Cajas / Empaques (con unidades por caja)", "Unidades Directas"], 
-            horizontal=True,
-            key="emp_val"
+            emp_options, 
+            index=emp_index,
+            horizontal=True
         )
 
     st.divider()
@@ -162,10 +167,6 @@ with tab_individual:
             if cant_empaques <= 0 or precio_lista <= 0:
                 continue
             
-            # Leer valores directamente desde el session_state
-            moneda_ind = st.session_state.mon_val
-            tipo_empaque = st.session_state.emp_val
-
             precio_base_dop = precio_lista * TASA_COMPRA_USD_INTERNA if moneda_ind == "USD" else precio_lista
             precio_con_desc = precio_base_dop * (1 - (desc_pct / 100.0))
             importe_linea_neto = cant_empaques * precio_con_desc
