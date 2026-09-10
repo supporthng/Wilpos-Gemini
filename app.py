@@ -68,7 +68,7 @@ if st.sidebar.button("🧹 Restablecer Memoria de Duplicados"):
 # ==========================================
 if modulo == "📄 Factura Individual":
     st.title("📊 Automatizador de Facturas para WilPOS (Individual)")
-    st.markdown("Sube tu factura. El sistema cuenta con **control anti-duplicados** para evitar procesar dos veces el mismo documento basándose en su emisor, número de factura, fecha y monto total.")
+    st.markdown("Sube tu factura. El sistema cuenta con **control anti-duplicados** y cálculo exacto de costos unitarios netos sin ITBIS.")
 
     uploaded_file = st.file_uploader("Sube tu factura (PDF o Imagen)", type=["pdf", "png", "jpg", "jpeg"], key="single_file")
 
@@ -79,10 +79,11 @@ if modulo == "📄 Factura Individual":
             paid_confirmation_dialog()
 
         if st.button("🚀 Procesar Factura con Control Anti-Duplicados") or st.session_state["use_paid_now"]:
-            with st.spinner("Analizando factura y verificando duplicidad..."):
+            with st.spinner("Analizando factura, calculando costos reales y verificando duplicidad..."):
                 prompt_text = (
                     "Analiza esta factura o cotización detalladamente. Extrae los datos de cabecera: 'emisor_rnc', 'numero_documento', 'fecha', 'total'. "
-                    "Para cada ítem, extrae: 'codigo', 'descripcion', 'cantidad' (cantidad comprada, ej: 2, 4, 10, 20), 'empaque' (unidades por empaque, ej: 1, 10, 12, 24, o 1 si es por unidad directa), y 'costo_sin_itbis' (calculado dividiendo el valor neto sin ITBIS entre el total de unidades individuales: cantidad * empaque). "
+                    "Para cada ítem, extrae: 'codigo', 'descripcion', 'cantidad' (la cantidad comprada, ej: 10, 20), 'empaque' (unidades por empaque, ej: 1 si es por unidad directa), y 'costo_sin_itbis'. "
+                    "REGLA CRÍTICA PARA EL COSTO: Los precios mostrados en las líneas de la factura suelen incluir impuestos o representar el monto total de la línea. Debes calcular rigurosamente el costo unitario real SIN ITBIS por cada unidad individual (descontando el ITBIS global si aplica y dividiendo entre cantidad * empaque). "
                     "Devuelve la información estrictamente en formato JSON con la siguiente estructura exacta: "
                     '{"emisor_rnc": "...", "numero_documento": "...", "fecha": "...", "total": "...", "items": [{"codigo": "...", "descripcion": "...", "cantidad": 1, "empaque": 1, "costo_sin_itbis": 0.0}]}. '
                     "REGLA CRÍTICA PARA CÓDIGOS DE BARRAS: Preserva todos los ceros a la izquierda como texto. Respuesta JSON pura sin texto adicional."
@@ -276,7 +277,7 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
 
                 prompt_text = (
                     "Analiza esta factura o cotización detalladamente. Extrae los datos de cabecera: 'emisor_rnc', 'numero_documento', 'fecha', 'total'. "
-                    "Para cada ítem, extrae: 'codigo', 'descripcion', 'cantidad' (cantidad comprada), 'empaque' (unidades por empaque), y 'costo_sin_itbis'. "
+                    "Para cada ítem, extrae: 'codigo', 'descripcion', 'cantidad' (cantidad comprada), 'empaque' (unidades por empaque), y 'costo_sin_itbis' (calculado por unidad real sin ITBIS). "
                     "Devuelve la información estrictamente en formato JSON con la siguiente estructura exacta: "
                     '{"emisor_rnc": "...", "numero_documento": "...", "fecha": "...", "total": "...", "items": [{"codigo": "...", "descripcion": "...", "cantidad": 1, "empaque": 1, "costo_sin_itbis": 0.0}]}. '
                     "REGLA CRÍTICA: Preserva todos los ceros a la izquierda como texto. Respuesta JSON pura sin texto adicional."
