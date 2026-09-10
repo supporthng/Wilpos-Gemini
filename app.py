@@ -82,7 +82,7 @@ if modulo == "📄 Factura Individual":
             with st.spinner("Analizando factura y verificando duplicidad..."):
                 prompt_text = (
                     "Analiza esta factura o cotización detalladamente. Extrae los datos de cabecera: 'emisor_rnc', 'numero_documento', 'fecha', 'total'. "
-                    "Para cada ítem, extrae: 'codigo', 'descripcion', 'cantidad' (cantidad comprada, ej: 2, 4, 30), 'empaque' (unidades por empaque, ej: 1, 10, 12, 24), y 'costo_sin_itbis' (calculado dividiendo el valor neto sin ITBIS entre el total de unidades individuales: cantidad * empaque). "
+                    "Para cada ítem, extrae: 'codigo', 'descripcion', 'cantidad' (cantidad comprada, ej: 2, 4, 10, 20), 'empaque' (unidades por empaque, ej: 1, 10, 12, 24, o 1 si es por unidad directa), y 'costo_sin_itbis' (calculado dividiendo el valor neto sin ITBIS entre el total de unidades individuales: cantidad * empaque). "
                     "Devuelve la información estrictamente en formato JSON con la siguiente estructura exacta: "
                     '{"emisor_rnc": "...", "numero_documento": "...", "fecha": "...", "total": "...", "items": [{"codigo": "...", "descripcion": "...", "cantidad": 1, "empaque": 1, "costo_sin_itbis": 0.0}]}. '
                     "REGLA CRÍTICA PARA CÓDIGOS DE BARRAS: Preserva todos los ceros a la izquierda como texto. Respuesta JSON pura sin texto adicional."
