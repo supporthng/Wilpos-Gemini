@@ -8,7 +8,7 @@ from PIL import Image
 st.set_page_config(page_title="WilPOS - Procesador Inteligente", page_icon="🧾", layout="wide")
 
 st.title("🧾 WilPOS - Procesador Inteligente de Facturas y Costos")
-st.write("Carga tu factura (PDF o Imagen). El sistema autodetectará el proveedor, rellenará los campos y calculará todo al instante.")
+st.write("Carga tu factura (PDF o Imagen). El sistema autodetectará el proveedor, rellenará los campos y redondeará los precios de venta a múltiplos de 5.")
 
 # Sidebar global para parámetros visibles
 st.sidebar.header("⚙️ Parámetros Globales")
@@ -125,9 +125,10 @@ with tab_individual:
         else:
             st.warning("⚠️ No se pudo reconocer el formato automáticamente. Puedes ajustar los datos abajo.")
 
+        st.rerun()
+
     st.divider()
     
-    # Campos de entrada enlazados directamente a las variables de sesión sin keys conflictivas
     col_f1, col_f2 = st.columns(2)
     with col_f1:
         proveedor_ind = st.text_input("Proveedor (Autodetectado)", value=st.session_state.prov_val)
@@ -177,7 +178,10 @@ with tab_individual:
                 costo_unitario_neto = precio_con_desc
                 
             costo_unitario_con_itbis = costo_unitario_neto * (1 + (itbis_fijo / 100.0))
-            precio_venta_sugerido = costo_unitario_con_itbis * (1 + (margen_ganancia / 100.0))
+            
+            # Precio de venta aplicando el margen y redondeando al múltiplo de 5 más cercano
+            precio_venta_bruto = costo_unitario_con_itbis * (1 + (margen_ganancia / 100.0))
+            precio_venta_sugerido = round(precio_venta_bruto / 5) * 5
             
             resultados_ind.append({
                 "Código": codigo,
@@ -185,7 +189,7 @@ with tab_individual:
                 "Cantidad": cant_empaques,
                 "Costo Unitario Neto (DOP)": round(costo_unitario_neto, 2),
                 "Costo Unit. + ITBIS": round(costo_unitario_con_itbis, 2),
-                f"Precio Venta (+{margen_ganancia}%)": round(precio_venta_sugerido, 2),
+                f"Precio Venta (+{margen_ganancia}% - Múltiplo de 5)": round(precio_venta_sugerido, 2),
                 "Importe Neto Línea": round(importe_linea_neto, 2)
             })
             
@@ -193,7 +197,7 @@ with tab_individual:
         itbis_total_dop = subtotal_neto_dop * (itbis_fijo / 100.0)
         total_general_dop = subtotal_neto_dop + itbis_total_dop
         
-        st.success("¡Cálculos de inventario y precios de venta realizados con éxito!")
+        st.success("¡Cálculos de inventario y precios de venta (múltiplos de 5) realizados con éxito!")
         st.dataframe(df_res_ind, use_container_width=True)
         
         c1, c2, c3 = st.columns(3)
@@ -236,7 +240,9 @@ with tab_multiple:
             
             costo_unit_neto = precio_dop
             costo_unit_con_itbis = costo_unit_neto * (1 + (itbis_fijo / 100.0))
-            precio_venta_sugerido = costo_unit_con_itbis * (1 + (margen_ganancia / 100.0))
+            
+            precio_venta_bruto = costo_unit_con_itbis * (1 + (margen_ganancia / 100.0))
+            precio_venta_sugerido = round(precio_venta_bruto / 5) * 5
             
             resultados_lote.append({
                 "Factura": factura_ref,
@@ -247,7 +253,7 @@ with tab_multiple:
                 "Moneda": mon,
                 "Costo Unitario Neto": round(costo_unit_neto, 2),
                 "Costo Unit. + ITBIS": round(costo_unit_con_itbis, 2),
-                f"Precio Venta (+{margen_ganancia}%)": round(precio_venta_sugerido, 2),
+                f"Precio Venta (+{margen_ganancia}% - Múltiplo de 5)": round(precio_venta_sugerido, 2),
                 "Importe Total": round(importe_linea, 2)
             })
             
