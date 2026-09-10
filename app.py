@@ -235,3 +235,104 @@ if uploaded_file is not None:
                             
                             raw_text = response.text.strip()
                             if raw_text.startswith("```json"):
+                                raw_text = raw_text[7:]
+                            if raw_text.endswith("```"):
+                                raw_text = raw_text[:-3]
+                            raw_text = raw_text.strip()
+                            
+                            data_items = json.loads(raw_text)
+                            success_msg = "✅ ¡Factura procesada con éxito rotando a la **Cuenta Gratuita #2**!"
+                        except Exception as e2:
+                            err_msg2 = str(e2)
+                            if "429" in err_msg2 or "Quota exceeded" in err_msg2:
+                                st.session_state["quota_exceeded"] = True
+                                st.rerun()
+                            else:
+                                st.error(f"Error con Cuenta Gratuita #2: {e2}")
+                    elif "429" in err_msg1 or "Quota exceeded" in err_msg1:
+                        st.session_state["quota_exceeded"] = True
+                        st.rerun()
+                    else:
+                        st.error(f"Ocurrió un error con la IA: {e1}")
+                
+                if data_items:
+                    st.success(success_msg)
+                    rows_preview = []
+                    for idx, item in enumerate(data_items, start=1):
+                        costo = safe_float(item.get("costo_sin_itbis", 0))
+                        raw_pv = (costo * 1.25) * 1.18
+                        precio_venta = round_to_nearest_5(raw_pv)
+                        cant_comprada = safe_int(item.get("cantidad", 1), 1)
+                        empaque_val = safe_int(item.get("empaque", 1), 1)
+                        stock_val = cant_comprada * empaque_val
+                        codigo_barras = str(item.get("codigo", "")).strip()
+                        
+                        rows_preview.append({
+                            "No.": idx,
+                            "Código Barra": codigo_barras,
+                            "Nombre": str(item.get("descripcion", "")),
+                            "Cant. Compra": cant_comprada,
+                            "Empaque": empaque_val,
+                            "Stock Total": stock_val,
+                            "Costo Unit. Sin ITBIS": costo,
+                            "Precio Venta (M5)": precio_venta
+                        })
+                    
+                    df_resultado = pd.DataFrame(rows_preview)
+                    st.dataframe(df_resultado, use_container_width=True, hide_index=True)
+                    
+                    template_path = "Plantilla_Inventario_WilPOS_2.xlsx"
+                    if not os.path.exists(template_path):
+                        template_path = "Plantilla_Inventario_WilPOS.xlsx"
+                        
+                    if os.path.exists(template_path):
+                        wb = openpyxl.load_workbook(template_path)
+                        ws_prod = wb['Productos']
+                        ws_prod.delete_rows(2, ws_prod.max_row)
+                    else:
+                        wb = openpyxl.Workbook()
+                        ws_prod = wb.active
+                        ws_prod.title = "Productos"
+                        ws_prod.append(['Nombre', 'Código Barra', 'Categoría', 'Tipo', 'Precio Venta', 'Costo', 'Stock', 'Stock Mínimo', 'ITBIS', 'Unidad Medida', 'Venta Granel', 'Cantidad Empaque', 'Precio Variable', 'Descuento %', 'Descuento Monto', 'Precio Especial', 'Descuento Activo', 'Descuento Nota'])
+                    
+                    for item_dict in data_items:
+                        costo = safe_float(item_dict.get("costo_sin_itbis", 0))
+                        raw_pv = (costo * 1.25) * 1.18
+                        pv = round_to_nearest_5(raw_pv)
+                        cant_comprada = safe_int(item_dict.get("cantidad", 1), 1)
+                        empaque_val = safe_int(item_dict.get("empaque", 1), 1)
+                        stock_val = cant_comprada * empaque_val
+                        codigo_barras = str(item_dict.get("codigo", "")).strip()
+                        
+                        ws_prod.append([
+                            str(item_dict.get("descripcion", "")),
+                            codigo_barras,
+                            "General",
+                            "producto",
+                            pv,
+                            costo,
+                            stock_val,
+                            5,
+                            0.18,
+                            "unidad",
+                            "No",
+                            empaque_val,
+                            "No",
+                            0,
+                            0,
+                            None,
+                            "No",
+                            None
+                        ])
+                        ws_prod.cell(row=ws_prod.max_row, column=2).number_format = '@'
+                    
+                    output = io.BytesIO()
+                    wb.save(output)
+                    excel_data = output.getvalue()
+                    
+                    st.download_button(
+                        label="📥 Descargar Excel Plantilla WilPOS Actualizada",
+                        data=excel_data,
+                        file_name="Inventario_WilPOS_Actualizado.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                    )
