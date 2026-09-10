@@ -12,8 +12,9 @@ st.set_page_config(page_title="WilPOS - Automatizador con Plantilla", page_icon=
 st.title("📊 Automatizador de Facturas para WilPOS (Plantilla Oficial)")
 st.markdown("Sube tu factura. La app extraerá los productos mostrando **solo el nombre y el tamaño**, calculará la fórmula (**Costo + 25% + 18% ITBIS** con redondeo a **múltiplos de 5**), mantendrá los **ceros a la izquierda** en los códigos de barras y usará la **Plantilla Oficial de WilPOS**.")
 
-# Configurar API Keys de Gemini desde Streamlit Secrets
-free_api_key = st.secrets.get("GEMINI_API_KEY", "")
+# Configurar claves desde Streamlit Secrets (Soporta múltiples cuentas gratuitas y pago opcional)
+free_key_1 = st.secrets.get("GEMINI_API_KEY", "")
+free_key_2 = st.secrets.get("GEMINI_API_KEY_2", "")
 paid_api_key = st.secrets.get("GEMINI_API_KEY_PAID", "")
 
 uploaded_file = st.file_uploader("Sube tu factura (Imagen o PDF)", type=["pdf", "png", "jpg", "jpeg"])
@@ -40,12 +41,12 @@ if uploaded_file is not None:
     st.success(f"¡Factura cargada: {uploaded_file.name}!")
     
     if st.session_state["quota_exceeded"]:
-        st.warning("⚠️ **Se han agotado las solicitudes gratuitas de Gemini (Límite diario superado).**")
-        confirm_paid = st.checkbox("¿Deseas procesar esta factura utilizando la versión de pago?")
+        st.warning("⚠️ **Se han agotado todas las solicitudes de las cuentas gratuitas principales.**")
+        confirm_paid = st.checkbox("¿Deseas procesar esta factura utilizando la versión de pago (o tienes otra clave adicional)?")
         
         if confirm_paid:
-            if st.button("🚀 Continuar con la Versión de Pago"):
-                with st.spinner("Procesando factura con la versión de pago..."):
+            if st.button("🚀 Continuar con Versión Alternativa / Pago"):
+                with st.spinner("Procesando factura..."):
                     try:
                         genai.configure(api_key=paid_api_key)
                         model_paid = genai.GenerativeModel('gemini-3.6-flash')
@@ -75,7 +76,7 @@ if uploaded_file is not None:
                         
                         data_items = json.loads(raw_text)
                         st.session_state["quota_exceeded"] = False
-                        st.success("✅ ¡Factura procesada exitosamente con la versión de pago!")
+                        st.success("✅ ¡Factura procesada exitosamente!")
                         
                         rows_preview = []
                         for idx, item in enumerate(data_items, start=1):
@@ -97,7 +98,10 @@ if uploaded_file is not None:
                         df_resultado = pd.DataFrame(rows_preview)
                         st.dataframe(df_resultado, use_container_width=True, hide_index=True)
                         
-                        template_path = "Plantilla_Inventario_WilPOS.xlsx"
+                        template_path = "Plantilla_Inventario_WilPOS_2.xlsx"
+                        if not os.path.exists(template_path):
+                            template_path = "Plantilla_Inventario_WilPOS.xlsx"
+                            
                         if os.path.exists(template_path):
                             wb = openpyxl.load_workbook(template_path)
                             ws_prod = wb['Productos']
@@ -149,16 +153,19 @@ if uploaded_file is not None:
                             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                         )
                     except Exception as err_paid:
-                        st.error(f"Error al procesar con la versión de pago: {err_paid}")
+                        st.error(f"Error al procesar: {err_paid}")
     else:
         if st.button("🚀 Procesar Factura con Plantilla Oficial"):
-            with st.spinner("Analizando factura con la cuota gratuita..."):
+            with st.spinner("Analizando factura..."):
                 data_items = None
+                success_msg = ""
+                
+                # Intento 1: Cuenta Gratuita Principal (GEMINI_API_KEY)
                 try:
-                    if not free_api_key:
-                        raise Exception("No free API key found")
+                    if not free_key_1:
+                        raise Exception("No free key 1")
                     
-                    genai.configure(api_key=free_api_key)
+                    genai.configure(api_key=free_key_1)
                     model = genai.GenerativeModel('gemini-3.6-flash')
                     
                     uploaded_file.seek(0)
@@ -185,17 +192,56 @@ if uploaded_file is not None:
                     raw_text = raw_text.strip()
                     
                     data_items = json.loads(raw_text)
-                    st.success("✅ ¡Factura procesada exitosamente usando la cuota gratuita!")
+                    success_msg = "✅ ¡Factura procesada exitosamente usando la **Cuenta Gratuita #1**!"
                     
-                except Exception as e:
-                    err_msg = str(e)
-                    if "429" in err_msg or "Quota exceeded" in err_msg or "No free API key" in err_msg:
+                except Exception as e1:
+                    err_msg1 = str(e1)
+                    # Si falla la cuota 1, intentamos automáticamente con la Cuenta Gratuita #2 (GEMINI_API_KEY_2)
+                    if ("429" in err_msg1 or "Quota exceeded" in err_msg1 or "No free key 1" in err_msg1) and free_key_2:
+                        try:
+                            genai.configure(api_key=free_key_2)
+                            model2 = genai.GenerativeModel('gemini-3.6-flash')
+                            
+                            uploaded_file.seek(0)
+                            file_bytes = uploaded_file.read()
+                            
+                            prompt = (
+                                "Extrae todos los productos de esta factura en formato JSON puro (una lista de objetos con claves exactas: 'codigo', 'descripcion', 'costo_sin_itbis', 'empaque', 'stock'). "
+                                "REGLA PARA DESCRIPCIÓN: Limpia la descripción del producto para que solo incluya el nombre principal y su tamaño/gramaje (ejemplo: 'RUFFLES CHEDDAR 120G', eliminando términos como TA, CS, 16X1). "
+                                "REGLA CRÍTICA PARA CÓDIGOS: Trata el campo 'codigo' estrictamente como texto (string). NO elimines los ceros a la izquierda (por ejemplo, '0300055292'). "
+                                "Nota importante: 'stock' y 'empaque' deben ser valores numéricos enteros. Si no hay stock, pon 1. "
+                                "Calcula el costo unitario sin ITBIS y asegúrate de que sea una respuesta JSON válida sin texto adicional."
+                            )
+                            
+                            response = model2.generate_content([
+                                {'mime_type': uploaded_file.type if hasattr(uploaded_file, 'type') else 'image/jpeg', 'data': file_bytes},
+                                prompt
+                            ])
+                            
+                            raw_text = response.text.strip()
+                            if raw_text.startswith("```json"):
+                                raw_text = raw_text[7:]
+                            if raw_text.endswith("```"):
+                                raw_text = raw_text[:-3]
+                            raw_text = raw_text.strip()
+                            
+                            data_items = json.loads(raw_text)
+                            success_msg = "✅ ¡Factura procesada exitosamente rotando a la **Cuenta Gratuita #2**!"
+                        except Exception as e2:
+                            err_msg2 = str(e2)
+                            if "429" in err_msg2 or "Quota exceeded" in err_msg2:
+                                st.session_state["quota_exceeded"] = True
+                                st.rerun()
+                            else:
+                                st.error(f"Error con la Cuenta Gratuita #2: {e2}")
+                    elif "429" in err_msg1 or "Quota exceeded" in err_msg1:
                         st.session_state["quota_exceeded"] = True
                         st.rerun()
                     else:
-                        st.error(f"Ocurrió un error al procesar con la IA: {e}")
+                        st.error(f"Ocurrió un error al procesar con la IA: {e1}")
                 
                 if data_items:
+                    st.success(success_msg)
                     rows_preview = []
                     for idx, item in enumerate(data_items, start=1):
                         costo = safe_float(item.get("costo_sin_itbis", 0))
@@ -216,7 +262,10 @@ if uploaded_file is not None:
                     df_resultado = pd.DataFrame(rows_preview)
                     st.dataframe(df_resultado, use_container_width=True, hide_index=True)
                     
-                    template_path = "Plantilla_Inventario_WilPOS.xlsx"
+                    template_path = "Plantilla_Inventario_WilPOS_2.xlsx"
+                    if not os.path.exists(template_path):
+                        template_path = "Plantilla_Inventario_WilPOS.xlsx"
+                        
                     if os.path.exists(template_path):
                         wb = openpyxl.load_workbook(template_path)
                         ws_prod = wb['Productos']
