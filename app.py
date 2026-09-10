@@ -9,8 +9,8 @@ from PIL import Image
 
 st.set_page_config(page_title="WilPOS - Automatizador Inteligente de Facturas", page_icon="📊", layout="wide")
 
-st.title("📊 Automatizador de Facturas para WilPOS (Detección Inteligente de Empaques)")
-st.markdown("Sube cualquier factura. La IA detectará automáticamente el tipo de empaque (Caja, Paquete, Lata, Botella), calculará las cantidades y el **costo unitario exacto sin ITBIS**, aplicará la fórmula del **25% de margen + 18% ITBIS** con redondeo a **múltiplos de 5**, y generará el Excel usando la **Plantilla Oficial de WilPOS**.")
+st.title("📊 Automatizador de Facturas para WilPOS (Cálculo Exacto de Stock y Costos)")
+st.markdown("Sube tu factura. La IA detectará los empaques, calculará el costo unitario sin ITBIS y el **stock total correcto multiplicando la cantidad comprada por el tamaño del empaque**, aplicando la fórmula de WilPOS (**25% margen + 18% ITBIS** con redondeo a **múltiplos de 5**).")
 
 free_key_1 = st.secrets.get("GEMINI_API_KEY", "")
 free_key_2 = st.secrets.get("GEMINI_API_KEY_2", "")
@@ -54,12 +54,12 @@ if uploaded_file is not None:
                         file_bytes = uploaded_file.read()
                         
                         prompt = (
-                            "Analiza esta factura detectando los diferentes tipos de empaques (Caja, Paquete, Botella, Lata, Unidad, etc.), sus cantidades y el factor de conversión. "
-                            "Devuelve la información en formato JSON puro (una lista de objetos con claves exactas: 'codigo', 'descripcion', 'costo_sin_itbis', 'empaque', 'stock'). "
-                            "REGLA DE ORO PARA EL COSTO UNITARIO: Identifica el valor total de la línea y el ITBIS. Calcula el valor neto sin ITBIS (Valor Total - ITBIS). Luego, detecta cuántas unidades individuales componen el empaque (ej. Caja-12 = 12 unidades, Paquete-24 = 24 unidades) y divide el neto entre el total de unidades para obtener el 'costo_sin_itbis' por unidad individual exacta. "
-                            "REGLA PARA DESCRIPCIÓN: Limpia la descripción para que solo incluya el nombre principal y su tamaño (ejemplo: 'BEBIDA ENERGIZANTE CICLON 250ML', eliminando términos de empaque masivo como CS, TA, 16X1). "
-                            "REGLA CRÍTICA PARA CÓDIGOS: Trata el campo 'codigo' como texto (string) preservando todos los ceros a la izquierda. "
-                            "Stock y empaque deben ser enteros numéricos. Respuesta JSON válida sin texto adicional."
+                            "Analiza esta factura detalladamente. Para cada ítem, extrae: 'codigo', 'descripcion', 'cantidad' (la cantidad comprada de cajas/paquetes/unidades, ej: 2, 4, 5, 6), 'empaque' (cuántas unidades individuales trae cada caja o paquete, ej: 12, 24, 10, o 1 si es suelto), y el valor total e ITBIS. "
+                            "Devuelve la información en formato JSON puro (una lista de objetos con claves exactas: 'codigo', 'descripcion', 'cantidad', 'empaque', 'costo_sin_itbis'). "
+                            "REGLA DE ORO PARA EL COSTO UNITARIO: Calcula el valor neto sin ITBIS (Valor Total - ITBIS) y divídelo entre el total de unidades individuales (cantidad * empaque) para obtener el 'costo_sin_itbis' por unidad exacta. "
+                            "REGLA PARA DESCRIPCIÓN: Limpia la descripción para que solo incluya el nombre principal y su tamaño (ejemplo: 'BEBIDA ENERGIZANTE CICLON 250ML'). "
+                            "REGLA CRÍTICA PARA CÓDIGOS: Trata el campo 'codigo' como texto (string) preservando ceros a la izquierda. "
+                            "Respuesta JSON válida sin texto adicional."
                         )
                         
                         response = model_paid.generate_content([
@@ -83,18 +83,20 @@ if uploaded_file is not None:
                             costo = safe_float(item.get("costo_sin_itbis", 0))
                             raw_pv = (costo * 1.25) * 1.18
                             precio_venta = round_to_nearest_5(raw_pv)
-                            stock_val = safe_int(item.get("stock", 1), 1)
+                            cant_comprada = safe_int(item.get("cantidad", 1), 1)
                             empaque_val = safe_int(item.get("empaque", 1), 1)
+                            stock_val = cant_comprada * empaque_val
                             codigo_barras = str(item.get("codigo", "")).strip()
                             
                             rows_preview.append({
                                 "No.": idx,
                                 "Código Barra": codigo_barras,
                                 "Nombre": str(item.get("descripcion", "")),
+                                "Cant. Compra": cant_comprada,
                                 "Empaque": empaque_val,
+                                "Stock Total": stock_val,
                                 "Costo Unit. Sin ITBIS": costo,
-                                "Precio Venta (Múltiplos de 5)": precio_venta,
-                                "Stock": stock_val
+                                "Precio Venta (M5)": precio_venta
                             })
                         
                         df_resultado = pd.DataFrame(rows_preview)
@@ -118,8 +120,9 @@ if uploaded_file is not None:
                             costo = safe_float(item_dict.get("costo_sin_itbis", 0))
                             raw_pv = (costo * 1.25) * 1.18
                             pv = round_to_nearest_5(raw_pv)
+                            cant_comprada = safe_int(item_dict.get("cantidad", 1), 1)
                             empaque_val = safe_int(item_dict.get("empaque", 1), 1)
-                            stock_val = safe_int(item_dict.get("stock", 1), 1)
+                            stock_val = cant_comprada * empaque_val
                             codigo_barras = str(item_dict.get("codigo", "")).strip()
                             
                             ws_prod.append([
@@ -158,20 +161,19 @@ if uploaded_file is not None:
                         st.error(f"Error al procesar con la versión de pago: {err_paid}")
     else:
         if st.button("🚀 Procesar Factura con Plantilla Oficial"):
-            with st.spinner("Analizando factura y calculando costos unitarios..."):
+            with st.spinner("Analizando empaques, cantidades y calculando stock correcto..."):
                 data_items = None
                 success_msg = ""
                 
                 prompt_text = (
-                    "Analiza esta factura detectando los diferentes tipos de empaques (Caja, Paquete, Botella, Lata, Unidad, etc.), sus cantidades y el factor de conversión. "
-                    "Devuelve la información en formato JSON puro (una lista de objetos con claves exactas: 'codigo', 'descripcion', 'costo_sin_itbis', 'empaque', 'stock'). "
-                    "REGLA DE ORO PARA EL COSTO UNITARIO: Identifica el valor total de la línea y el ITBIS. Calcula el valor neto sin ITBIS (Valor Total - ITBIS). Luego, detecta cuántas unidades individuales componen el empaque (ej. Caja-12 = 12 unidades, Paquete-24 = 24 unidades) y divide el neto entre el total de unidades para obtener el 'costo_sin_itbis' por unidad individual exacta. "
-                    "REGLA PARA DESCRIPCIÓN: Limpia la descripción para que solo incluya el nombre principal y su tamaño (ejemplo: 'BEBIDA ENERGIZANTE CICLON 250ML', eliminando términos de empaque masivo como CS, TA, 16X1). "
-                    "REGLA CRÍTICA PARA CÓDIGOS: Trata el campo 'codigo' como texto (string) preservando todos los ceros a la izquierda. "
-                    "Stock y empaque deben ser enteros numéricos. Respuesta JSON válida sin texto adicional."
+                    "Analiza esta factura detalladamente. Para cada ítem, extrae: 'codigo', 'descripcion', 'cantidad' (la cantidad comprada de cajas/paquetes/unidades, ej: 2, 4, 5, 6), 'empaque' (cuántas unidades individuales trae cada caja o paquete, ej: 12, 24, 10, o 1 si es suelto), y el valor total e ITBIS. "
+                    "Devuelve la información en formato JSON puro (una lista de objetos con claves exactas: 'codigo', 'descripcion', 'cantidad', 'empaque', 'costo_sin_itbis'). "
+                    "REGLA DE ORO PARA EL COSTO UNITARIO: Calcula el valor neto sin ITBIS (Valor Total - ITBIS) y divídelo entre el total de unidades individuales (cantidad * empaque) para obtener el 'costo_sin_itbis' por unidad exacta. "
+                    "REGLA PARA DESCRIPCIÓN: Limpia la descripción para que solo incluya el nombre principal y su tamaño (ejemplo: 'BEBIDA ENERGIZANTE CICLON 250ML'). "
+                    "REGLA CRÍTICA PARA CÓDIGOS: Trata el campo 'codigo' como texto (string) preservando ceros a la izquierda. "
+                    "Respuesta JSON válida sin texto adicional."
                 )
                 
-                # Intento con Cuenta Gratuita #1
                 try:
                     if not free_key_1:
                         raise Exception("No free key 1")
@@ -199,7 +201,6 @@ if uploaded_file is not None:
                     
                 except Exception as e1:
                     err_msg1 = str(e1)
-                    # Rotación automática a Cuenta Gratuita #2
                     if ("429" in err_msg1 or "Quota exceeded" in err_msg1 or "No free key 1" in err_msg1) and free_key_2:
                         try:
                             genai.configure(api_key=free_key_2)
@@ -242,18 +243,20 @@ if uploaded_file is not None:
                         costo = safe_float(item.get("costo_sin_itbis", 0))
                         raw_pv = (costo * 1.25) * 1.18
                         precio_venta = round_to_nearest_5(raw_pv)
-                        stock_val = safe_int(item.get("stock", 1), 1)
+                        cant_comprada = safe_int(item.get("cantidad", 1), 1)
                         empaque_val = safe_int(item.get("empaque", 1), 1)
+                        stock_val = cant_comprada * empaque_val
                         codigo_barras = str(item.get("codigo", "")).strip()
                         
                         rows_preview.append({
                             "No.": idx,
                             "Código Barra": codigo_barras,
                             "Nombre": str(item.get("descripcion", "")),
+                            "Cant. Compra": cant_comprada,
                             "Empaque": empaque_val,
+                            "Stock Total": stock_val,
                             "Costo Unit. Sin ITBIS": costo,
-                            "Precio Venta (Múltiplos de 5)": precio_venta,
-                            "Stock": stock_val
+                            "Precio Venta (M5)": precio_venta
                         })
                     
                     df_resultado = pd.DataFrame(rows_preview)
@@ -277,8 +280,9 @@ if uploaded_file is not None:
                         costo = safe_float(item_dict.get("costo_sin_itbis", 0))
                         raw_pv = (costo * 1.25) * 1.18
                         pv = round_to_nearest_5(raw_pv)
+                        cant_comprada = safe_int(item_dict.get("cantidad", 1), 1)
                         empaque_val = safe_int(item_dict.get("empaque", 1), 1)
-                        stock_val = safe_int(item_dict.get("stock", 1), 1)
+                        stock_val = cant_comprada * empaque_val
                         codigo_barras = str(item_dict.get("codigo", "")).strip()
                         
                         ws_prod.append([
