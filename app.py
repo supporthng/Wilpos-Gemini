@@ -8,13 +8,13 @@ from PIL import Image
 st.set_page_config(page_title="WilPOS - Procesador Inteligente", page_icon="🧾", layout="wide")
 
 st.title("🧾 WilPOS - Procesador Inteligente de Facturas y Costos")
-st.write("Carga tu factura (PDF o Imagen). El sistema autodetectará el proveedor, el tipo de empaque y calculará los costos y precios de venta.")
+st.write("Carga tu factura (PDF o Imagen). El sistema autodetectará el proveedor, el tipo de empaque, la moneda y calculará los costos y precios de venta.")
 
 # Sidebar global para parámetros ajustados
 st.sidebar.header("⚙️ Parámetros Globales")
 
-# 1. Tasa de cambio (Tasa de compra del día)
-tasa_compra_usd = st.sidebar.number_input("Tasa de Compra USD a DOP (Día)", value=58.50, step=0.01)
+# 1. Tasa de compra del día (solo se usa si la factura viene en USD)
+tasa_compra_usd = st.sidebar.number_input("Tasa de Compra USD a DOP (Solo para facturas en USD)", value=58.50, step=0.01)
 
 # 2. ITBIS Fijo (18%)
 itbis_fijo = 18.0
@@ -48,7 +48,7 @@ tab_individual, tab_multiple = st.tabs([
 # =============================================================
 with tab_individual:
     st.subheader("Módulo de Factura Individual con Autodetección")
-    st.write("Sube el PDF o la imagen de tu factura. El sistema leerá el formato, detectará el empaque y calculará todo de forma autónoma.")
+    st.write("Sube el PDF o la imagen de tu factura. El sistema leerá el formato, detectará la moneda original y calculará todo.")
     
     archivo_subido = st.file_uploader("📂 Cargar Factura (PDF o Imagen)", type=["pdf", "png", "jpg", "jpeg"], key="uploader_ind")
     
@@ -62,18 +62,17 @@ with tab_individual:
                     texto_extraido += pagina.extract_text() or ""
         else:
             imagen = Image.open(archivo_subido)
-            st.image(imagen, caption=f"Vista previa: {archivo_subido.name}", use_column_width=True)
+            st.image(imagen, caption=f"Vista previa: {archivo_subido.name}", use_container_width=True)
             texto_extraido = "IMAGEN_CARGADA"
 
         texto_upper = texto_extraido.upper()
         
-        # AUTODETECCIÓN INTELIGENTE DE PROVEEDOR Y EMPAQUE
+        # AUTODETECCIÓN INTELIGENTE DE PROVEEDOR, MONEDA Y EMPAQUE
         if "ALVAREZ" in texto_upper or "ALVAREZYSANCHEZ" in texto_upper or "4655" in texto_upper:
             st.session_state.proveedor_detectado = "Álvarez & Sánchez, S.A."
             st.session_state.nro_factura_detectado = "13014936"
-            st.session_state.moneda_detectada = "DOP"
+            st.session_state.moneda_detectada = "DOP"  # Factura local en pesos
             
-            # Buscar patrón de empaque tipo '12/70 CL' de forma automática en el texto
             match_empaque = re.search(r'(\d+)\s*/\s*(\d+)\s*(CL|ML|L|OZ)?', texto_upper)
             unidades_auto = int(match_empaque.group(1)) if match_empaque else 12
             
@@ -88,14 +87,14 @@ with tab_individual:
                     "Descuento (%)": 10.0
                 }
             ])
-            st.success(f"🤖 ¡Proveedor detectado: Álvarez & Sánchez! Empaque autodetectado: **Por Cajas ({unidades_auto} unidades por caja)**.")
+            st.success(f"🤖 ¡Proveedor detectado: Álvarez & Sánchez! Moneda: **DOP (Pesos)** | Empaque: **Por Cajas ({unidades_auto} u.)**.")
 
         elif "ISOTEX" in texto_upper or "HIEFOAM3L" in texto_upper:
             st.session_state.proveedor_detectado = "Isotex Dominicana, S.A.S."
             st.session_state.nro_factura_detectado = "C-00137907"
-            st.session_state.moneda_detectada = "USD"
+            st.session_state.moneda_detectada = "USD"  # Factura internacional en dólares
             
-            st.session_state.tipo_empaque_detectado = 1  # Unidades Directas (vienen sueltas por cantidad de piezas)
+            st.session_state.tipo_empaque_detectado = 1  # Unidades Directas
             st.session_state.df_productos = pd.DataFrame([
                 {"Código": "HIEFOAM3L", "Descripción": "HIELERA DE FOAM 3L", "Cantidad Empaques": 30.0, "Unidades por Caja": 1, "Precio Lista / Caja": 1.43, "Descuento (%)": 0.0},
                 {"Código": "NEVER10LA", "Descripción": "NEVERA DE FOAM 10L CON ASA", "Cantidad Empaques": 30.0, "Unidades por Caja": 1, "Precio Lista / Caja": 4.69, "Descuento (%)": 0.0},
@@ -103,7 +102,7 @@ with tab_individual:
                 {"Código": "CAVA20LS", "Descripción": "ISOBOX 20L", "Cantidad Empaques": 30.0, "Unidades por Caja": 1, "Precio Lista / Caja": 4.60, "Descuento (%)": 0.0},
                 {"Código": "SERICOL", "Descripción": "SERIGRAFÍA EN NEVERAS A UN COLOR", "Cantidad Empaques": 60.0, "Unidades por Caja": 1, "Precio Lista / Caja": 0.30, "Descuento (%)": 0.0}
             ])
-            st.success("🤖 ¡Proveedor detectado: Isotex Dominicana! Empaque autodetectado: **Unidades Directas (Piezas sueltas)**.")
+            st.success("🤖 ¡Proveedor detectado: Isotex Dominicana! Moneda: **USD (Dólares)** -> Se aplicará conversión automática a DOP | Empaque: **Unidades Directas**.")
         else:
             st.warning("⚠️ No se pudo reconocer el formato automáticamente. Puedes ajustar los datos abajo.")
 
@@ -115,7 +114,6 @@ with tab_individual:
         nro_factura = st.text_input("No. de Factura / Pedido", value=st.session_state.nro_factura_detectado)
     with col_f2:
         moneda_ind = st.selectbox("Moneda de la Factura", ["DOP", "USD"], index=0 if st.session_state.moneda_detectada=="DOP" else 1, key="mon_ind")
-        # El radio ahora se selecciona automáticamente según la autodetección del archivo
         tipo_empaque = st.radio(
             "Cálculo por Unidad (Autodetectado):", 
             ["Por Cajas / Empaques (con unidades por caja)", "Unidades Directas"], 
@@ -142,13 +140,13 @@ with tab_individual:
             if cant_empaques <= 0 or precio_lista <= 0:
                 continue
             
-            # Conversión automática usando la tasa de compra del día si es USD
+            # Si la factura está en USD, se convierte a DOP usando la tasa de compra; si está en DOP, se queda igual
             precio_base_dop = precio_lista * tasa_compra_usd if moneda_ind == "USD" else precio_lista
             precio_con_desc = precio_base_dop * (1 - (desc_pct / 100.0))
             importe_linea_neto = cant_empaques * precio_con_desc
             subtotal_neto_dop += importe_linea_neto
             
-            # Lógica basada en el tipo de empaque detectado/seleccionado
+            # Lógica basada en el tipo de empaque
             if tipo_empaque.startswith("Por Cajas") and unidades_por_caja > 1:
                 total_unidades_sueltas = cant_empaques * unidades_por_caja
                 costo_unitario_neto = importe_linea_neto / total_unidades_sueltas
@@ -188,7 +186,7 @@ with tab_individual:
 # =============================================================
 with tab_multiple:
     st.subheader("Módulo de Múltiples Facturas (Lote Masivo)")
-    st.write("Administra o consolida filas de múltiples facturas aplicando la tasa de compra y el margen de ganancia global.")
+    st.write("Administra o consolida filas de múltiples facturas gestionando individualmente si vienen en DOP o USD.")
     
     df_multi_init = pd.DataFrame([
         {"No. Factura": "13014936", "Proveedor": "Álvarez & Sánchez", "Código": "4655", "Descripción": "TEQUILA RESERVA CRISTALINO 1800", "Cantidad": 2.0, "Moneda": "DOP", "Precio Unitario": 33480.0},
@@ -213,6 +211,7 @@ with tab_multiple:
             if cant <= 0 or precio_unit <= 0:
                 continue
             
+            # Conversión selectiva solo si la línea indica USD
             precio_dop = precio_unit * tasa_compra_usd if mon == "USD" else precio_unit
             importe_linea = cant * precio_dop
             subtotal_lote_dop += importe_linea
@@ -227,6 +226,7 @@ with tab_multiple:
                 "Código": codigo,
                 "Descripción": desc,
                 "Cantidad": cant,
+                "Moneda": mon,
                 "Costo Unitario Neto": round(costo_unit_neto, 2),
                 "Costo Unit. + ITBIS": round(costo_unit_con_itbis, 2),
                 f"Precio Venta (+{margen_ganancia}%)": round(precio_venta_sugerido, 2),
