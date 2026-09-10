@@ -32,10 +32,6 @@ def safe_int(val, default=1):
 def round_to_nearest_5(x):
     return round(round(x / 5) * 5, 2)
 
-# Inicializar control de documentos procesados para evitar duplicados
-if "processed_signatures" not in st.session_state:
-    st.session_state["processed_signatures"] = set()
-
 if "quota_exceeded" not in st.session_state:
     st.session_state["quota_exceeded"] = False
 
@@ -58,17 +54,12 @@ modulo = st.sidebar.radio(
     ["📄 Factura Individual", "📂 Múltiples Facturas (Lote)"]
 )
 
-# Botón para limpiar historial de duplicados si el usuario lo desea
-if st.sidebar.button("🧹 Restablecer Memoria de Duplicados"):
-    st.session_state["processed_signatures"] = set()
-    st.sidebar.success("¡Memoria de duplicados reiniciada!")
-
 # ==========================================
 # MÓDULO 1: FACTURA INDIVIDUAL
 # ==========================================
 if modulo == "📄 Factura Individual":
     st.title("📊 Automatizador de Facturas para WilPOS (Individual)")
-    st.markdown("Sube tu factura. El sistema cuenta con **control anti-duplicados** y cálculo exacto de costos unitarios netos sin ITBIS.")
+    st.markdown("Sube tu factura para extraer sus ítems, calcular costos netos sin ITBIS y generar la plantilla de WilPOS.")
 
     uploaded_file = st.file_uploader("Sube tu factura (PDF o Imagen)", type=["pdf", "png", "jpg", "jpeg"], key="single_file")
 
@@ -78,8 +69,8 @@ if modulo == "📄 Factura Individual":
         if st.session_state["quota_exceeded"]:
             paid_confirmation_dialog()
 
-        if st.button("🚀 Procesar Factura con Control Anti-Duplicados") or st.session_state["use_paid_now"]:
-            with st.spinner("Analizando factura, calculando costos reales y verificando duplicidad..."):
+        if st.button("🚀 Procesar Factura") or st.session_state["use_paid_now"]:
+            with st.spinner("Analizando factura y calculando costos reales..."):
                 prompt_text = (
                     "Analiza esta factura o cotización detalladamente. Extrae los datos de cabecera: 'emisor_rnc', 'numero_documento', 'fecha', 'total'. "
                     "Para cada ítem, extrae: 'codigo', 'descripcion', 'cantidad' (la cantidad comprada, ej: 10, 20), 'empaque' (unidades por empaque, ej: 1 si es por unidad directa), y 'costo_sin_itbis'. "
@@ -148,126 +139,105 @@ if modulo == "📄 Factura Individual":
                         st.error(f"Error al procesar: {e}")
 
                 if parsed_data:
-                    rnc_emisor = str(parsed_data.get("emisor_rnc", "")).strip()
-                    num_doc = str(parsed_data.get("numero_documento", "")).strip()
-                    fecha_doc = str(parsed_data.get("fecha", "")).strip()
-                    total_doc = str(parsed_data.get("total", "")).strip()
+                    st.success(success_msg)
                     
-                    signature_string = f"{rnc_emisor}_{num_doc}_{fecha_doc}_{total_doc}"
-                    doc_signature = hashlib.md5(signature_string.encode('utf-8')).hexdigest()
-
-                    if doc_signature in st.session_state["processed_signatures"]:
-                        st.error("🚨 **¡ADVERTENCIA DE FACTURA DUPLICADA!**")
-                        data_msg = (
-                            f"Este documento ya fue procesado anteriormente.\n\n"
-                            f"- **Emisor RNC:** `{rnc_emisor}`\n"
-                            f"- **No. Documento:** `{num_doc}`\n"
-                            f"- **Fecha:** `{fecha_doc}`\n"
-                            f"- **Total:** `{total_doc}`\n\n"
-                            f"El sistema ha bloqueado la carga para evitar duplicidad en el inventario de WilPOS."
-                        )
-                        st.warning(data_msg)
+                    data_items = parsed_data.get("items", [])
+                    rows_preview = []
+                    for idx, item in enumerate(data_items, start=1):
+                        costo = safe_float(item.get("costo_sin_itbis", 0))
+                        raw_pv = (costo * 1.25) * 1.18
+                        precio_venta = round_to_nearest_5(raw_pv)
+                        cant_comprada = safe_int(item.get("cantidad", 1), 1)
+                        empaque_val = safe_int(item.get("empaque", 1), 1)
+                        stock_val = cant_comprada * empaque_val
+                        codigo_barras = str(item.get("codigo", "")).strip()
+                        
+                        rows_preview.append({
+                            "No.": idx,
+                            "Código Barra": codigo_barras,
+                            "Nombre": str(item.get("descripcion", "")),
+                            "Cant. Compra": cant_comprada,
+                            "Empaque": empaque_val,
+                            "Stock Total": stock_val,
+                            "Costo Unit. Sin ITBIS": costo,
+                            "Precio Venta (M5)": precio_venta
+                        })
+                    
+                    df_resultado = pd.DataFrame(rows_preview)
+                    st.dataframe(df_resultado, use_container_width=True, hide_index=True)
+                    
+                    template_path = "Plantilla_Inventario_WilPOS_2.xlsx"
+                    if not os.path.exists(template_path):
+                        template_path = "Plantilla_Inventario_WilPOS.xlsx"
+                        
+                    if os.path.exists(template_path):
+                        wb = openpyxl.load_workbook(template_path)
+                        ws_prod = wb['Productos']
+                        ws_prod.delete_rows(2, ws_prod.max_row)
                     else:
-                        st.session_state["processed_signatures"].add(doc_signature)
-                        st.success(success_msg)
+                        wb = openpyxl.Workbook()
+                        ws_prod = wb.active
+                        ws_prod.title = "Productos"
+                        ws_prod.append(['Nombre', 'Código Barra', 'Categoría', 'Tipo', 'Precio Venta', 'Costo', 'Stock', 'Stock Mínimo', 'ITBIS', 'Unidad Medida', 'Venta Granel', 'Cantidad Empaque', 'Precio Variable', 'Descuento %', 'Descuento Monto', 'Precio Especial', 'Descuento Activo', 'Descuento Nota'])
+                    
+                    for item_dict in data_items:
+                        costo = safe_float(item_dict.get("costo_sin_itbis", 0))
+                        raw_pv = (costo * 1.25) * 1.18
+                        pv = round_to_nearest_5(raw_pv)
+                        cant_comprada = safe_int(item_dict.get("cantidad", 1), 1)
+                        empaque_val = safe_int(item_dict.get("empaque", 1), 1)
+                        stock_val = cant_comprada * empaque_val
+                        codigo_barras = str(item_dict.get("codigo", "")).strip()
                         
-                        data_items = parsed_data.get("items", [])
-                        rows_preview = []
-                        for idx, item in enumerate(data_items, start=1):
-                            costo = safe_float(item.get("costo_sin_itbis", 0))
-                            raw_pv = (costo * 1.25) * 1.18
-                            precio_venta = round_to_nearest_5(raw_pv)
-                            cant_comprada = safe_int(item.get("cantidad", 1), 1)
-                            empaque_val = safe_int(item.get("empaque", 1), 1)
-                            stock_val = cant_comprada * empaque_val
-                            codigo_barras = str(item.get("codigo", "")).strip()
-                            
-                            rows_preview.append({
-                                "No.": idx,
-                                "Código Barra": codigo_barras,
-                                "Nombre": str(item.get("descripcion", "")),
-                                "Cant. Compra": cant_comprada,
-                                "Empaque": empaque_val,
-                                "Stock Total": stock_val,
-                                "Costo Unit. Sin ITBIS": costo,
-                                "Precio Venta (M5)": precio_venta
-                            })
-                        
-                        df_resultado = pd.DataFrame(rows_preview)
-                        st.dataframe(df_resultado, use_container_width=True, hide_index=True)
-                        
-                        template_path = "Plantilla_Inventario_WilPOS_2.xlsx"
-                        if not os.path.exists(template_path):
-                            template_path = "Plantilla_Inventario_WilPOS.xlsx"
-                            
-                        if os.path.exists(template_path):
-                            wb = openpyxl.load_workbook(template_path)
-                            ws_prod = wb['Productos']
-                            ws_prod.delete_rows(2, ws_prod.max_row)
-                        else:
-                            wb = openpyxl.Workbook()
-                            ws_prod = wb.active
-                            ws_prod.title = "Productos"
-                            ws_prod.append(['Nombre', 'Código Barra', 'Categoría', 'Tipo', 'Precio Venta', 'Costo', 'Stock', 'Stock Mínimo', 'ITBIS', 'Unidad Medida', 'Venta Granel', 'Cantidad Empaque', 'Precio Variable', 'Descuento %', 'Descuento Monto', 'Precio Especial', 'Descuento Activo', 'Descuento Nota'])
-                        
-                        for item_dict in data_items:
-                            costo = safe_float(item_dict.get("costo_sin_itbis", 0))
-                            raw_pv = (costo * 1.25) * 1.18
-                            pv = round_to_nearest_5(raw_pv)
-                            cant_comprada = safe_int(item_dict.get("cantidad", 1), 1)
-                            empaque_val = safe_int(item_dict.get("empaque", 1), 1)
-                            stock_val = cant_comprada * empaque_val
-                            codigo_barras = str(item_dict.get("codigo", "")).strip()
-                            
-                            ws_prod.append([
-                                str(item_dict.get("descripcion", "")),
-                                codigo_barras,
-                                "General",
-                                "producto",
-                                pv,
-                                costo,
-                                stock_val,
-                                5,
-                                0.18,
-                                "unidad",
-                                "No",
-                                empaque_val,
-                                "No",
-                                0,
-                                0,
-                                None,
-                                "No",
-                                None
-                            ])
-                            ws_prod.cell(row=ws_prod.max_row, column=2).number_format = '@'
-                        
-                        output = io.BytesIO()
-                        wb.save(output)
-                        excel_data = output.getvalue()
-                        
-                        st.download_button(
-                            label="📥 Descargar Excel Plantilla WilPOS Actualizada",
-                            data=excel_data,
-                            file_name="Inventario_WilPOS_Actualizado.xlsx",
-                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                        )
+                        ws_prod.append([
+                            str(item_dict.get("descripcion", "")),
+                            codigo_barras,
+                            "General",
+                            "producto",
+                            pv,
+                            costo,
+                            stock_val,
+                            5,
+                            0.18,
+                            "unidad",
+                            "No",
+                            empaque_val,
+                            "No",
+                            0,
+                            0,
+                            None,
+                            "No",
+                            None
+                        ])
+                        ws_prod.cell(row=ws_prod.max_row, column=2).number_format = '@'
+                    
+                    output = io.BytesIO()
+                    wb.save(output)
+                    excel_data = output.getvalue()
+                    
+                    st.download_button(
+                        label="📥 Descargar Excel Plantilla WilPOS Actualizada",
+                        data=excel_data,
+                        file_name="Inventario_WilPOS_Actualizado.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                    )
 
 # ==========================================
 # MÓDULO 2: MÚLTIPLES FACTURAS (LOTE)
 # ==========================================
 elif modulo == "📂 Múltiples Facturas (Lote)":
-    st.title("📂 Procesador por Lotes con Control Anti-Duplicados")
-    st.markdown("Sube varias facturas o cotizaciones. El sistema filtrará automáticamente cualquier documento duplicado evaluando su firma única.")
+    st.title("📂 Procesador por Lotes (Detección automática de duplicados juntos)")
+    st.markdown("Sube varias facturas o cotizaciones. Si hay archivos duplicados **dentro de la misma selección**, el sistema los detectará y omitirá automáticamente.")
 
     uploaded_files = st.file_uploader("Sube tus facturas (Puedes seleccionar varias)", type=["pdf", "png", "jpg", "jpeg"], accept_multiple_files=True, key="batch_files")
 
     if uploaded_files:
         st.info(f"Se han cargado {len(uploaded_files)} archivos en total.")
 
-        if st.button("🚀 Procesar Lote Evaluando Duplicados", type="primary"):
+        if st.button("🚀 Procesar Lote y Filtrar Duplicados", type="primary"):
             all_consolidated_items = []
             duplicate_count = 0
-            processed_in_this_batch = set()
+            batch_signatures = set() # Memoria exclusiva para este lote actual
 
             progress_bar = st.progress(0)
             status_text = st.empty()
@@ -344,12 +314,12 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
                     signature_string = f"{rnc_emisor}_{num_doc}_{fecha_doc}_{total_doc}"
                     doc_signature = hashlib.md5(signature_string.encode('utf-8')).hexdigest()
                     
-                    if doc_signature in st.session_state["processed_signatures"] or doc_signature in processed_in_this_batch:
+                    # Verificar si este documento ya venía repetido en este mismo lote
+                    if doc_signature in batch_signatures:
                         duplicate_count += 1
-                        st.warning(f"⚠️ Archivo omitido por duplicidad: **{file.name}** (Doc: {num_doc}, Total: {total_doc})")
+                        st.warning(f"⚠️ Archivo omitido por estar duplicado en este lote: **{file.name}** (Doc: {num_doc}, Total: {total_doc})")
                     else:
-                        processed_in_this_batch.add(doc_signature)
-                        st.session_state["processed_signatures"].add(doc_signature)
+                        batch_signatures.add(doc_signature)
                         items = parsed_data.get("items", [])
                         if isinstance(items, list):
                             all_consolidated_items.extend(items)
@@ -359,7 +329,7 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
             status_text.text("¡Procesamiento por lotes completado!")
             
             if duplicate_count > 0:
-                st.error(f"🚨 Se detectaron y bloquearon **{duplicate_count} archivo(s) duplicado(s)** en este lote.")
+                st.error(f"🚨 Se detectaron y filtraron **{duplicate_count} archivo(s) duplicado(s)** dentro de la selección actual.")
 
             if all_consolidated_items:
                 st.success(f"🎉 Se consolidaron exitosamente {len(all_consolidated_items)} ítems de facturas válidas.")
@@ -444,4 +414,4 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                 )
             else:
-                st.warning("No hay ítems válidos para consolidar (todos los archivos eran duplicados o vacíos).")
+                st.warning("No hay ítems válidos para consolidar.")
