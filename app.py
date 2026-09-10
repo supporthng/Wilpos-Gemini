@@ -36,6 +36,9 @@ def round_to_nearest_5(x):
 if "quota_exceeded" not in st.session_state:
     st.session_state["quota_exceeded"] = False
 
+if "use_paid_now" not in st.session_state:
+    st.session_state["use_paid_now"] = False
+
 @st.dialog("⚠️ Límite de Cuota Gratuita Alcanzado")
 def paid_confirmation_dialog():
     st.write("Se han agotado las solicitudes gratuitas de **ambas cuentas** de Gemini.")
@@ -45,14 +48,12 @@ def paid_confirmation_dialog():
     with col1:
         if st.button("🚀 Sí, usar Versión de Pago", type="primary"):
             st.session_state["use_paid_now"] = True
+            st.session_state["quota_exceeded"] = False
             st.rerun()
     with col2:
         if st.button("❌ Cancelar"):
             st.session_state["quota_exceeded"] = False
             st.rerun()
-
-if "use_paid_now" not in st.session_state:
-    st.session_state["use_paid_now"] = False
 
 if uploaded_file is not None:
     st.success(f"¡Factura cargada: {uploaded_file.name}!")
@@ -91,7 +92,6 @@ if uploaded_file is not None:
                 raw_text = raw_text.strip()
                 
                 data_items = json.loads(raw_text)
-                st.session_state["quota_exceeded"] = False
                 st.session_state["use_paid_now"] = False
                 st.success("✅ ¡Factura procesada exitosamente con la versión de pago!")
                 
