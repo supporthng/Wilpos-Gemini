@@ -88,6 +88,9 @@ if "quota_exceeded" not in st.session_state:
 if "use_paid_now" not in st.session_state:
     st.session_state["use_paid_now"] = False
 
+if "expand_all_previews" not in st.session_state:
+    st.session_state["expand_all_previews"] = False
+
 # ==========================================
 # MENÚ Y CONFIGURACIÓN LATERAL
 # ==========================================
@@ -121,7 +124,7 @@ with st.sidebar.expander("Ver Archivos Generados"):
     history_files = sorted([f for f in os.listdir(HISTORY_DIR) if f.endswith('.xlsx')], reverse=True)
     if history_files:
         st.write(f"Total archivados: {len(history_files)}")
-        for h_file in history_files[:10]: # Mostrar los 10 más recientes
+        for h_file in history_files[:10]:
             file_path = os.path.join(HISTORY_DIR, h_file)
             with open(file_path, "rb") as fh:
                 st.download_button(
@@ -140,12 +143,11 @@ with st.sidebar.expander("Ver Archivos Generados"):
             st.success("¡Historial vaciado!")
             st.rerun()
     else:
-        st.info("Aún no hay reportes en el historial. Se guardarán aquí automáticamente al procesar facturas.")
+        st.info("Aún no hay reportes en el historial.")
 
 st.sidebar.markdown("---")
 st.sidebar.title("🗂️ Maestro de Inventario POS")
 
-# Gestión de Persistencia del Archivo Maestro
 master_file_uploaded = st.sidebar.file_uploader("Actualizar archivo Maestro (opcional)", type=["xlsx", "xls", "csv"], key="master_inv_file")
 
 master_dict = {}
@@ -641,7 +643,6 @@ if modulo == "📄 Factura Individual":
                 wb.save(output)
                 excel_data = output.getvalue()
                 
-                # Guardar automáticamente en el historial
                 save_to_history(excel_data, prefix="Individual")
                 
                 st.download_button(
@@ -678,10 +679,23 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
         st.info(f"Se han cargado {len(uploaded_files)} archivos en total.")
 
         st.markdown("### 👁️ Vista Previa Selectiva de Archivos")
+        
+        # BOTONES DE CONTROL GENERAL (EXPANDIR / CONTRAER TODO)
+        col_exp1, col_exp2, col_space = st.columns([1, 1, 4])
+        with col_exp1:
+            if st.button("📂 Expandir Todo"):
+                st.session_state["expand_all_previews"] = True
+                st.rerun()
+        with col_exp2:
+            if st.button("📁 Contraer Todo"):
+                st.session_state["expand_all_previews"] = False
+                st.rerun()
+
         st.markdown("Haz clic en el botón de cualquier archivo para desplegar su vista previa:")
         
         for idx_f, f_item in enumerate(uploaded_files):
-            with st.expander(f"👁️ [Ojito] Ver factura #{idx_f+1}: {f_item.name}"):
+            # Usamos el estado global de expansión para abrir o cerrar el expander de forma masiva
+            with st.expander(f"👁️ [Ojito] Ver factura #{idx_f+1}: {f_item.name}", expanded=st.session_state["expand_all_previews"]):
                 f_type = f_item.type if hasattr(f_item, 'type') else ''
                 if "image" in f_type or f_item.name.lower().endswith(('png', 'jpg', 'jpeg', 'webp')):
                     st.image(Image.open(f_item), caption=f_item.name, width=500)
@@ -880,7 +894,6 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
                 wb.save(output)
                 excel_data_batch = output.getvalue()
 
-                # Guardar automáticamente en el historial de lotes
                 save_to_history(excel_data_batch, prefix="Lote")
 
                 st.download_button(
