@@ -40,7 +40,7 @@ if "quota_exceeded" not in st.session_state:
 if "use_paid_now" not in st.session_state:
     st.session_state["use_paid_now"] = False
 
-# Ventana emergente (Modal centralizado de confirmación de cuota)
+# Ventana emergente (Modal centralizado que se cierra al confirmar o cancelar)
 @st.dialog("⚠️ Confirmación Requerida: Límite de Cuota Alcanzado")
 def paid_confirmation_dialog():
     st.write("Se ha agotado la cuota de las cuentas gratuitas de Gemini (Error 429 / Quota Exceeded).")
@@ -51,11 +51,11 @@ def paid_confirmation_dialog():
         if st.button("✅ Sí, Confirmar", type="primary"):
             st.session_state["use_paid_now"] = True
             st.session_state["quota_exceeded"] = False
-            st.rerun()
+            st.rerun()  # Cierra el diálogo y actualiza la app
     with col_d2:
         if st.button("❌ Cancelar"):
             st.session_state["quota_exceeded"] = False
-            st.rerun()
+            st.rerun()  # Cierra el diálogo y actualiza la app
 
 # ==========================================
 # MENÚ Y CONFIGURACIÓN LATERAL (MAESTRO Y EQUIVALENCIAS)
@@ -142,16 +142,13 @@ SYNONYMS_MAP = {
 
 def clean_and_tokenize(text):
     upper_text = str(text).upper()
-    # Aplicar equivalencias personalizadas
     for prov, pos in st.session_state["custom_equivalences"].items():
         if prov in upper_text:
             upper_text = upper_text.replace(prov, pos)
             
-    # Aplicar mapa de sinónimos
     for abbr, full in SYNONYMS_MAP.items():
         upper_text = upper_text.replace(abbr, full)
         
-    # Remover símbolos especiales y palabras vacías (stopwords)
     cleaned = re.sub(r'[^A-Z0-9\s]', ' ', upper_text)
     stopwords = {"DE", "EL", "LA", "LOS", "LAS", "Y", "EN", "UN", "UNA", "CON"}
     tokens = [t for t in cleaned.split() if t not in stopwords]
@@ -163,12 +160,10 @@ def validate_with_master(item_description, original_code):
     
     desc_tokens, norm_desc = clean_and_tokenize(item_description)
     
-    # 1. Búsqueda exacta normalizada
     for m_name, m_code in master_dict.items():
         if m_name == norm_desc or m_name == item_description.strip().upper():
             return m_code, "Actualizado (Exacto)"
             
-    # 2. Coincidencia Inteligente por Coeficiente de Jaccard y Solapamiento de Tokens Clave
     best_match_code = original_code
     best_match_name = ""
     highest_score = 0.0
@@ -182,7 +177,6 @@ def validate_with_master(item_description, original_code):
         union = desc_tokens.union(m_tokens)
         jaccard_score = len(intersection) / len(union)
         
-        # Ponderación extra si coinciden números clave (ej: 40, 12, 700, 750) o palabras críticas (IMPERIAL, PORTO, BLUE)
         weight = 1.0
         for token in intersection:
             if token.isdigit() or len(token) > 3:
@@ -195,11 +189,9 @@ def validate_with_master(item_description, original_code):
             best_match_code = master_dict[m_name]
             best_match_name = m_name
             
-    # Umbral de confianza para dar por válido el match inteligente
     if highest_score >= 0.45:
         return best_match_code, f"Actualizado (IA Semántica: {best_match_name})"
         
-    # 3. Respaldo por Difusa Tradicional (Fuzzy)
     matches = difflib.get_close_matches(norm_desc, master_names, n=1, cutoff=0.45)
     if matches:
         matched_name = matches[0]
@@ -214,6 +206,7 @@ if modulo == "📄 Factura Individual":
     st.title("📊 Automatizador de Facturas para WilPOS (Individual)")
     st.markdown("Sube tu factura para extraer sus ítems, validar códigos con tu maestro POS y generar la plantilla actualizada.")
 
+    # Si se excede la cuota, lanzamos el diálogo flotante centrado de inmediato
     if st.session_state["quota_exceeded"]:
         paid_confirmation_dialog()
 
@@ -237,7 +230,7 @@ if modulo == "📄 Factura Individual":
                 prompt_text = (
                     "Analiza esta factura detalladamente. Extrae los datos de cabecera: 'emisor_rnc', 'numero_documento', 'fecha', 'subtotal', 'itbis', 'total'. "
                     "Para cada ítem, extrae: 'codigo', 'descripcion', 'cantidad', 'empaque', y 'costo_sin_itbis'. "
-                    "REGLA ESTRICTA PARA LA DESCRIPCIÓN: Limpia el texto de cada producto para incluir ÚNICAMENTE el nombre del producto y su presentación o tamaño (ej: 'RON BARCELO IMPERIAL 40 ANIVERSARIO 700 ML'), eliminando códigos internos innecesarios o textos redundantes. "
+                    "REGLA ESTRICTA PARA LA DESCRIPCIÓN: Limpia el texto de cada producto para incluir ÚNICAMENTE el nombre del producto y su presentación o tamaño, eliminando códigos internos innecesarios o textos redundantes. "
                     "Devuelve la información estrictamente en formato JSON con la siguiente estructura exacta: "
                     '{"emisor_rnc": "...", "numero_documento": "...", "fecha": "...", "subtotal": 0.0, "itbis": 0.0, "total": 0.0, "items": [{"codigo": "...", "descripcion": "...", "cantidad": 1, "empaque": 1, "costo_sin_itbis": 0.0}]}. '
                     "REGLA CRÍTICA: Preserva todos los ceros a la izquierda como texto. Respuesta JSON pura sin texto adicional."
@@ -408,6 +401,10 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
     st.title("📂 Procesador por Lotes (Con Coincidencia Semántica Avanzada)")
     st.markdown("Sube varias facturas. El sistema validará los ítems contra tu maestro mediante fichas de tokens y sinónimos cruzados.")
 
+    # Si se excede la cuota en lote, lanzamos también el diálogo flotante centrado
+    if st.session_state["quota_exceeded"]:
+        paid_confirmation_dialog()
+
     uploaded_files = st.file_uploader("Sube tus facturas (Puedes seleccionar varias)", type=["pdf", "png", "jpg", "jpeg"], accept_multiple_files=True, key="batch_files")
 
     if uploaded_files:
@@ -447,23 +444,28 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
                 parsed_data = None
                 
                 try:
-                    if free_key_1:
-                        genai.configure(api_key=free_key_1)
-                        model_b1 = genai.GenerativeModel('gemini-3.6-flash')
-                        response = model_b1.generate_content([
-                            {'mime_type': file_type, 'data': file_bytes},
-                            prompt_text
-                        ])
-                        raw_txt = response.text.strip()
-                        if raw_txt.startswith("```json"):
-                            raw_txt = raw_txt[7:]
-                        if raw_txt.endswith("```"):
-                            raw_txt = raw_txt[:-3]
-                        parsed_data = json.loads(raw_txt.strip())
-                except Exception:
-                    try:
-                        if free_key_2:
-                            genai.configure(api_key=free_key_2)
+                    active_key = paid_api_key if st.session_state["use_paid_now"] else free_key_1
+                    if not active_key and not st.session_state["use_paid_now"]:
+                        active_key = free_key_2
+                        
+                    genai.configure(api_key=active_key if active_key else paid_api_key)
+                    model_b1 = genai.GenerativeModel('gemini-3.6-flash')
+                    response = model_b1.generate_content([
+                        {'mime_type': file_type, 'data': file_bytes},
+                        prompt_text
+                    ])
+                    raw_txt = response.text.strip()
+                    if raw_txt.startswith("```json"):
+                        raw_txt = raw_txt[7:]
+                    if raw_txt.endswith("```"):
+                        raw_txt = raw_txt[:-3]
+                    parsed_data = json.loads(raw_txt.strip())
+                    st.session_state["use_paid_now"] = False
+                except Exception as batch_err:
+                    err_str = str(batch_err)
+                    if ("429" in err_str or "Quota exceeded" in err_str) and not st.session_state["use_paid_now"]:
+                        try:
+                            genai.configure(api_key=free_key_2 if free_key_2 else paid_api_key)
                             model_b2 = genai.GenerativeModel('gemini-3.6-flash')
                             response = model_b2.generate_content([
                                 {'mime_type': file_type, 'data': file_bytes},
@@ -475,23 +477,11 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
                             if raw_txt.endswith("```"):
                                 raw_txt = raw_txt[:-3]
                             parsed_data = json.loads(raw_txt.strip())
-                    except Exception:
-                        try:
-                            if paid_api_key:
-                                genai.configure(api_key=paid_api_key)
-                                model_bp = genai.GenerativeModel('gemini-3.6-flash')
-                                response = model_bp.generate_content([
-                                    {'mime_type': file_type, 'data': file_bytes},
-                                    prompt_text
-                                ])
-                                raw_txt = response.text.strip()
-                                if raw_txt.startswith("```json"):
-                                    raw_txt = raw_txt[7:]
-                                if raw_txt.endswith("```"):
-                                    raw_txt = raw_txt[:-3]
-                                parsed_data = json.loads(raw_txt.strip())
-                        except Exception as batch_err:
-                            st.warning(f"No se pudo procesar el archivo {file.name}: {batch_err}")
+                        except Exception:
+                            st.session_state["quota_exceeded"] = True
+                            st.rerun()
+                    else:
+                        st.warning(f"No se pudo procesar el archivo {file.name}: {batch_err}")
 
                 if parsed_data and isinstance(parsed_data, dict):
                     rnc_emisor = str(parsed_data.get("emisor_rnc", "")).strip()
