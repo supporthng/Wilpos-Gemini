@@ -115,7 +115,7 @@ with st.sidebar.expander("Ver Proveedores Aprendidos"):
             st.success("¡Memoria reseteada!")
             st.rerun()
     else:
-        st.info("Aún no hay proveedores aprendidos. Se registrarán automáticamente al procesar facturas.")
+        st.info("Aún no hay proveedores aprendidos.")
 
 # HISTORIAL DE EXCEL GENERADOS EN BARRA LATERAL
 st.sidebar.markdown("---")
@@ -380,12 +380,16 @@ def process_invoice_with_ai(file_obj, file_type):
     parsed_data = None
     success_msg = ""
     
-    active_key = paid_api_key if st.session_state["use_paid_now"] else free_key_1
-    if not active_key and not st.session_state["use_paid_now"]:
-        active_key = free_key_2
+    if st.session_state["use_paid_now"]:
+        if not paid_api_key:
+            st.error("⚠️ Has seleccionado la versión de pago, pero no se ha configurado 'GEMINI_API_KEY_PAID' en los secrets.")
+            return None, ""
+        active_key = paid_api_key
+    else:
+        active_key = free_key_1 if free_key_1 else free_key_2
 
     try:
-        genai.configure(api_key=active_key if active_key else paid_api_key)
+        genai.configure(api_key=active_key)
         model = genai.GenerativeModel('gemini-3.6-flash')
         
         file_obj.seek(0)
@@ -414,9 +418,6 @@ def process_invoice_with_ai(file_obj, file_type):
                 "nota_formato": "Formato de cajas con empaques y costos unitarios por pieza procesados exitosamente."
             }
             save_provider_memory(st.session_state["provider_memory"])
-
-        if st.session_state["use_paid_now"]:
-            success_msg = "✅ ¡Factura procesada usando la Versión de Pago!"
             
     except Exception as e:
         err_str = str(e)
@@ -534,6 +535,9 @@ if modulo == "📄 Factura Individual":
             
             with st.spinner("Analizando factura y realizando comparación cruzada de presentaciones..."):
                 parsed_data, success_msg = process_invoice_with_ai(uploaded_file, file_type)
+
+            if st.session_state["use_paid_now"]:
+                st.session_state["use_paid_now"] = False
 
             if parsed_data:
                 st.success(success_msg)
@@ -694,7 +698,6 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
         st.markdown("Haz clic en el botón de cualquier archivo para desplegar su vista previa:")
         
         for idx_f, f_item in enumerate(uploaded_files):
-            # Usamos el estado global de expansión para abrir o cerrar el expander de forma masiva
             with st.expander(f"👁️ [Ojito] Ver factura #{idx_f+1}: {f_item.name}", expanded=st.session_state["expand_all_previews"]):
                 f_type = f_item.type if hasattr(f_item, 'type') else ''
                 if "image" in f_type or f_item.name.lower().endswith(('png', 'jpg', 'jpeg', 'webp')):
