@@ -59,7 +59,7 @@ modulo = st.sidebar.radio(
 # ==========================================
 if modulo == "📄 Factura Individual":
     st.title("📊 Automatizador de Facturas para WilPOS (Individual)")
-    st.markdown("Sube tu factura para extraer sus ítems, calcular costos netos sin ITBIS y generar la plantilla de WilPOS.")
+    st.markdown("Sube tu factura para extraer sus ítems, ver los totales de cabecera y generar la plantilla de WilPOS.")
 
     uploaded_file = st.file_uploader("Sube tu factura (PDF o Imagen)", type=["pdf", "png", "jpg", "jpeg"], key="single_file")
 
@@ -70,14 +70,13 @@ if modulo == "📄 Factura Individual":
             paid_confirmation_dialog()
 
         if st.button("🚀 Procesar Factura") or st.session_state["use_paid_now"]:
-            with st.spinner("Analizando factura y calculando costos reales..."):
+            with st.spinner("Analizando factura, totales y costos unitarios..."):
                 prompt_text = (
-                    "Analiza esta factura o cotización detalladamente. Extrae los datos de cabecera: 'emisor_rnc', 'numero_documento', 'fecha', 'total'. "
-                    "Para cada ítem, extrae: 'codigo', 'descripcion', 'cantidad' (la cantidad comprada, ej: 10, 20), 'empaque' (unidades por empaque, ej: 1 si es por unidad directa), y 'costo_sin_itbis'. "
-                    "REGLA CRÍTICA PARA EL COSTO: Los precios mostrados en las líneas de la factura suelen incluir impuestos o representar el monto total de la línea. Debes calcular rigurosamente el costo unitario real SIN ITBIS por cada unidad individual (descontando el ITBIS global si aplica y dividiendo entre cantidad * empaque). "
+                    "Analiza esta factura detalladamente. Extrae los datos de cabecera: 'emisor_rnc', 'numero_documento', 'fecha', 'subtotal', 'itbis', 'total'. "
+                    "Para cada ítem, extrae: 'codigo', 'descripcion', 'cantidad', 'empaque', y 'costo_sin_itbis' (tomando el precio unitario exacto que aparece en la línea de la factura). "
                     "Devuelve la información estrictamente en formato JSON con la siguiente estructura exacta: "
-                    '{"emisor_rnc": "...", "numero_documento": "...", "fecha": "...", "total": "...", "items": [{"codigo": "...", "descripcion": "...", "cantidad": 1, "empaque": 1, "costo_sin_itbis": 0.0}]}. '
-                    "REGLA CRÍTICA PARA CÓDIGOS DE BARRAS: Preserva todos los ceros a la izquierda como texto. Respuesta JSON pura sin texto adicional."
+                    '{"emisor_rnc": "...", "numero_documento": "...", "fecha": "...", "subtotal": 0.0, "itbis": 0.0, "total": 0.0, "items": [{"codigo": "...", "descripcion": "...", "cantidad": 1, "empaque": 1, "costo_sin_itbis": 0.0}]}. '
+                    "REGLA CRÍTICA: Preserva todos los ceros a la izquierda como texto. Respuesta JSON pura sin texto adicional."
                 )
                 
                 file_bytes = uploaded_file.read()
@@ -141,6 +140,16 @@ if modulo == "📄 Factura Individual":
                 if parsed_data:
                     st.success(success_msg)
                     
+                    # Mostrar Totales de la Factura
+                    st.markdown("### 📋 Resumen de Totales de la Factura")
+                    c_t1, c_t2, c_t3 = st.columns(3)
+                    c_t1.metric("Subtotal", f"RD$ {safe_float(parsed_data.get('subtotal', 0)):,.2f}")
+                    c_t2.metric("ITBIS", f"RD$ {safe_float(parsed_data.get('itbis', 0)):,.2f}")
+                    c_t3.metric("Total General", f"RD$ {safe_float(parsed_data.get('total', 0)):,.2f}")
+                    
+                    st.markdown("---")
+                    st.markdown("### 📦 Detalle de Ítems y Precios de Venta")
+
                     data_items = parsed_data.get("items", [])
                     rows_preview = []
                     for idx, item in enumerate(data_items, start=1):
@@ -237,7 +246,7 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
         if st.button("🚀 Procesar Lote y Filtrar Duplicados", type="primary"):
             all_consolidated_items = []
             duplicate_count = 0
-            batch_signatures = set() # Memoria exclusiva para este lote actual
+            batch_signatures = set()
 
             progress_bar = st.progress(0)
             status_text = st.empty()
@@ -246,10 +255,10 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
                 status_text.text(f"Analizando archivo {i+1} de {len(uploaded_files)}: {file.name}...")
 
                 prompt_text = (
-                    "Analiza esta factura o cotización detalladamente. Extrae los datos de cabecera: 'emisor_rnc', 'numero_documento', 'fecha', 'total'. "
-                    "Para cada ítem, extrae: 'codigo', 'descripcion', 'cantidad' (cantidad comprada), 'empaque' (unidades por empaque), y 'costo_sin_itbis' (calculado por unidad real sin ITBIS). "
+                    "Analiza esta factura detalladamente. Extrae los datos de cabecera: 'emisor_rnc', 'numero_documento', 'fecha', 'subtotal', 'itbis', 'total'. "
+                    "Para cada ítem, extrae: 'codigo', 'descripcion', 'cantidad', 'empaque', y 'costo_sin_itbis'. "
                     "Devuelve la información estrictamente en formato JSON con la siguiente estructura exacta: "
-                    '{"emisor_rnc": "...", "numero_documento": "...", "fecha": "...", "total": "...", "items": [{"codigo": "...", "descripcion": "...", "cantidad": 1, "empaque": 1, "costo_sin_itbis": 0.0}]}. '
+                    '{"emisor_rnc": "...", "numero_documento": "...", "fecha": "...", "subtotal": 0.0, "itbis": 0.0, "total": 0.0, "items": [{"codigo": "...", "descripcion": "...", "cantidad": 1, "empaque": 1, "costo_sin_itbis": 0.0}]}. '
                     "REGLA CRÍTICA: Preserva todos los ceros a la izquierda como texto. Respuesta JSON pura sin texto adicional."
                 )
 
@@ -314,7 +323,6 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
                     signature_string = f"{rnc_emisor}_{num_doc}_{fecha_doc}_{total_doc}"
                     doc_signature = hashlib.md5(signature_string.encode('utf-8')).hexdigest()
                     
-                    # Verificar si este documento ya venía repetido en este mismo lote
                     if doc_signature in batch_signatures:
                         duplicate_count += 1
                         st.warning(f"⚠️ Archivo omitido por estar duplicado en este lote: **{file.name}** (Doc: {num_doc}, Total: {total_doc})")
