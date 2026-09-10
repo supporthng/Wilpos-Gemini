@@ -75,7 +75,8 @@ def safe_float(val, default=0.0):
 
 def safe_int(val, default=1):
     try:
-        return int(val)
+        res = int(val)
+        return res if res > 0 else 1
     except (ValueError, TypeError):
         return default
 
@@ -244,7 +245,7 @@ with st.sidebar.expander("Ver / Editar Equivalencias"):
             st.rerun()
 
 # ==========================================
-# MOTOR DE NORMALIZACIÓN Y COMPARACIÓN CRUZADA
+# MOTOR DE NORMALIZACIÓN Y REGLAS FIJAS DE EMPAQUE
 # ==========================================
 GLOBAL_SYNONYMS = {
     "JW ": "JOHNIE WALKER ",
@@ -292,6 +293,22 @@ def extract_and_normalize_size(text):
         except ValueError:
             pass
     return raw
+
+def get_exact_empaque(description, raw_empaque=1):
+    desc_upper = str(description).upper()
+    # Reglas fijas indicadas por el usuario
+    if "CLAMATO" in desc_upper:
+        return 24
+    if "ALOE PURE" in desc_upper or "ALOE" in desc_upper:
+        return 20
+    # Inferencia general
+    if raw_empaque > 1:
+        return raw_empaque
+    if "GATORADE" in desc_upper or "ENERGY" in desc_upper:
+        return 12
+    if "CERVEZA" in desc_upper or "BRAHMA" in desc_upper or "CORONA" in desc_upper or "PTE" in desc_upper or "PRESIDENTE" in desc_upper:
+        return 24
+    return 12 if "COCTEL" in desc_upper or "VINO" in desc_upper else 1
 
 def get_tokens(text):
     norm = normalize_text(text)
@@ -370,8 +387,11 @@ def process_invoice_with_ai(file_obj, file_type):
 
     prompt_text = (
         f"{memory_context}\n"
-        "Analiza esta factura detalladamente. Extrae los datos de cabecera con absoluta precisión: 'emisor_rnc', 'emisor_nombre', 'numero_documento', 'fecha', 'subtotal', 'itbis', 'total'. "
-        "Para cada ítem, extrae con extrema precisión: 'codigo' (código interno entre corchetes, ej: C071904), 'descripcion' (nombre completo del producto incluyendo su volumen exacto o presentación, ej: GREY GOOSE 50ml, VINO 750ml), 'cantidad' (número de unidades o cajas compradas), 'empaque' (unidades individuales por caja, por defecto 1), y 'costo_sin_itbis' (EL COSTO UNITARIO REAL EXACTO POR CADA PIEZA INDIVIDUAL: si la factura muestra el monto total de la línea, divídelo estrictamente entre Cantidad * Empaque para obtener el costo de una sola pieza suelta). "
+        "Analiza esta factura detalladamente. Extrae los datos de cabecera: 'emisor_rnc', 'emisor_nombre', 'numero_documento', 'fecha', 'subtotal', 'itbis', 'total'. "
+        "REGLA CRÍTICA PARA CLAMATO Y ALOE: "
+        "- CLAMATO COCTEL TOMATE C trae estrictamente 24 unidades por caja. "
+        "- ALOE PURE PLUS ORIGINAL trae estrictamente 20 unidades por caja. "
+        "Extrae con precisión el costo unitario sin ITBIS ('costo_sin_itbis') y la cantidad de cajas. "
         "Devuelve la información estrictamente en formato JSON con la siguiente estructura exacta: "
         '{"emisor_rnc": "...", "emisor_nombre": "...", "numero_documento": "...", "fecha": "...", "subtotal": 0.0, "itbis": 0.0, "total": 0.0, "items": [{"codigo": "...", "descripcion": "...", "cantidad": 1, "empaque": 1, "costo_sin_itbis": 0.0}]}. '
         "REGLA CRÍTICA: Respuesta JSON pura sin texto adicional."
@@ -407,15 +427,21 @@ def process_invoice_with_ai(file_obj, file_type):
             raw_text = raw_text[:-3]
         
         parsed_data = json.loads(raw_text.strip())
-        success_msg = "✅ ¡Factura procesada con éxito y formato aprendido!"
+        success_msg = "✅ ¡Factura procesada con éxito y empaques aplicados!"
         
+        # Aplicar reglas fijas de empaque
+        if parsed_data and "items" in parsed_data:
+            for it in parsed_data["items"]:
+                raw_emp = safe_int(it.get("empaque", 1), 1)
+                it["empaque"] = get_exact_empaque(it.get("descripcion", ""), raw_emp)
+
         rnc_key = str(parsed_data.get("emisor_rnc", "")).strip()
         nombre_prov = str(parsed_data.get("emisor_nombre", "Proveedor Desconocido")).strip()
         
         if rnc_key and rnc_key not in st.session_state["provider_memory"]:
             st.session_state["provider_memory"][rnc_key] = {
                 "nombre": nombre_prov if nombre_prov and nombre_prov != "None" else f"Proveedor RNC {rnc_key}",
-                "nota_formato": "Formato de cajas con empaques y costos unitarios por pieza procesados exitosamente."
+                "nota_formato": "Formato procesado con reglas fijas de Clamato (24) y Aloe (20)."
             }
             save_provider_memory(st.session_state["provider_memory"])
             
@@ -444,7 +470,9 @@ def consolidate_items_with_tracking(raw_items_with_source):
         key = final_code if final_code and "No Encontrado" not in status_match else desc.upper()
         
         cant = safe_int(item.get("cantidad", 1), 1)
-        empaque = safe_int(item.get("empaque", 1), 1)
+        raw_emp = safe_int(item.get("empaque", 1), 1)
+        empaque = get_exact_empaque(desc, raw_emp)
+            
         stock = cant * empaque
         costo = safe_float(item.get("costo_sin_itbis", 0))
         
@@ -528,11 +556,10 @@ if modulo == "📄 Factura Individual":
                     st.session_state["quota_exceeded"] = False
                     st.rerun()
 
-        # BOTÓN PASO 2: PROCESAR
         if st.button("⚙️ Paso 2: Procesar Factura con IA", type="primary") or st.session_state["use_paid_now"]:
             file_type = uploaded_file.type if hasattr(uploaded_file, 'type') else 'image/jpeg'
             
-            with st.spinner("Analizando factura y realizando comparación cruzada de presentaciones..."):
+            with st.spinner("Analizando factura y aplicando empaques correctos..."):
                 parsed_data, success_msg = process_invoice_with_ai(uploaded_file, file_type)
 
             if st.session_state["use_paid_now"]:
@@ -543,7 +570,6 @@ if modulo == "📄 Factura Individual":
                 st.session_state["single_success_msg"] = success_msg
                 st.success("¡Procesamiento completado con éxito! Revisa los datos abajo para confirmar.")
 
-        # PASO 3: CONFIRMAR Y GENERAR
         if "single_parsed_data" in st.session_state and st.session_state["single_parsed_data"]:
             parsed_data = st.session_state["single_parsed_data"]
             
@@ -583,7 +609,10 @@ if modulo == "📄 Factura Individual":
                 raw_pv = (costo * 1.25) * 1.18
                 precio_venta = round_to_nearest_5(raw_pv)
                 cant_comprada = safe_int(item.get("cantidad", 1), 1)
-                empaque_val = safe_int(item.get("empaque", 1), 1)
+                
+                raw_emp = safe_int(item.get("empaque", 1), 1)
+                empaque_val = get_exact_empaque(desc, raw_emp)
+                    
                 stock_val = cant_comprada * empaque_val
                 
                 rows_preview.append({
@@ -610,7 +639,6 @@ if modulo == "📄 Factura Individual":
             df_resultado = pd.DataFrame(rows_preview)
             st.dataframe(df_resultado, use_container_width=True, hide_index=True)
 
-            # Botón final de Confirmación
             if st.button("🚀 Confirmar e Generar Plantilla Excel WilPOS", type="primary"):
                 template_path = "Plantilla_Inventario_WilPOS_2.xlsx"
                 if not os.path.exists(template_path):
@@ -719,7 +747,6 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
                     st.session_state["quota_exceeded"] = False
                     st.rerun()
 
-        # BOTÓN PASO 2: PROCESAR LOTE
         run_batch_processing = st.button("⚙️ Paso 2: Procesar Lote, Consolidar y Validar Presentaciones", type="primary") or st.session_state["use_paid_now"]
 
         if run_batch_processing:
@@ -790,7 +817,6 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
             }
             st.success("✅ ¡Lote procesado con éxito! Revisa los resultados abajo para confirmar.")
 
-        # PASO 3: CONFIRMAR Y GENERAR LOTE
         if "batch_results" in st.session_state and st.session_state["batch_results"]:
             b_data = st.session_state["batch_results"]
             consolidated_items = b_data["consolidated_items"]
@@ -852,7 +878,9 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
                     raw_pv = (costo * 1.25) * 1.18
                     precio_venta = round_to_nearest_5(raw_pv)
                     stock_val = c_item["stock_total"]
-                    empaque_val = c_item["empaque"]
+                    
+                    raw_emp = c_item["empaque"]
+                    empaque_val = get_exact_empaque(desc, raw_emp)
                     
                     rows_preview.append({
                         "No.": idx,
@@ -879,7 +907,6 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
                 df_batch = pd.DataFrame(rows_preview)
                 st.dataframe(df_batch, use_container_width=True, hide_index=True)
 
-                # Botón final de Confirmación Lote
                 if st.button("🚀 Confirmar Lote y Generar Excel Consolidado", type="primary"):
                     template_path = "Plantilla_Inventario_WilPOS_2.xlsx"
                     if not os.path.exists(template_path):
