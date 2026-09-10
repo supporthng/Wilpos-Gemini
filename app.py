@@ -38,12 +38,22 @@ if "quota_exceeded" not in st.session_state:
 if "use_paid_now" not in st.session_state:
     st.session_state["use_paid_now"] = False
 
+# Ventana emergente (Modal centralizado de confirmación)
+@st.dialog("⚠️ Confirmación Requerida: Límite de Cuota Alcanzado")
 def paid_confirmation_dialog():
-    st.warning("⚠️ Se ha agotado la cuota de las cuentas gratuitas de Gemini (Error 429 / Quota Exceeded).")
-    if st.button("💳 Continuar usando la Versión de Pago (API Key de Pago)"):
-        st.session_state["use_paid_now"] = True
-        st.session_state["quota_exceeded"] = False
-        st.rerun()
+    st.write("Se ha agotado la cuota de las cuentas gratuitas de Gemini (Error 429 / Quota Exceeded).")
+    st.write("¿Deseas confirmar el uso de la versión de pago para procesar esta factura?")
+    
+    col_d1, col_d2 = st.columns(2)
+    with col_d1:
+        if st.button("✅ Sí, Confirmar", type="primary"):
+            st.session_state["use_paid_now"] = True
+            st.session_state["quota_exceeded"] = False
+            st.rerun()
+    with col_d2:
+        if st.button("❌ Cancelar"):
+            st.session_state["quota_exceeded"] = False
+            st.rerun()
 
 # ==========================================
 # MENÚ DE NAVEGACIÓN LATERAL
@@ -61,19 +71,20 @@ if modulo == "📄 Factura Individual":
     st.title("📊 Automatizador de Facturas para WilPOS (Individual)")
     st.markdown("Sube tu factura para extraer sus ítems, ver los totales de cabecera y generar la plantilla de WilPOS.")
 
+    # Si se supera la cuota, se abre la ventana emergente centrada automáticamente
+    if st.session_state["quota_exceeded"]:
+        paid_confirmation_dialog()
+
     uploaded_file = st.file_uploader("Sube tu factura (PDF o Imagen)", type=["pdf", "png", "jpg", "jpeg"], key="single_file")
 
     if uploaded_file is not None:
         st.success(f"¡Archivo cargado: {uploaded_file.name}!")
 
-        if st.session_state["quota_exceeded"]:
-            paid_confirmation_dialog()
-
         if st.button("🚀 Procesar Factura") or st.session_state["use_paid_now"]:
             with st.spinner("Analizando factura, totales y costos unitarios..."):
                 prompt_text = (
                     "Analiza esta factura detalladamente. Extrae los datos de cabecera: 'emisor_rnc', 'numero_documento', 'fecha', 'subtotal', 'itbis', 'total'. "
-                    "Para cada ítem, extrae: 'codigo', 'descripcion', 'cantidad', 'empaque', y 'costo_sin_itbis' (tomando el precio unitario exacto que aparece en la línea de la factura). "
+                    "Para cada ítem, extrae: 'codigo', 'descripcion', 'cantidad', 'empaque', y 'costo_sin_itbis'. "
                     "Devuelve la información estrictamente en formato JSON con la siguiente estructura exacta: "
                     '{"emisor_rnc": "...", "numero_documento": "...", "fecha": "...", "subtotal": 0.0, "itbis": 0.0, "total": 0.0, "items": [{"codigo": "...", "descripcion": "...", "cantidad": 1, "empaque": 1, "costo_sin_itbis": 0.0}]}. '
                     "REGLA CRÍTICA: Preserva todos los ceros a la izquierda como texto. Respuesta JSON pura sin texto adicional."
