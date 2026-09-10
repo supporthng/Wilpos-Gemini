@@ -8,7 +8,7 @@ from PIL import Image
 st.set_page_config(page_title="WilPOS - Procesador Inteligente de Facturas", page_icon="🧾", layout="wide")
 
 st.title("🧾 WilPOS - Procesador General y Automático de Facturas")
-st.write("Sube cualquier factura en PDF o Imagen. El sistema extraerá las líneas de productos automáticamente de forma genérica.")
+st.write("Sube cualquier factura en PDF o Imagen. El sistema extraerá el texto, detectará los valores y calculará todo automáticamente.")
 
 # Sidebar global para parámetros visibles
 st.sidebar.header("⚙️ Parámetros Globales")
@@ -52,7 +52,7 @@ tab_individual, tab_multiple = st.tabs([
 # =============================================================
 with tab_individual:
     st.subheader("Módulo de Procesamiento Genérico")
-    st.write("Sube cualquier factura PDF. El motor intentará extraer las tablas y descripciones de manera completamente automática.")
+    st.write("Sube cualquier factura PDF. El motor inteligente analizará las líneas de texto para extraer los ítems.")
     
     archivo_subido = st.file_uploader("📂 Cargar Factura (PDF o Imagen)", type=["pdf", "png", "jpg", "jpeg"], key="uploader_ind")
     
@@ -61,54 +61,69 @@ with tab_individual:
         st.session_state.ultimo_archivo = archivo_subido
         extension = archivo_subido.name.split('.')[-1].lower()
         texto_extraido = ""
-        filas_extraidas = []
         
         if extension == "pdf":
             with pdfplumber.open(archivo_subido) as pdf:
                 for pagina in pdf.pages:
                     texto_extraido += pagina.extract_text() or ""
-                    tablas = pagina.extract_tables()
-                    for tabla in tablas:
-                        for fila in tabla:
-                            fila_limpia = [str(c).strip() for c in fila if c is not None and str(c).strip() != ""]
-                            if len(fila_limpia) >= 2:
-                                filas_extraidas.append(fila_limpia)
         else:
             imagen = Image.open(archivo_subido)
             texto_extraido = "IMAGEN_CARGADA"
 
         texto_upper = texto_extraido.upper()
         
-        # Autodetección genérica de Moneda
+        # 1. Autodetección genérica de Moneda
         if "USD" in texto_upper or "US$" in texto_upper:
             st.session_state.mon_val = "USD"
         else:
             st.session_state.mon_val = "DOP"
             
-        # Autodetección genérica de empaques
+        # 2. Autodetección genérica de empaques o porciones (ej: 12/70, Paquete-12, etc.)
         match_empaque = re.search(r'(\d+)\s*(?:/|PAQUETE-|CAJA-)\s*(\d+)?', texto_upper)
         if match_empaque:
             st.session_state.emp_val = "Por Cajas / Empaques (con unidades por caja)"
         
-        if filas_extraidas:
-            nuevos_items = []
-            for idx, f in enumerate(filas_extraidas):
-                desc = f[1] if len(f) > 1 else "Item extraído"
-                if "DESCRIPCION" in desc.upper() or "TOTAL" in desc.upper():
-                    continue
-                nuevos_items.append({
-                    "Código": f[0] if len(f) > 0 else f"GEN-{idx}",
-                    "Descripción": desc,
-                    "Cantidad Empaques": 1.0,
-                    "Unidades por Caja": 1,
-                    "Precio Lista / Caja": 0.0,
-                    "Descuento (%)": 0.0
-                })
-            if nuevos_items:
-                st.session_state.df_productos = pd.DataFrame(nuevos_items)
-                st.success("🤖 ¡Estructura de factura analizada y extraída con éxito!")
+        # 3. Extracción inteligente línea por línea basada en patrones numéricos y de texto
+        lineas = texto_extraido.split('\n')
+        items_extraidos = []
+        
+        for idx, linea in enumerate(lineas):
+            linea_limpia = linea.strip()
+            if not linea_limpia:
+                continue
+            
+            # Omitir encabezados, pies de página o totales comunes
+            palabras_omitidas = ["RNC", "TEL", "FACTURA", "SUBTOTAL", "ITBIS", "TOTAL", "CLIENTE", "FECHA", "RUTA", "PAGINA", "DIRECCION"]
+            if any(p in linea_limpia.upper() for p in palabras_omitidas):
+                continue
+                
+            # Buscar patrones que parezcan una línea de producto (que contengan números y texto descriptivo)
+            # Ejemplo heurístico: líneas que tienen longitud considerable y números al final o al inicio
+            partes = linea_limpia.split()
+            if len(partes) >= 2:
+                # Intentar detectar si hay un precio o cantidad numérica en la línea
+                tiene_numeros = any(re.search(r'\d+[.,]\d+', p) for p in partes)
+                if tiene_numeros:
+                    codigo_posible = partes[0] if len(partes[0]) <= 15 else f"PROD-{idx}"
+                    desc_posible = " ".join(partes[1:]) if len(partes) > 1 else linea_limpia
+                    
+                    items_extraidos.append({
+                        "Código": codigo_posible,
+                        "Descripción": desc_posible[:80], # Limitar longitud
+                        "Cantidad Empaques": 1.0,
+                        "Unidades por Caja": 1,
+                        "Precio Lista / Caja": 0.0,
+                        "Descuento (%)": 0.0
+                    })
+
+        if items_extraidos:
+            st.session_state.df_productos = pd.DataFrame(items_extraidos[:15]) # Tomar una muestra limpia relevante
+            st.success(f"🤖 ¡Se han detectado y extraído {len(items_extraidos)} posibles ítems de la factura!")
         else:
-            st.info("ℹ️ Factura leída correctamente. Puedes ingresar o ajustar los ítems abajo.")
+            st.info("ℹ️ Factura leída. El formato no generó líneas tabulares automáticas, pero puedes ingresar o pegar los datos abajo.")
+            
+        with st.expander("🔍 Ver texto bruto extraído de la factura (para referencia)"):
+            st.text(texto_extraido)
 
     st.divider()
     
