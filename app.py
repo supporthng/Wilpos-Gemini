@@ -6,13 +6,21 @@ from PIL import Image
 # Configuración de la página
 st.set_page_config(page_title="WilPOS - Procesador Inteligente", page_icon="🧾", layout="wide")
 
-st.title("🧾 WilPOS - Procesador Inteligente de Facturas")
-st.write("Carga tu factura (PDF o Imagen) y el sistema detectará automáticamente el proveedor y los productos.")
+st.title("🧾 WilPOS - Procesador Inteligente de Facturas y Costos")
+st.write("Carga tu factura (PDF o Imagen) para calcular costos unitarios, aplicar la tasa de compra en USD y proyectar precios de venta.")
 
-# Sidebar global para parámetros fiscales y de conversión
+# Sidebar global para parámetros ajustados
 st.sidebar.header("⚙️ Parámetros Globales")
-tasa_usd = st.sidebar.number_input("Tasa de Cambio USD a DOP", value=58.96, step=0.01)
-itbis_porcentaje = st.sidebar.slider("Porcentaje de ITBIS (%)", min_value=0.0, max_value=18.0, value=18.0, step=0.5)
+
+# 1. Tasa de cambio (Tasa de compra del día)
+tasa_compra_usd = st.sidebar.number_input("Tasa de Compra USD a DOP (Día)", value=58.50, step=0.01)
+
+# 2. ITBIS Fijo (18%)
+itbis_fijo = 18.0
+st.sidebar.markdown(f"**ITBIS Fijo:** `{itbis_fijo}%`")
+
+# 3. Margen de Ganancia (Fijo en 25% por defecto, pero modificable)
+margen_ganancia = st.sidebar.number_input("Margen de Ganancia sobre Costo (%)", value=25.0, step=0.5)
 
 # Inicializar variables de sesión si no existen
 if "proveedor_detectado" not in st.session_state:
@@ -37,7 +45,7 @@ tab_individual, tab_multiple = st.tabs([
 # =============================================================
 with tab_individual:
     st.subheader("Módulo de Factura Individual con Procesamiento Automático")
-    st.write("Sube el PDF o la imagen de tu factura. El sistema leerá el contenido, identificará al proveedor y llenará la tabla.")
+    st.write("Sube el PDF o la imagen de tu factura. El sistema leerá el contenido, identificará al proveedor y calculará los costos y precios de venta.")
     
     archivo_subido = st.file_uploader("📂 Cargar Factura (PDF o Imagen)", type=["pdf", "png", "jpg", "jpeg"], key="uploader_ind")
     
@@ -52,18 +60,14 @@ with tab_individual:
         else:
             imagen = Image.open(archivo_subido)
             st.image(imagen, caption=f"Vista previa: {archivo_subido.name}", use_column_width=True)
-            # Nota: Para imágenes puras sin OCR avanzado se requiere Tesseract, 
-            # pero si es un PDF nativo, el texto se extrae al instante.
             texto_extraido = "IMAGEN_CARGADA"
 
-        # --- LÓGICA DE AUTODETECCIÓN INTELIGENTE DE PROVEEDOR Y PRODUCTOS ---
         texto_upper = texto_extraido.upper()
         
         if "ALVAREZ" in texto_upper or "ALVAREZYSANCHEZ" in texto_upper or "4655" in texto_upper:
             st.session_state.proveedor_detectado = "Álvarez & Sánchez, S.A."
             st.session_state.nro_factura_detectado = "13014936"
             st.session_state.moneda_detectada = "DOP"
-            # Cargar automáticamente los datos de la factura de Álvarez & Sánchez
             st.session_state.df_productos = pd.DataFrame([
                 {
                     "Código": "4655", 
@@ -74,13 +78,12 @@ with tab_individual:
                     "Descuento (%)": 10.0
                 }
             ])
-            st.success("🤖 ¡Proveedor detectado automáticamente: Álvarez & Sánchez, S.A. y productos procesados!")
+            st.success("🤖 ¡Proveedor detectado automáticamente: Álvarez & Sánchez, S.A.!")
 
         elif "ISOTEX" in texto_upper or "HIEFOAM3L" in texto_upper:
             st.session_state.proveedor_detectado = "Isotex Dominicana, S.A.S."
             st.session_state.nro_factura_detectado = "C-00137907"
             st.session_state.moneda_detectada = "USD"
-            # Cargar automáticamente los ítems de Isotex
             st.session_state.df_productos = pd.DataFrame([
                 {"Código": "HIEFOAM3L", "Descripción": "HIELERA DE FOAM 3L", "Cantidad Empaques": 30.0, "Unidades por Caja": 1, "Precio Lista / Caja": 1.43, "Descuento (%)": 0.0},
                 {"Código": "NEVER10LA", "Descripción": "NEVERA DE FOAM 10L CON ASA", "Cantidad Empaques": 30.0, "Unidades por Caja": 1, "Precio Lista / Caja": 4.69, "Descuento (%)": 0.0},
@@ -88,7 +91,7 @@ with tab_individual:
                 {"Código": "CAVA20LS", "Descripción": "ISOBOX 20L", "Cantidad Empaques": 30.0, "Unidades por Caja": 1, "Precio Lista / Caja": 4.60, "Descuento (%)": 0.0},
                 {"Código": "SERICOL", "Descripción": "SERIGRAFÍA EN NEVERAS A UN COLOR", "Cantidad Empaques": 60.0, "Unidades por Caja": 1, "Precio Lista / Caja": 0.30, "Descuento (%)": 0.0}
             ])
-            st.success("🤖 ¡Proveedor detectado automáticamente: Isotex Dominicana, S.A.S. y productos procesados!")
+            st.success("🤖 ¡Proveedor detectado automáticamente: Isotex Dominicana, S.A.S.!")
         else:
             st.warning("⚠️ No se pudo reconocer el formato automáticamente. Puedes ingresar los datos de forma manual abajo.")
 
@@ -104,10 +107,9 @@ with tab_individual:
 
     st.divider()
     
-    # Tabla editable con los productos ya procesados e inyectados automáticamente
     df_ind_edit = st.data_editor(st.session_state.df_productos, num_rows="dynamic", key="editor_individual", use_container_width=True)
     
-    if st.button("🧮 Calcular Costos Unitarios Finales", type="primary", key="btn_ind"):
+    if st.button("🧮 Calcular Costos y Precios de Venta", type="primary", key="btn_ind"):
         subtotal_neto_dop = 0.0
         resultados_ind = []
         
@@ -122,8 +124,8 @@ with tab_individual:
             if cant_empaques <= 0 or precio_lista <= 0:
                 continue
             
-            # Conversión automática si la moneda es USD
-            precio_base_dop = precio_lista * tasa_usd if moneda_ind == "USD" else precio_lista
+            # Conversión automática usando la tasa de compra del día si es USD
+            precio_base_dop = precio_lista * tasa_compra_usd if moneda_ind == "USD" else precio_lista
             precio_con_desc = precio_base_dop * (1 - (desc_pct / 100.0))
             importe_linea_neto = cant_empaques * precio_con_desc
             subtotal_neto_dop += importe_linea_neto
@@ -134,27 +136,32 @@ with tab_individual:
             else:
                 costo_unitario_neto = precio_con_desc
                 
-            costo_unitario_con_itbis = costo_unitario_neto * (1 + (itbis_porcentaje / 100.0))
+            # Costo unitario con ITBIS fijo (18%)
+            costo_unitario_con_itbis = costo_unitario_neto * (1 + (itbis_fijo / 100.0))
+            
+            # Precio de venta aplicando el margen de ganancia seleccionado (por defecto 25%)
+            precio_venta_sugerido = costo_unitario_con_itbis * (1 + (margen_ganancia / 100.0))
             
             resultados_ind.append({
                 "Código": codigo,
                 "Descripción": desc,
                 "Cantidad": cant_empaques,
                 "Costo Unitario Neto (DOP)": round(costo_unitario_neto, 2),
-                "Costo Unitario + ITBIS (DOP)": round(costo_unitario_con_itbis, 2),
-                "Importe Neto Línea (DOP)": round(importe_linea_neto, 2)
+                "Costo Unit. + ITBIS": round(costo_unitario_con_itbis, 2),
+                f"Precio Venta (+{margen_ganancia}%)": round(precio_venta_sugerido, 2),
+                "Importe Neto Línea": round(importe_linea_neto, 2)
             })
             
         df_res_ind = pd.DataFrame(resultados_ind)
-        itbis_total_dop = subtotal_neto_dop * (itbis_porcentaje / 100.0)
+        itbis_total_dop = subtotal_neto_dop * (itbis_fijo / 100.0)
         total_general_dop = subtotal_neto_dop + itbis_total_dop
         
-        st.success("¡Cálculos de inventario realizados con éxito!")
+        st.success("¡Cálculos de inventario y precios de venta realizados con éxito!")
         st.dataframe(df_res_ind, use_container_width=True)
         
         c1, c2, c3 = st.columns(3)
         c1.metric("Subtotal Neto", f"RD$ {subtotal_neto_dop:,.2f}")
-        c2.metric("ITBIS Total", f"RD$ {itbis_total_dop:,.2f}")
+        c2.metric("ITBIS Fijo (18%)", f"RD$ {itbis_total_dop:,.2f}")
         c3.metric("Importe Total General", f"RD$ {total_general_dop:,.2f}")
 
 # =============================================================
@@ -162,7 +169,7 @@ with tab_individual:
 # =============================================================
 with tab_multiple:
     st.subheader("Módulo de Múltiples Facturas (Lote Masivo)")
-    st.write("Administra o consolida filas de múltiples facturas en una sola tabla de trabajo.")
+    st.write("Administra o consolida filas de múltiples facturas aplicando la tasa de compra y el margen de ganancia global.")
     
     df_multi_init = pd.DataFrame([
         {"No. Factura": "13014936", "Proveedor": "Álvarez & Sánchez", "Código": "4655", "Descripción": "TEQUILA RESERVA CRISTALINO 1800", "Cantidad": 2.0, "Moneda": "DOP", "Precio Unitario": 33480.0},
@@ -171,7 +178,7 @@ with tab_multiple:
     
     df_multi_edit = st.data_editor(df_multi_init, num_rows="dynamic", key="editor_multiple", use_container_width=True)
     
-    if st.button("🚀 Consolidar Lote Masivo", type="primary", key="btn_multi"):
+    if st.button("🚀 Consolidar Lote Masivo y Precios", type="primary", key="btn_multi"):
         resultados_lote = []
         subtotal_lote_dop = 0.0
         
@@ -187,12 +194,14 @@ with tab_multiple:
             if cant <= 0 or precio_unit <= 0:
                 continue
             
-            precio_dop = precio_unit * tasa_usd if mon == "USD" else precio_unit
+            # Tasa de compra automática si es USD
+            precio_dop = precio_unit * tasa_compra_usd if mon == "USD" else precio_unit
             importe_linea = cant * precio_dop
             subtotal_lote_dop += importe_linea
             
             costo_unit_neto = precio_dop
-            costo_unit_con_itbis = costo_unit_neto * (1 + (itbis_porcentaje / 100.0))
+            costo_unit_con_itbis = costo_unit_neto * (1 + (itbis_fijo / 100.0))
+            precio_venta_sugerido = costo_unit_con_itbis * (1 + (margen_ganancia / 100.0))
             
             resultados_lote.append({
                 "Factura": factura_ref,
@@ -200,13 +209,14 @@ with tab_multiple:
                 "Código": codigo,
                 "Descripción": desc,
                 "Cantidad": cant,
-                "Costo Unitario Neto (DOP)": round(costo_unit_neto, 2),
-                "Costo Unitario + ITBIS (DOP)": round(costo_unit_con_itbis, 2),
-                "Importe Total (DOP)": round(importe_linea, 2)
+                "Costo Unitario Neto": round(costo_unit_neto, 2),
+                "Costo Unit. + ITBIS": round(costo_unit_con_itbis, 2),
+                f"Precio Venta (+{margen_ganancia}%)": round(precio_venta_sugerido, 2),
+                "Importe Total": round(importe_linea, 2)
             })
             
         df_res_lote = pd.DataFrame(resultados_lote)
-        itbis_lote_dop = subtotal_lote_dop * (itbis_porcentaje / 100.0)
+        itbis_lote_dop = subtotal_lote_dop * (itbis_fijo / 100.0)
         total_lote_dop = subtotal_lote_dop + itbis_lote_dop
         
         st.success("¡Lote consolidado con éxito!")
@@ -214,12 +224,12 @@ with tab_multiple:
         
         m1, m2, m3 = st.columns(3)
         m1.metric("Subtotal Lote", f"RD$ {subtotal_lote_dop:,.2f}")
-        m2.metric("ITBIS Lote", f"RD$ {itbis_lote_dop:,.2f}")
+        m2.metric("ITBIS Fijo (18%)", f"RD$ {itbis_lote_dop:,.2f}")
         m3.metric("Total General del Lote", f"RD$ {total_lote_dop:,.2f}")
         
         csv_lote = df_res_lote.to_csv(index=False).encode('utf-8')
         st.download_button(
-            label="📥 Descargar CSV Consolidado para WilPOS",
+            label="📥 Descargar CSV Consolidado para Importación en WilPOS",
             data=csv_lote,
             file_name="wilpos_lote_multiples_facturas.csv",
             mime="text/csv"
