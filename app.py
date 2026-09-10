@@ -33,7 +33,7 @@ if "nfc_val" not in st.session_state:
 if "mon_val" not in st.session_state:
     st.session_state.mon_val = "DOP"
 if "emp_val" not in st.session_state:
-    st.session_state.emp_val = "Por Cajas / Empaques (con unidades por caja)"
+    st.session_state.emp_val = 0  # 0: Por Cajas / Empaques, 1: Unidades Directas
 if "df_productos" not in st.session_state:
     st.session_state.df_productos = pd.DataFrame([
         {"Código": "", "Descripción": "Sube una factura para procesar automáticamente", "Cantidad Empaques": 0.0, "Unidades por Caja": 1, "Precio Lista / Caja": 0.0, "Descuento (%)": 0.0}
@@ -74,7 +74,7 @@ with tab_individual:
             st.session_state.prov_val = "Álvarez & Sánchez, S.A."
             st.session_state.nfc_val = "13014936"
             st.session_state.mon_val = "DOP"
-            st.session_state.emp_val = "Por Cajas / Empaques (con unidades por caja)"
+            st.session_state.emp_val = 0
             
             match_empaque = re.search(r'(\d+)\s*/\s*(\d+)\s*(CL|ML|L|OZ)?', texto_upper)
             unidades_auto = int(match_empaque.group(1)) if match_empaque else 12
@@ -96,7 +96,7 @@ with tab_individual:
             st.session_state.prov_val = "Isotex Dominicana, S.A.S."
             st.session_state.nfc_val = "C-00137907"
             st.session_state.mon_val = "USD"
-            st.session_state.emp_val = "Unidades Directas"
+            st.session_state.emp_val = 1
             
             st.session_state.df_productos = pd.DataFrame([
                 {"Código": "HIEFOAM3L", "Descripción": "HIELERA DE FOAM 3L", "Cantidad Empaques": 30.0, "Unidades por Caja": 1, "Precio Lista / Caja": 1.43, "Descuento (%)": 0.0},
@@ -112,7 +112,7 @@ with tab_individual:
             st.session_state.prov_val = "Centro de Distribucion Cristian SRL (CDC)"
             st.session_state.nfc_val = "E310000011806"
             st.session_state.mon_val = "DOP"
-            st.session_state.emp_val = "Por Cajas / Empaques (con unidades por caja)"
+            st.session_state.emp_val = 0
             
             st.session_state.df_productos = pd.DataFrame([
                 {"Código": "281", "Descripción": "AGUA TONICA CANADA DRY 400ML", "Cantidad Empaques": 2.0, "Unidades por Caja": 12, "Precio Lista / Caja": 580.02, "Descuento (%)": 0.0},
@@ -139,11 +139,10 @@ with tab_individual:
         moneda_ind = st.selectbox("Moneda de la Factura", mon_options, index=mon_index)
         
         emp_options = ["Por Cajas / Empaques (con unidades por caja)", "Unidades Directas"]
-        emp_index = emp_options.index(st.session_state.emp_val) if st.session_state.emp_val in emp_options else 0
         tipo_empaque = st.radio(
             "Cálculo por Unidad (Autodetectado):", 
             emp_options, 
-            index=emp_index,
+            index=st.session_state.emp_val,
             horizontal=True
         )
 
@@ -179,7 +178,6 @@ with tab_individual:
                 
             costo_unitario_con_itbis = costo_unitario_neto * (1 + (itbis_fijo / 100.0))
             
-            # Precio de venta aplicando el margen y redondeando al múltiplo de 5 más cercano
             precio_venta_bruto = costo_unitario_con_itbis * (1 + (margen_ganancia / 100.0))
             precio_venta_sugerido = round(precio_venta_bruto / 5) * 5
             
