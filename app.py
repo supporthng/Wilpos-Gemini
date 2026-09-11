@@ -158,12 +158,13 @@ elif os.path.exists(SAVED_MASTER_FILE) and not master_dict:
     except Exception:
         pass
 
-# Equivalencias personalizables
+# Equivalencias personalizables con inclusión de Corona Cero
 if "custom_equivalences" not in st.session_state:
     st.session_state["custom_equivalences"] = {
         "BARCELO 40 ANIVERSARIO": "IMPERIAL PREMIUM BLEND 40 AÑOS",
         "BARCELO IMPERIAL PORTO": "IMPERIAL PORTO",
-        "DOBEL": "MAESTRO DOBEL"
+        "DOBEL": "MAESTRO DOBEL",
+        "CORONA CERO": "CERVEZA CORONA CERO"
     }
 
 st.sidebar.markdown("---")
@@ -254,12 +255,13 @@ def validate_with_master(item_description, original_code):
     max_matched_tiers = 0
     highest_score = 0.0
 
-    prov_set = {t for t in prov_tokens if len(t) > 2}
+    # Permitir palabras clave de 3 letras o el término "CERO" aunque tenga 4 letras pero sea clave especial
+    prov_set = {t for t in prov_tokens if len(t) > 2 or t == "CERO"}
 
     for m_name in master_names:
         m_tokens, _ = clean_and_normalize(m_name)
         m_volume = extract_volume_token(m_name)
-        master_set = {t for t in m_tokens if len(t) > 2}
+        master_set = {t for t in m_tokens if len(t) > 2 or t == "CERO"}
 
         if not prov_set or not master_set:
             continue
@@ -280,16 +282,16 @@ def validate_with_master(item_description, original_code):
         
         score = jaccard
         for t in common_tokens:
-            if len(t) > 3:
+            if len(t) > 3 or t == "CERO":
                 score += 0.25
 
-        if matched_tiers >= 2 and score >= 0.50:
+        if matched_tiers >= 2 and score >= 0.45:
             if score > highest_score:
                 highest_score = score
                 max_matched_tiers = matched_tiers
                 best_match_code = master_dict[m_name]
 
-    if highest_score >= 0.55 and max_matched_tiers >= 2:
+    if highest_score >= 0.50 and max_matched_tiers >= 2:
         return best_match_code, "Actualizado (IA por Rangos)"
 
     return original_code, "⚠️ Conserva Código Original (Sin Rango Seguro)"
@@ -307,7 +309,7 @@ def process_invoice_with_ai(file_obj, file_type):
         f"{memory_context}\n"
         "Analiza esta factura detalladamente. Extrae los datos de cabecera con absoluta precisión: 'emisor_rnc', 'emisor_nombre', 'numero_documento', 'fecha', 'subtotal', 'itbis', 'total'. "
         "Para cada ítem, extrae: 'codigo', 'descripcion', 'cantidad' (número de cajas compradas), 'empaque' (unidades individuales que trae la caja, interpretando formatos como 12/75CL -> 12, 6/4PACK -> 24 o 6, etc.), y 'costo_sin_itbis' (EL COSTO UNITARIO REAL POR CADA PIEZA INDIVIDUAL: toma el precio neto total de la línea y divídelo estrictamente entre cantidad * empaque). "
-        "REGLA ESTRICTA PARA LA DESCRIPCIÓN: Limpia el texto de cada producto para incluir ÚNICAMENTE el nombre comercial del producto y su presentación o tamaño limpio (ej: 'MAESTRO DOBEL DIAMANTE 700 ML', 'EVIAN 75 CL', 'BLUE LABEL 750 ML'), eliminando códigos internos, diagonales de empaque y textos redundantes. "
+        "REGLA ESTRICTA PARA LA DESCRIPCIÓN: Limpia el texto de cada producto para incluir ÚNICAMENTE el nombre comercial del producto y su presentación o tamaño limpio (ej: 'CORONA CERO 330 ML', 'MAESTRO DOBEL DIAMANTE 700 ML', 'EVIAN 75 CL'), eliminando códigos internos, diagonales de empaque y textos redundantes. "
         "Devuelve la información estrictamente en formato JSON con la siguiente estructura exacta: "
         '{"emisor_rnc": "...", "emisor_nombre": "...", "numero_documento": "...", "fecha": "...", "subtotal": 0.0, "itbis": 0.0, "total": 0.0, "items": [{"codigo": "...", "descripcion": "...", "cantidad": 1, "empaque": 1, "costo_sin_itbis": 0.0}]}. '
         "REGLA CRÍTICA: Preserva todos los ceros a la izquierda como texto. Respuesta JSON pura sin texto adicional."
@@ -451,7 +453,6 @@ if modulo == "📄 Factura Individual":
                     st.warning(f"⚠️ **Atención:** Hay {len(unmatched_items)} producto(s) sin rango seguro (se conservó su código original):")
                     for u_idx, u_desc, u_code in unmatched_items:
                         st.markdown(f"- *{u_desc}* (Código original: `{u_code}`)")
-                        # Clave única garantizada utilizando el índice numérico `u_idx`
                         with st.expander(f"➕ Asignar Código POS correcto para: {u_desc} (Ítem #{u_idx})"):
                             new_pos_code = st.text_input(f"Introduce el código POS correcto", key=f"override_{u_idx}_{u_code}")
                             if st.button("Guardar Regla Mapeo", key=f"btn_override_{u_idx}_{u_code}"):
