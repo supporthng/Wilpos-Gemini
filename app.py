@@ -172,7 +172,7 @@ if template_uploaded is not None:
         f.write(template_uploaded.getbuffer())
     st.sidebar.success("✅ Plantilla oficial guardada.")
 
-# Equivalencias y Mapeos Directos para CND y Proveedores
+# Equivalencias y Mapeos Directos para CND y Proveedores (Actualizado con Presidente y The One)
 if "custom_equivalences" not in st.session_state:
     st.session_state["custom_equivalences"] = {
         "BARCELO 40 ANIVERSARIO": "IMPERIAL PREMIUM BLEND 40 AÑOS",
@@ -183,7 +183,9 @@ if "custom_equivalences" not in st.session_state:
         "ENRIQUILLO SODA 400 ML": "SODA, ENRRIQUILLO 400ML",
         "CLAMATO COCTEL TOMATE": "CLAMATO 221ML",
         "THE ONE 12 OZ": "THE ONE 12 OZ",
-        "THE ONE 22 OZ": "THE ONE 355ML"
+        "THE ONE 22 OZ": "THE ONE 355ML",
+        "PRESIDENTE 12 OZ": "PRESIDENTE PEQ. 12oz Regular",
+        "PRESIDENTE 22 OZ": "PRESIDENTE REG. 22  REGULAR oz"
     }
 
 # ==========================================
