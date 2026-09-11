@@ -212,8 +212,6 @@ SYNONYMS_MAP = {
 
 def clean_and_normalize(text):
     upper_text = str(text).upper()
-    
-    # Eliminar códigos numéricos de proveedor al inicio (ej: 93100CLAMATO -> CLAMATO)
     upper_text = re.sub(r'^\d{4,6}', '', upper_text).strip()
 
     for prov, pos in st.session_state["custom_equivalences"].items():
@@ -292,6 +290,14 @@ def validate_with_master(item_description, original_code):
     return original_code, "⚠️ Conserva Código Original (Sin Match Seguro)"
 
 def process_invoice_with_ai(file_obj, file_type):
+    active_key = paid_api_key if st.session_state["use_paid_now"] else free_key_1
+    if not active_key and not st.session_state["use_paid_now"]:
+        active_key = free_key_2
+
+    if not active_key and not paid_api_key:
+        st.error("❌ No se encontró ninguna API Key de Gemini configurada en los secrets de Streamlit.")
+        return None, ""
+
     memory_context = ""
     known_mem = st.session_state["provider_memory"]
     if known_mem:
@@ -314,13 +320,9 @@ def process_invoice_with_ai(file_obj, file_type):
     parsed_data = None
     success_msg = ""
     
-    active_key = paid_api_key if st.session_state["use_paid_now"] else free_key_1
-    if not active_key and not st.session_state["use_paid_now"]:
-        active_key = free_key_2
-
     try:
-        genai.configure(api_key=active_key if active_key else paid_api_key)
-        model = genai.GenerativeModel('gemini-3.6-flash')
+        genai.configure(api_key=active_key)
+        model = genai.GenerativeModel('gemini-1.5-flash')
         
         file_obj.seek(0)
         file_bytes = file_obj.read()
@@ -337,7 +339,7 @@ def process_invoice_with_ai(file_obj, file_type):
             raw_text = raw_text[:-3]
         
         parsed_data = json.loads(raw_text.strip())
-        success_msg = "✅ ¡Factura procesada con éxito y validación de marcas segura!"
+        success_msg = "✅ ¡Factura procesada con éxito y coincidencia optimizada!"
         
         rnc_key = str(parsed_data.get("emisor_rnc", "")).strip()
         nombre_prov = str(parsed_data.get("emisor_nombre", "Proveedor Desconocido")).strip()
@@ -349,32 +351,10 @@ def process_invoice_with_ai(file_obj, file_type):
             }
             save_json_file(MEMORY_FILE, st.session_state["provider_memory"])
 
-        if st.session_state["use_paid_now"]:
-            success_msg = "✅ ¡Factura procesada usando la Versión de Pago!"
             
     except Exception as e:
-        err_str = str(e)
-        if ("429" in err_str or "Quota exceeded" in err_str) and not st.session_state["use_paid_now"]:
-            try:
-                genai.configure(api_key=free_key_2 if free_key_2 else paid_api_key)
-                model2 = genai.GenerativeModel('gemini-3.6-flash')
-                file_obj.seek(0)
-                response = model2.generate_content([
-                    {'mime_type': file_type, 'data': file_obj.read()},
-                    prompt_text
-                ])
-                raw_text = response.text.strip()
-                if raw_text.startswith("```json"):
-                    raw_text = raw_text[7:]
-                if raw_text.endswith("```"):
-                    raw_text = raw_text[:-3]
-                parsed_data = json.loads(raw_text.strip())
-                success_msg = "✅ ¡Factura procesada usando el respaldo gratuito #2!"
-            except Exception:
-                st.session_state["quota_exceeded"] = True
-                st.rerun()
-        else:
-            st.error(f"Error al procesar: {e}")
+        st.error(f"Error detallado en la IA: {str(e)}")
+        return None, ""
 
     return parsed_data, success_msg
 
@@ -402,7 +382,7 @@ if modulo == "📄 Factura Individual":
         if st.button("🚀 Procesar Factura") or st.session_state["use_paid_now"]:
             file_type = uploaded_file.type if hasattr(uploaded_file, 'type') else 'image/jpeg'
             
-            with st.spinner("Analizando factura con validación segura de marcas..."):
+            with st.spinner("Analizando factura con maestro optimizado..."):
                 parsed_data, success_msg = process_invoice_with_ai(uploaded_file, file_type)
 
             if parsed_data:
