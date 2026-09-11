@@ -231,14 +231,12 @@ def validate_with_master(item_description, original_code):
     
     clean_desc_key = item_description.strip().upper()
     
-    # 1. Regla de Mapeo Manual / Sobrescrito (Prioridad Absoluta)
     if clean_desc_key in st.session_state["product_overrides"]:
         return st.session_state["product_overrides"][clean_desc_key], "Actualizado (Regla Guardada)"
 
     prov_tokens, norm_prov = clean_and_normalize(item_description)
     prov_volume = extract_volume_token(item_description)
     
-    # 2. Búsqueda Exacta
     for m_name, m_code in master_dict.items():
         _, norm_m = clean_and_normalize(m_name)
         if m_name == norm_prov or m_name == clean_desc_key or norm_m == norm_prov:
@@ -247,7 +245,6 @@ def validate_with_master(item_description, original_code):
     best_match_code = original_code
     highest_score = 0.0
 
-    # Conjunto de tokens significativos del producto en la factura (sin importar el orden)
     prov_set = {t for t in prov_tokens if len(t) > 2 and not t.isdigit()}
 
     for m_name in master_names:
@@ -258,19 +255,14 @@ def validate_with_master(item_description, original_code):
         if not prov_set or not master_set:
             continue
 
-        # BLINDAJE FLEXIBLE DE PALABRAS CLAVE: Exigir que las palabras principales (ej: ENRIQUILLO y SODA) coexistan en ambos
         common_keywords = prov_set.intersection(master_set)
-        if len(common_keywords) < min(len(prov_set), len(master_set)):
-            # Si no comparten todas las palabras clave significativas, verificar solapamiento crítico
-            if len(common_keywords) == 0:
-                continue
+        if not common_keywords:
+            continue
 
-        # BLINDAJE DE VOLUMEN: Si ambos tienen volumen especificado, deben coincidir
         if prov_volume and m_volume:
             if prov_volume != m_volume:
                 continue
 
-        # Cálculo de similitud Jaccard ponderado
         union = prov_set.union(master_set)
         score = len(common_keywords) / len(union)
 
@@ -329,7 +321,7 @@ def process_invoice_with_ai(file_obj, file_type):
             raw_text = raw_text[:-3]
         
         parsed_data = json.loads(raw_text.strip())
-        success_msg = "✅ ¡Factura procesada con éxito y coincidencia flexible optimizada!"
+        success_msg = "✅ ¡Factura procesada con éxito!"
         
         rnc_key = str(parsed_data.get("emisor_rnc", "")).strip()
         nombre_prov = str(parsed_data.get("emisor_nombre", "Proveedor Desconocido")).strip()
@@ -337,7 +329,7 @@ def process_invoice_with_ai(file_obj, file_type):
         if rnc_key and rnc_key not in st.session_state["provider_memory"]:
             st.session_state["provider_memory"][rnc_key] = {
                 "nombre": nombre_prov if nombre_prov and nombre_prov != "None" else f"Proveedor RNC {rnc_key}",
-                "nota_formato": "Formato procesado con coincidencia flexible de palabras clave."
+                "nota_formato": "Formato procesado con éxito."
             }
             save_json_file(MEMORY_FILE, st.session_state["provider_memory"])
 
@@ -392,9 +384,9 @@ if modulo == "📄 Factura Individual":
                 st.info(f"El archivo '{uploaded_file.name}' es de tipo PDF o documento.")
 
         if st.button("🚀 Procesar Factura") or st.session_state["use_paid_now"]:
-            file_type = uploaded_file.type if hasattr(uploaded_file, 'type') else 'image/jpeg'
+            file_type = uploaded_file.type if hasattr(file, 'type') else 'image/jpeg'
             
-            with st.spinner("Analizando factura con coincidencia flexible de palabras clave..."):
+            with st.spinner("Analizando factura..."):
                 parsed_data, success_msg = process_invoice_with_ai(uploaded_file, file_type)
 
             if parsed_data:
@@ -449,11 +441,12 @@ if modulo == "📄 Factura Individual":
                 
                 if unmatched_items:
                     st.warning(f"⚠️ **Atención:** Hay {len(unmatched_items)} producto(s) sin match seguro (se conservó su código original):")
-                    for u_desc, u_code in unmatched_items:
+                    for idx_u, (u_desc, u_code) in enumerate(unmatched_items):
                         st.markdown(f"- *{u_desc}* (Código original: `{u_code}`)")
-                        with st.expander(f"➕ Asignar Código POS correcto para: {u_desc}"):
-                            new_pos_code = st.text_input(f"Introduce el código POS correcto para '{u_desc}'", key=f"override_{u_desc}")
-                            if st.button("Guardar Regla Mapeo", key=f"btn_override_{u_desc}"):
+                        with st.expander(f"➕ Asignar Código POS correcto para: {u_desc} (#{idx_u})"):
+                            # Clave única para evitar StreamlitDuplicateElementKey
+                            new_pos_code = st.text_input(f"Introduce el código POS correcto para '{u_desc}'", key=f"override_{idx_u}_{u_desc}")
+                            if st.button("Guardar Regla Mapeo", key=f"btn_override_{idx_u}_{u_desc}"):
                                 if new_pos_code:
                                     st.session_state["product_overrides"][u_desc.strip().upper()] = new_pos_code.strip()
                                     save_json_file(OVERRIDES_FILE, st.session_state["product_overrides"])
