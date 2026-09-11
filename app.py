@@ -341,4 +341,325 @@ def process_invoice_with_ai(file_obj, file_type):
         raw_text = response.text.strip()
         if raw_text.startswith("```json"):
             raw_text = raw_text[7:]
-        if raw_text.endswith("
+        if raw_text.endswith("```"):
+            raw_text = raw_text[:-3]
+        
+        parsed_data = json.loads(raw_text.strip())
+        success_msg = "✅ ¡Factura procesada con éxito y coincidencia optimizada!"
+        
+        rnc_key = str(parsed_data.get("emisor_rnc", "")).strip()
+        nombre_prov = str(parsed_data.get("emisor_nombre", "Proveedor Desconocido")).strip()
+        
+        # Autorización previa antes de registrar en memoria histórica
+        if rnc_key and rnc_key not in st.session_state["provider_memory"]:
+            st.session_state["pending_provider_rnc"] = rnc_key
+            st.session_state["pending_provider_name"] = nombre_prov
+
+    except Exception as e:
+        st.error(f"Error detallado en la IA: {str(e)}")
+        return None, ""
+
+    return parsed_data, success_msg
+
+# ==========================================
+# MÓDULO 1: FACTURA INDIVIDUAL
+# ==========================================
+if modulo == "📄 Factura Individual":
+    st.title("📊 Automatizador de Facturas para WilPOS (Individual)")
+    st.markdown("Sube tu factura para extraer sus ítems, validar códigos con tu maestro POS y generar la plantilla actualizada.")
+
+    uploaded_file = st.file_uploader("Sube tu factura (PDF o Imagen)", type=["pdf", "png", "jpg", "jpeg"], key="single_file")
+
+    if uploaded_file is not None:
+        st.success(f"¡Archivo cargado: {uploaded_file.name}!")
+
+        with st.expander("👁️ Vista Previa del Archivo Cargado"):
+            file_type_check = uploaded_file.type if hasattr(uploaded_file, 'type') else ''
+            if "image" in file_type_check or uploaded_file.name.lower().endswith(('png', 'jpg', 'jpeg', 'webp')):
+                image = Image.open(uploaded_file)
+                st.image(image, caption=f"Vista previa: {uploaded_file.name}", use_container_width=True)
+                uploaded_file.seek(0)
+            else:
+                st.info(f"El archivo '{uploaded_file.name}' es de tipo PDF o documento.")
+
+        if st.button("🚀 Procesar Factura") or st.session_state["use_paid_now"]:
+            file_type = uploaded_file.type if hasattr(uploaded_file, 'type') else 'image/jpeg'
+            
+            with st.spinner("Analizando factura con maestro optimizado..."):
+                parsed_data, success_msg = process_invoice_with_ai(uploaded_file, file_type)
+
+            if parsed_data:
+                st.success(success_msg)
+                
+                prov_nombre = parsed_data.get("emisor_nombre", "Desconocido")
+                prov_rnc = parsed_data.get("emisor_rnc", "N/D")
+                st.info(f"🏢 **Proveedor Procesado:** {prov_nombre} | **RNC:** `{prov_rnc}`")
+
+                # Autorización requerida para guardar nuevo proveedor en memoria
+                if "pending_provider_rnc" in st.session_state:
+                    p_rnc = st.session_state["pending_provider_rnc"]
+                    p_name = st.session_state["pending_provider_name"]
+                    st.warning(f"⚠️ El proveedor **{p_name}** (RNC: `{p_rnc}`) no está en tu memoria histórica.")
+                    if st.button("🔒 Autorizar y Guardar Proveedor en Memoria"):
+                        st.session_state["provider_memory"][p_rnc] = {
+                            "nombre": p_name if p_name and p_name != "None" else f"Proveedor RNC {p_rnc}",
+                            "nota_formato": "Formato autorizado y procesado exitosamente."
+                        }
+                        save_json_file(MEMORY_FILE, st.session_state["provider_memory"])
+                        del st.session_state["pending_provider_rnc"]
+                        del st.session_state["pending_provider_name"]
+                        st.success("¡Proveedor autorizado y guardado exitosamente!")
+                        st.rerun()
+
+                st.markdown("### 📋 Resumen de Totales de la Factura")
+                c_t1, c_t2, c_t3 = st.columns(3)
+                c_t1.metric("Subtotal", f"RD$ {safe_float(parsed_data.get('subtotal', 0)):,.2f}")
+                c_t2.metric("ITBIS", f"RD$ {safe_float(parsed_data.get('itbis', 0)):,.2f}")
+                c_t3.metric("Total General", f"RD$ {safe_float(parsed_data.get('total', 0)):,.2f}")
+                
+                st.markdown("---")
+                st.markdown("### 📦 Validación con Maestro y Precios de Venta")
+
+                data_items = parsed_data.get("items", [])
+                rows_preview = []
+                unmatched_items = []
+
+                for idx, item in enumerate(data_items, start=1):
+                    desc = str(item.get("descripcion", ""))
+                    orig_code = str(item.get("codigo", "")).strip()
+                    
+                    if orig_code == "92713":
+                        item["empaque"] = 10
+
+                    final_code, status_match = validate_with_master(desc, orig_code)
+                    if "No Encontrado" in status_match or "Conserva" in status_match:
+                        unmatched_items.append((desc, orig_code))
+
+                    costo = safe_float(item.get("costo_sin_itbis", 0))
+                    raw_pv = (costo * 1.25) * 1.18
+                    precio_venta = round_to_nearest_5(raw_pv)
+                    cant_comprada = safe_int(item.get("cantidad", 1), 1)
+                    empaque_val = safe_int(item.get("empaque", 1), 1)
+                    stock_val = cant_comprada * empaque_val
+                    
+                    rows_preview.append({
+                        "No.": idx,
+                        "Código Barra POS": final_code,
+                        "Nombre": desc,
+                        "Cant. Compra": cant_comprada,
+                        "Empaque": empaque_val,
+                        "Stock Total": stock_val,
+                        "Costo Unit. Sin ITBIS": costo,
+                        "Precio Venta (M5)": precio_venta,
+                        "Estado Maestro": status_match
+                    })
+                
+                if unmatched_items:
+                    st.warning(f"⚠️ **Atención:** Hay {len(unmatched_items)} producto(s) sin match seguro (se conservó su código original):")
+                    for idx_u, (u_desc, u_code) in enumerate(unmatched_items):
+                        st.markdown(f"- *{u_desc}* (Código original: `{u_code}`)")
+                        with st.expander(f"➕ Asignar Código POS correcto para: {u_desc} (#{idx_u})"):
+                            new_pos_code = st.text_input(f"Introduce el código POS correcto para '{u_desc}'", key=f"override_{idx_u}_{u_desc}")
+                            if st.button("🔒 Autorizar y Guardar Regla Mapeo", key=f"btn_override_{idx_u}_{u_desc}"):
+                                if new_pos_code:
+                                    st.session_state["product_overrides"][u_desc.strip().upper()] = new_pos_code.strip()
+                                    save_json_file(OVERRIDES_FILE, st.session_state["product_overrides"])
+                                    st.success("¡Regla autorizada y guardada con éxito! Vuelve a procesar para aplicarla.")
+                                    st.rerun()
+
+                df_resultado = pd.DataFrame(rows_preview)
+                st.dataframe(df_resultado, use_container_width=True, hide_index=True)
+                
+                if os.path.exists(TEMPLATE_FILE):
+                    wb = openpyxl.load_workbook(TEMPLATE_FILE)
+                else:
+                    wb = openpyxl.Workbook()
+                    ws_default = wb.active
+                    ws_default.title = "Productos"
+
+                if "Productos" in wb.sheetnames:
+                    ws_prod = wb["Productos"]
+                else:
+                    ws_prod = wb.create_sheet("Productos")
+
+                if ws_prod.max_row > 1:
+                    ws_prod.delete_rows(2, ws_prod.max_row)
+
+                for item_dict in rows_preview:
+                    ws_prod.append([
+                        item_dict["Nombre"],
+                        item_dict["Código Barra POS"],
+                        "General",
+                        "producto",
+                        item_dict["Precio Venta (M5)"],
+                        item_dict["Costo Unit. Sin ITBIS"],
+                        item_dict["Stock Total"],
+                        5,
+                        0.18,
+                        "unidad",
+                        "No",
+                        item_dict["Empaque"],
+                        "No",
+                        0,
+                        0,
+                        None,
+                        "No",
+                        None
+                    ])
+                    ws_prod.cell(row=ws_prod.max_row, column=2).number_format = '@'
+                
+                output = io.BytesIO()
+                wb.save(output)
+                excel_data = output.getvalue()
+                
+                st.download_button(
+                    label="📥 Descargar Excel Plantilla WilPOS Oficial Actualizada",
+                    data=excel_data,
+                    file_name="Inventario_WilPOS_Actualizado.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                )
+
+# ==========================================
+# MÓDULO 2: MÚLTIPLES FACTURAS (LOTE)
+# ==========================================
+elif modulo == "📂 Múltiples Facturas (Lote)":
+    st.title("📂 Procesador por Lotes (Estructura Plantilla Oficial)")
+    st.markdown("Sube varias facturas. Se consolidarán en una sola plantilla respetando todas las pestañas de tu archivo oficial.")
+
+    uploaded_files = st.file_uploader("Sube tus facturas (Puedes seleccionar varias)", type=["pdf", "png", "jpg", "jpeg"], accept_multiple_files=True, key="batch_files")
+
+    if uploaded_files:
+        st.info(f"Se han cargado {len(uploaded_files)} archivos en total.")
+
+        if st.button("🚀 Procesar Lote y Consolidar", type="primary"):
+            all_consolidated_items = []
+            invoice_totals_summary = []
+            duplicate_count = 0
+            batch_signatures = set()
+
+            progress_bar = st.progress(0)
+            status_text = st.empty()
+
+            for i, file in enumerate(uploaded_files):
+                status_text.text(f"Analizando archivo {i+1} de {len(uploaded_files)}: {file.name}...")
+                file_type = file.type if hasattr(file, 'type') else 'image/jpeg'
+                
+                parsed_data, _ = process_invoice_with_ai(file, file_type)
+
+                if parsed_data and isinstance(parsed_data, dict):
+                    rnc_emisor = str(parsed_data.get("emisor_rnc", "")).strip()
+                    nombre_emisor = str(parsed_data.get("emisor_nombre", "Desconocido")).strip()
+                    num_doc = str(parsed_data.get("numero_documento", "")).strip()
+                    fecha_doc = str(parsed_data.get("fecha", "")).strip()
+                    subtotal_doc = safe_float(parsed_data.get("subtotal", 0))
+                    itbis_doc = safe_float(parsed_data.get("itbis", 0))
+                    total_doc_val = safe_float(parsed_data.get("total", 0))
+                    
+                    signature_string = f"{rnc_emisor}_{num_doc}_{fecha_doc}_{total_doc_val}"
+                    doc_signature = hashlib.md5(signature_string.encode('utf-8')).hexdigest()
+                    
+                    if doc_signature in batch_signatures:
+                        duplicate_count += 1
+                        st.warning(f"⚠️ Archivo duplicado omitido: **{file.name}**")
+                    else:
+                        batch_signatures.add(doc_signature)
+                        invoice_totals_summary.append({
+                            "Proveedor": nombre_emisor if nombre_emisor and nombre_emisor != "None" else f"RNC: {rnc_emisor}",
+                            "Archivo": file.name,
+                            "Nº Documento": num_doc if num_doc else "N/D",
+                            "Subtotal": subtotal_doc,
+                            "ITBIS": itbis_doc,
+                            "Total General": total_doc_val
+                        })
+
+                        items = parsed_data.get("items", [])
+                        if isinstance(items, list):
+                            all_consolidated_items.extend(items)
+
+                progress_bar.progress((i + 1) / len(uploaded_files))
+
+            status_text.text("¡Procesamiento por lotes completado!")
+
+            if invoice_totals_summary:
+                st.markdown("### 🏢 Totales por Factura")
+                st.dataframe(pd.DataFrame(invoice_totals_summary), use_container_width=True, hide_index=True)
+
+            if all_consolidated_items:
+                st.markdown(f"### 📦 Consolidado Total ({len(all_consolidated_items)} ítems)")
+                rows_preview = []
+                for idx, item in enumerate(all_consolidated_items, start=1):
+                    desc = str(item.get("descripcion", ""))
+                    orig_code = str(item.get("codigo", "")).strip()
+                    if orig_code == "92713":
+                        item["empaque"] = 10
+
+                    final_code, status_match = validate_with_master(desc, orig_code)
+                    costo = safe_float(item.get("costo_sin_itbis", 0))
+                    raw_pv = (costo * 1.25) * 1.18
+                    precio_venta = round_to_nearest_5(raw_pv)
+                    cant_comprada = safe_int(item.get("cantidad", 1), 1)
+                    empaque_val = safe_int(item.get("empaque", 1), 1)
+                    stock_val = cant_comprada * empaque_val
+                    
+                    rows_preview.append({
+                        "No.": idx,
+                        "Código Barra POS": final_code,
+                        "Nombre": desc,
+                        "Cant. Compra": cant_comprada,
+                        "Empaque": empaque_val,
+                        "Stock Total": stock_val,
+                        "Costo Unit. Sin ITBIS": costo,
+                        "Precio Venta (M5)": precio_venta,
+                        "Estado Maestro": status_match
+                    })
+
+                st.dataframe(pd.DataFrame(rows_preview), use_container_width=True, hide_index=True)
+
+                if os.path.exists(TEMPLATE_FILE):
+                    wb = openpyxl.load_workbook(TEMPLATE_FILE)
+                else:
+                    wb = openpyxl.Workbook()
+                    ws_default = wb.active
+                    ws_default.title = "Productos"
+
+                if "Productos" in wb.sheetnames:
+                    ws_prod = wb["Productos"]
+                else:
+                    ws_prod = wb.create_sheet("Productos")
+
+                if ws_prod.max_row > 1:
+                    ws_prod.delete_rows(2, ws_prod.max_row)
+
+                for item_dict in rows_preview:
+                    ws_prod.append([
+                        item_dict["Nombre"],
+                        item_dict["Código Barra POS"],
+                        "General",
+                        "producto",
+                        item_dict["Precio Venta (M5)"],
+                        item_dict["Costo Unit. Sin ITBIS"],
+                        item_dict["Stock Total"],
+                        5,
+                        0.18,
+                        "unidad",
+                        "No",
+                        item_dict["Empgages"] if "Empgages" in item_dict else item_dict["Empaque"],
+                        "No",
+                        0,
+                        0,
+                        None,
+                        "No",
+                        None
+                    ])
+                    ws_prod.cell(row=ws_prod.max_row, column=2).number_format = '@'
+
+                output = io.BytesIO()
+                wb.save(output)
+                excel_data_batch = output.getvalue()
+
+                st.download_button(
+                    label="📥 Descargar Excel Consolidado Oficial WilPOS",
+                    data=excel_data_batch,
+                    file_name="Inventario_WilPOS_Consolidado_Oficial.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                )
