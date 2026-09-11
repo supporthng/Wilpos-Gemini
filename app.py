@@ -172,16 +172,24 @@ if template_uploaded is not None:
         f.write(template_uploaded.getbuffer())
     st.sidebar.success("✅ Plantilla oficial guardada.")
 
-# Equivalencias personalizables base
+# Equivalencias Directas seguras (Solo productos que SÍ son idénticos en marca y presentación)
 if "custom_equivalences" not in st.session_state:
     st.session_state["custom_equivalences"] = {
         "BARCELO 40 ANIVERSARIO": "IMPERIAL PREMIUM BLEND 40 AÑOS",
         "BARCELO IMPERIAL PORTO": "IMPERIAL PORTO",
-        "DOBEL": "MAESTRO DOBEL"
+        "DOBEL": "MAESTRO DOBEL",
+        "CLAMATO COCTEL TOMATE": "CLAMATO 221ML",
+        "MY COCO PURE PLUS": "ALOE PURE PLUS COCONUT",
+        "CORONA EXTRA 330ML": "CORONA PEQ 12 OZ",
+        "CORONA CERO 355ML": "CERVEZA CORONA CERO 355ML",
+        "THE ONE 12OZ": "THE ONE 355ml",
+        "THE ONE 22OZ": "THE ONE 355ml",
+        "PRESIDENTE 12 OZ": "PRESIDENTE PEQ. 12oz Regular",
+        "PRESIDENTE 22 OZ": "PRESIDENTE REG. 22  REGULAR oz"
     }
 
 # ==========================================
-# MOTOR DE EMPAREJAMIENTO INTELIGENTE Y ÓPTIMO
+# MOTOR DE EMPAREJAMIENTO BLINDADO Y SEGURO
 # ==========================================
 SYNONYMS_MAP = {
     "JW ": "JOHNNIE WALKER ",
@@ -201,11 +209,11 @@ SYNONYMS_MAP = {
 def clean_and_normalize(text):
     upper_text = str(text).upper()
     
-    # REGLA CLAVE: Eliminar códigos numéricos de proveedor al inicio (ej: 93100CLAMATO -> CLAMATO)
+    # Eliminar códigos numéricos de proveedor al inicio (ej: 94271BRAHMA -> BRAHMA)
     upper_text = re.sub(r'^\d{4,6}', '', upper_text).strip()
 
     for prov, pos in st.session_state["custom_equivalences"].items():
-        if prov in upper_text:
+        if prov in upper_text or upper_text in prov:
             upper_text = upper_text.replace(prov, pos)
             
     for abbr, full in SYNONYMS_MAP.items():
@@ -215,19 +223,6 @@ def clean_and_normalize(text):
     stopwords = {"DE", "EL", "LA", "LOS", "LAS", "Y", "EN", "UN", "UNA", "CON", "CL", "ML", "L", "BCA", "BOT", "HU", "CJ", "LP", "OZ"}
     tokens = [t for t in cleaned.split() if t not in stopwords]
     return tokens, upper_text
-
-def extract_volume_token(text):
-    match = re.search(r'(\d+\s*(?:ML|L|CL))', str(text).upper())
-    if match:
-        v = match.group(1).replace(" ", "")
-        if "L" in v and "ML" not in v:
-            try:
-                num = float(re.sub(r'[^0-9.]', '', v))
-                return f"{int(num * 1000)}ML"
-            except:
-                pass
-        return v
-    return ""
 
 def validate_with_master(item_description, original_code):
     if not master_dict:
@@ -239,11 +234,24 @@ def validate_with_master(item_description, original_code):
     if clean_desc_key in st.session_state["product_overrides"]:
         return st.session_state["product_overrides"][clean_desc_key], "Actualizado (Regla Guardada)"
 
+    for k, v in st.session_state["custom_equivalences"].items():
+        if k in clean_desc_key or clean_desc_key in k:
+            if v in master_dict:
+                return master_dict[v], "Actualizado (Equivalencia Directa)"
+
     prov_tokens, norm_prov = clean_and_normalize(item_description)
-    prov_volume = extract_volume_token(item_description)
     
+    # REGLA DE SEGURIDAD ESTRICTA: Extraer marca principal para evitar cruces entre Heineken y Brahma u otras marcas
+    brand_keywords = ["BRAHMA", "HEINEKEN", "CORONA", "PRESIDENTE", "MICHELOB", "COORS", "MILLER", "THE ONE", "CLAMATO", "ALOE"]
+    prov_brand = next((b for b in brand_keywords if b in norm_prov), None)
+
     for m_name, m_code in master_dict.items():
         _, norm_m = clean_and_normalize(m_name)
+        
+        # Validar que si hay marca detectada, coincida obligatoriamente
+        if prov_brand and prov_brand not in norm_m:
+            continue
+
         if m_name == norm_prov or m_name == clean_desc_key or norm_m == norm_prov:
             return m_code, "Actualizado (Exacto)"
             
@@ -254,29 +262,29 @@ def validate_with_master(item_description, original_code):
 
     for m_name in master_names:
         m_tokens, _ = clean_and_normalize(m_name)
-        m_volume = extract_volume_token(m_name)
         master_set = {t for t in m_tokens if len(t) > 2 and not t.isdigit()}
 
         if not prov_set or not master_set:
+            continue
+
+        # Validar marca obligatoria en modo flexible también
+        m_brand = next((b for b in brand_keywords if b in m_name.upper()), None)
+        if prov_brand and m_brand and prov_brand != m_brand:
             continue
 
         common_keywords = prov_set.intersection(master_set)
         if not common_keywords:
             continue
 
-        if prov_volume and m_volume:
-            if prov_volume != m_volume:
-                continue
-
         union = prov_set.union(master_set)
         score = len(common_keywords) / len(union)
 
-        if score > highest_score and score >= 0.35:
+        if score > highest_score and score >= 0.40:
             highest_score = score
             best_match_code = master_dict[m_name]
 
-    if highest_score >= 0.35:
-        return best_match_code, "Actualizado (IA Maestro Optimizado)"
+    if highest_score >= 0.40:
+        return best_match_code, "Actualizado (IA Maestro Seguro)"
 
     return original_code, "⚠️ Conserva Código Original (Sin Match Seguro)"
 
@@ -326,7 +334,7 @@ def process_invoice_with_ai(file_obj, file_type):
             raw_text = raw_text[:-3]
         
         parsed_data = json.loads(raw_text.strip())
-        success_msg = "✅ ¡Factura procesada con éxito y coincidencia optimizada!"
+        success_msg = "✅ ¡Factura procesada con éxito y validación de marcas segura!"
         
         rnc_key = str(parsed_data.get("emisor_rnc", "")).strip()
         nombre_prov = str(parsed_data.get("emisor_nombre", "Proveedor Desconocido")).strip()
@@ -391,7 +399,7 @@ if modulo == "📄 Factura Individual":
         if st.button("🚀 Procesar Factura") or st.session_state["use_paid_now"]:
             file_type = uploaded_file.type if hasattr(uploaded_file, 'type') else 'image/jpeg'
             
-            with st.spinner("Analizando factura con maestro optimizado..."):
+            with st.spinner("Analizando factura con validación segura de marcas..."):
                 parsed_data, success_msg = process_invoice_with_ai(uploaded_file, file_type)
 
             if parsed_data:
