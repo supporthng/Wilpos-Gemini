@@ -322,8 +322,8 @@ def process_invoice_with_ai(file_obj, file_type):
     
     try:
         genai.configure(api_key=active_key)
-        # Usamos el modelo estándar actual soportado universalmente
-        model = genai.GenerativeModel('gemini-2.5-flash')
+        # Actualizado al modelo requerido por la API
+        model = genai.GenerativeModel('gemini-3.6-flash')
         
         file_obj.seek(0)
         file_bytes = file_obj.read()
