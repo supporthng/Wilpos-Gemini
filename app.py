@@ -96,19 +96,28 @@ st.sidebar.title("🗂️ Maestro de Inventario POS")
 master_dict = {}
 master_names = []
 
+def parse_master_dataframe(df_m):
+    global master_dict, master_names
+    master_dict = {}
+    master_names = []
+    cols = [str(c).lower() for c in df_m.columns]
+    name_col = next((df_m.columns[i] for i, c in enumerate(cols) if 'nombre' in c or 'descripcion' in c), df_m.columns[0])
+    code_col = next((df_m.columns[i] for i, c in enumerate(cols) if 'codigo' in c or 'barra' in c or 'barcode' in c), df_m.columns[1])
+    
+    for _, row in df_m.iterrows():
+        p_name = str(row[name_col]).strip().upper()
+        raw_code = str(row[code_col]).strip()
+        if raw_code.endswith('.0'):
+            raw_code = raw_code[:-2]
+        p_code = raw_code
+        if p_name and p_name != "NAN" and p_code and p_code != "NAN":
+            master_dict[p_name] = p_code
+            master_names.append(p_name)
+
 if os.path.exists(SAVED_MASTER_FILE) and "master_loaded_once" not in st.session_state:
     try:
         df_saved = pd.read_excel(SAVED_MASTER_FILE, dtype=str)
-        cols_s = [c.lower() for c in df_saved.columns]
-        s_name_col = next((df_saved.columns[i] for i, c in enumerate(cols_s) if 'nombre' in c or 'descripcion' in c), df_saved.columns[0])
-        s_code_col = next((df_saved.columns[i] for i, c in enumerate(cols_s) if 'codigo' in c or 'barra' in c or 'barcode' in c), df_saved.columns[1])
-        
-        for _, row in df_saved.iterrows():
-            p_name = str(row[s_name_col]).strip().upper()
-            p_code = str(row[s_code_col]).strip().replace(".0", "")
-            if p_name and p_name != "NAN" and p_code != "NAN":
-                master_dict[p_name] = p_code
-                master_names.append(p_name)
+        parse_master_dataframe(df_saved)
         st.sidebar.success(f"📂 Maestro anterior cargado: {len(master_dict)} productos.")
         st.session_state["master_loaded_once"] = True
     except Exception as e:
@@ -126,35 +135,14 @@ if master_file_uploaded is not None:
             with open(SAVED_MASTER_FILE, "wb") as f:
                 f.write(master_file_uploaded.getbuffer())
         
-        master_dict = {}
-        master_names = []
-        cols = [c.lower() for c in df_master.columns]
-        name_col = next((df_master.columns[i] for i, c in enumerate(cols) if 'nombre' in c or 'descripcion' in c), df_master.columns[0])
-        code_col = next((df_master.columns[i] for i, c in enumerate(cols) if 'codigo' in c or 'barra' in c or 'barcode' in c), df_master.columns[1])
-        
-        for _, row in df_master.iterrows():
-            p_name = str(row[name_col]).strip().upper()
-            p_code = str(row[code_col]).strip().replace(".0", "")
-            if p_name and p_name != "NAN" and p_code != "NAN":
-                master_dict[p_name] = p_code
-                master_names.append(p_name)
-                
+        parse_master_dataframe(df_master)
         st.sidebar.success(f"✅ Nuevo maestro guardado: {len(master_dict)} productos.")
     except Exception as e:
         st.sidebar.error(f"Error al procesar el maestro: {e}")
 elif os.path.exists(SAVED_MASTER_FILE) and not master_dict:
     try:
         df_saved = pd.read_excel(SAVED_MASTER_FILE, dtype=str)
-        cols_s = [c.lower() for c in df_saved.columns]
-        s_name_col = next((df_saved.columns[i] for i, c in enumerate(cols_s) if 'nombre' in c or 'descripcion' in c), df_saved.columns[0])
-        s_code_col = next((df_saved.columns[i] for i, c in enumerate(cols_s) if 'codigo' in c or 'barra' in c or 'barcode' in c), df_saved.columns[1])
-        
-        for _, row in df_saved.iterrows():
-            p_name = str(row[s_name_col]).strip().upper()
-            p_code = str(row[s_code_col]).strip().replace(".0", "")
-            if p_name and p_name != "NAN" and p_code != "NAN":
-                master_dict[p_name] = p_code
-                master_names.append(p_name)
+        parse_master_dataframe(df_saved)
     except Exception:
         pass
 
@@ -240,7 +228,9 @@ def validate_with_master(item_description, original_code):
     
     clean_desc_key = str(item_description).strip().upper()
     
-    clean_orig_code = str(original_code).strip().replace(".0", "")
+    clean_orig_code = str(original_code).strip()
+    if clean_orig_code.endswith('.0'):
+        clean_orig_code = clean_orig_code[:-2]
     if not clean_orig_code or clean_orig_code.lower() in ["nan", "none", ""]:
         clean_orig_code = ""
 
@@ -248,10 +238,10 @@ def validate_with_master(item_description, original_code):
     if "CORONA CERO" in clean_desc_key or "CERO 355" in clean_desc_key:
         for m_name, m_code in master_dict.items():
             if "CORONA" in m_name and "CERO" in m_name:
-                return str(m_code).strip().replace(".0", ""), "Actualizado (Regla Maestra Corona Cero)"
+                return str(m_code).strip(), "Actualizado (Regla Maestra Corona Cero)"
 
     if clean_desc_key in st.session_state["product_overrides"]:
-        return str(st.session_state["product_overrides"][clean_desc_key]).strip().replace(".0", ""), "Actualizado (Regla Guardada)"
+        return str(st.session_state["product_overrides"][clean_desc_key]).strip(), "Actualizado (Regla Guardada)"
 
     prov_tokens, norm_prov = clean_and_normalize(item_description)
     prov_volume = extract_volume_token(item_description)
@@ -259,7 +249,7 @@ def validate_with_master(item_description, original_code):
     for m_name, m_code in master_dict.items():
         _, norm_m = clean_and_normalize(m_name)
         if m_name == norm_prov or m_name == clean_desc_key or norm_m == norm_prov:
-            return str(m_code).strip().replace(".0", ""), "Actualizado (Exacto)"
+            return str(m_code).strip(), "Actualizado (Exacto)"
             
     best_match_code = clean_orig_code
     max_matched_tiers = 0
@@ -298,7 +288,7 @@ def validate_with_master(item_description, original_code):
             if score > highest_score:
                 highest_score = score
                 max_matched_tiers = matched_tiers
-                best_match_code = str(master_dict[m_name]).strip().replace(".0", "")
+                best_match_code = str(master_dict[m_name]).strip()
 
     if highest_score >= 0.50 and max_matched_tiers >= 2:
         return best_match_code, "Actualizado (IA por Rangos)"
