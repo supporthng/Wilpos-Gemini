@@ -181,7 +181,7 @@ if "custom_equivalences" not in st.session_state:
     }
 
 # ==========================================
-# MOTOR AUDITADO Y BLINDADO DE EMPAREJAMIENTO
+# MOTOR AUDITADO Y FLEXIBLE DE EMPAREJAMIENTO
 # ==========================================
 SYNONYMS_MAP = {
     "JW ": "JOHNNIE WALKER ",
@@ -247,45 +247,40 @@ def validate_with_master(item_description, original_code):
     best_match_code = original_code
     highest_score = 0.0
 
-    # Extraer tokens significativos (excluyendo números pequeños o unidades sueltas)
+    # Conjunto de tokens significativos del producto en la factura (sin importar el orden)
     prov_set = {t for t in prov_tokens if len(t) > 2 and not t.isdigit()}
-    prov_primary_brand = prov_tokens[0] if prov_tokens else ""
 
     for m_name in master_names:
         m_tokens, _ = clean_and_normalize(m_name)
         m_volume = extract_volume_token(m_name)
         master_set = {t for t in m_tokens if len(t) > 2 and not t.isdigit()}
-        master_primary_brand = m_tokens[0] if m_tokens else ""
 
         if not prov_set or not master_set:
             continue
 
-        # BLINDAJE ESTRICTO DE MARCA: La palabra principal (marca) debe coincidir obligatoriamente
-        if prov_primary_brand != master_primary_brand:
-            continue
+        # BLINDAJE FLEXIBLE DE PALABRAS CLAVE: Exigir que las palabras principales (ej: ENRIQUILLO y SODA) coexistan en ambos
+        common_keywords = prov_set.intersection(master_set)
+        if len(common_keywords) < min(len(prov_set), len(master_set)):
+            # Si no comparten todas las palabras clave significativas, verificar solapamiento crítico
+            if len(common_keywords) == 0:
+                continue
 
-        # BLINDAJE DE VOLUMEN: Si ambos tienen volumen especificado, deben ser idénticos
+        # BLINDAJE DE VOLUMEN: Si ambos tienen volumen especificado, deben coincidir
         if prov_volume and m_volume:
             if prov_volume != m_volume:
                 continue
 
-        # Cálculo de similitud Jaccard
-        common = prov_set.intersection(master_set)
-        if not common:
-            continue
-
+        # Cálculo de similitud Jaccard ponderado
         union = prov_set.union(master_set)
-        score = len(common) / len(union)
+        score = len(common_keywords) / len(union)
 
-        # Umbral sumamente estricto (0.75) para evitar falsos positivos
-        if score > highest_score and score >= 0.75:
+        if score > highest_score and score >= 0.50:
             highest_score = score
             best_match_code = master_dict[m_name]
 
-    if highest_score >= 0.75:
-        return best_match_code, "Actualizado (IA Maestro Seguro)"
+    if highest_score >= 0.50:
+        return best_match_code, "Actualizado (IA Maestro Flexible)"
 
-    # MODO ULTRA-SEGURO: Si no hay coincidencia exacta de marca y alto puntaje, conserva el código original
     return original_code, "⚠️ Conserva Código Original (Sin Match Seguro)"
 
 def process_invoice_with_ai(file_obj, file_type):
@@ -334,7 +329,7 @@ def process_invoice_with_ai(file_obj, file_type):
             raw_text = raw_text[:-3]
         
         parsed_data = json.loads(raw_text.strip())
-        success_msg = "✅ ¡Factura procesada con éxito y códigos blindados!"
+        success_msg = "✅ ¡Factura procesada con éxito y coincidencia flexible optimizada!"
         
         rnc_key = str(parsed_data.get("emisor_rnc", "")).strip()
         nombre_prov = str(parsed_data.get("emisor_nombre", "Proveedor Desconocido")).strip()
@@ -342,7 +337,7 @@ def process_invoice_with_ai(file_obj, file_type):
         if rnc_key and rnc_key not in st.session_state["provider_memory"]:
             st.session_state["provider_memory"][rnc_key] = {
                 "nombre": nombre_prov if nombre_prov and nombre_prov != "None" else f"Proveedor RNC {rnc_key}",
-                "nota_formato": "Formato procesado con blindaje estricto de códigos."
+                "nota_formato": "Formato procesado con coincidencia flexible de palabras clave."
             }
             save_json_file(MEMORY_FILE, st.session_state["provider_memory"])
 
@@ -399,7 +394,7 @@ if modulo == "📄 Factura Individual":
         if st.button("🚀 Procesar Factura") or st.session_state["use_paid_now"]:
             file_type = uploaded_file.type if hasattr(uploaded_file, 'type') else 'image/jpeg'
             
-            with st.spinner("Analizando factura con blindaje estricto de códigos..."):
+            with st.spinner("Analizando factura con coincidencia flexible de palabras clave..."):
                 parsed_data, success_msg = process_invoice_with_ai(uploaded_file, file_type)
 
             if parsed_data:
