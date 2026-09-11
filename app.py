@@ -158,7 +158,7 @@ elif os.path.exists(SAVED_MASTER_FILE) and not master_dict:
     except Exception:
         pass
 
-# Equivalencias personalizables con inclusión de Corona Cero
+# Equivalencias personalizables con inclusión de Corona Cero y variantes
 if "custom_equivalences" not in st.session_state:
     st.session_state["custom_equivalences"] = {
         "BARCELO 40 ANIVERSARIO": "IMPERIAL PREMIUM BLEND 40 AÑOS",
@@ -255,7 +255,6 @@ def validate_with_master(item_description, original_code):
     max_matched_tiers = 0
     highest_score = 0.0
 
-    # Permitir palabras clave de 3 letras o el término "CERO" aunque tenga 4 letras pero sea clave especial
     prov_set = {t for t in prov_tokens if len(t) > 2 or t == "CERO"}
 
     for m_name in master_names:
@@ -309,7 +308,7 @@ def process_invoice_with_ai(file_obj, file_type):
         f"{memory_context}\n"
         "Analiza esta factura detalladamente. Extrae los datos de cabecera con absoluta precisión: 'emisor_rnc', 'emisor_nombre', 'numero_documento', 'fecha', 'subtotal', 'itbis', 'total'. "
         "Para cada ítem, extrae: 'codigo', 'descripcion', 'cantidad' (número de cajas compradas), 'empaque' (unidades individuales que trae la caja, interpretando formatos como 12/75CL -> 12, 6/4PACK -> 24 o 6, etc.), y 'costo_sin_itbis' (EL COSTO UNITARIO REAL POR CADA PIEZA INDIVIDUAL: toma el precio neto total de la línea y divídelo estrictamente entre cantidad * empaque). "
-        "REGLA ESTRICTA PARA LA DESCRIPCIÓN: Limpia el texto de cada producto para incluir ÚNICAMENTE el nombre comercial del producto y su presentación o tamaño limpio (ej: 'CORONA CERO 330 ML', 'MAESTRO DOBEL DIAMANTE 700 ML', 'EVIAN 75 CL'), eliminando códigos internos, diagonales de empaque y textos redundantes. "
+        "REGLA ESTRICTA PARA LA DESCRIPCIÓN: Limpia el texto de cada producto para incluir ÚNICAMENTE el nombre comercial del producto y su presentación o tamaño limpio (ej: 'CORONA CERO 355 ML', 'MAESTRO DOBEL DIAMANTE 700 ML', 'EVIAN 75 CL'), eliminando códigos internos, diagonales de empaque y textos redundantes. "
         "Devuelve la información estrictamente en formato JSON con la siguiente estructura exacta: "
         '{"emisor_rnc": "...", "emisor_nombre": "...", "numero_documento": "...", "fecha": "...", "subtotal": 0.0, "itbis": 0.0, "total": 0.0, "items": [{"codigo": "...", "descripcion": "...", "cantidad": 1, "empaque": 1, "costo_sin_itbis": 0.0}]}. '
         "REGLA CRÍTICA: Preserva todos los ceros a la izquierda como texto. Respuesta JSON pura sin texto adicional."
@@ -416,7 +415,7 @@ if modulo == "📄 Factura Individual":
                 c_t3.metric("Total General", f"RD$ {safe_float(parsed_data.get('total', 0)):,.2f}")
                 
                 st.markdown("---")
-                st.markdown("### 📦 Validación con Maestro y Precios de Venta")
+                st.markdown("### 📦 Validaciónกับ Maestro y Precios de Venta")
 
                 data_items = parsed_data.get("items", [])
                 rows_preview = []
