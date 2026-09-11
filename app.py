@@ -384,7 +384,8 @@ if modulo == "📄 Factura Individual":
                 st.info(f"El archivo '{uploaded_file.name}' es de tipo PDF o documento.")
 
         if st.button("🚀 Procesar Factura") or st.session_state["use_paid_now"]:
-            file_type = uploaded_file.type if hasattr(file, 'type') else 'image/jpeg'
+            # Corregido: se usa uploaded_file en lugar de file
+            file_type = uploaded_file.type if hasattr(uploaded_file, 'type') else 'image/jpeg'
             
             with st.spinner("Analizando factura..."):
                 parsed_data, success_msg = process_invoice_with_ai(uploaded_file, file_type)
@@ -444,7 +445,6 @@ if modulo == "📄 Factura Individual":
                     for idx_u, (u_desc, u_code) in enumerate(unmatched_items):
                         st.markdown(f"- *{u_desc}* (Código original: `{u_code}`)")
                         with st.expander(f"➕ Asignar Código POS correcto para: {u_desc} (#{idx_u})"):
-                            # Clave única para evitar StreamlitDuplicateElementKey
                             new_pos_code = st.text_input(f"Introduce el código POS correcto para '{u_desc}'", key=f"override_{idx_u}_{u_desc}")
                             if st.button("Guardar Regla Mapeo", key=f"btn_override_{idx_u}_{u_desc}"):
                                 if new_pos_code:
