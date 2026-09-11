@@ -316,7 +316,6 @@ def process_invoice_with_ai(file_obj, file_type):
     parsed_data = None
     success_msg = ""
     
-    # Intentar primero con pago si existe, o alternar inteligentemente
     keys_to_try = []
     if paid_api_key:
         keys_to_try.append((paid_api_key, "Versión de Pago (Paid Tier)"))
@@ -366,7 +365,6 @@ def process_invoice_with_ai(file_obj, file_type):
         except Exception as e:
             err_str = str(e)
             if "429" in err_str or "Quota exceeded" in err_str:
-                # Si da cuota excedida, pasa automáticamente a la siguiente clave disponible (ej. la de pago)
                 continue
             else:
                 st.error(f"Error al procesar con {label}: {e}")
@@ -399,7 +397,7 @@ if modulo == "📄 Factura Individual":
         if st.button("🚀 Procesar Factura"):
             file_type = uploaded_file.type if hasattr(uploaded_file, 'type') else 'image/jpeg'
             
-            with st.spinner("Analizando factura con conmutación automática de clave y rangos estrictos..."):
+            with st.spinner("Analizando factura con validación de rangos estrictos..."):
                 parsed_data, success_msg = process_invoice_with_ai(uploaded_file, file_type)
 
             if parsed_data:
@@ -428,7 +426,7 @@ if modulo == "📄 Factura Individual":
                     
                     final_code, status_match = validate_with_master(desc, orig_code)
                     if "No Encontrado" in status_match or "Conserva" in status_match:
-                        unmatched_items.append((desc, orig_code))
+                        unmatched_items.append((idx, desc, orig_code))
 
                     costo = safe_float(item.get("costo_sin_itbis", 0))
                     raw_pv = (costo * 1.25) * 1.18
@@ -451,11 +449,12 @@ if modulo == "📄 Factura Individual":
                 
                 if unmatched_items:
                     st.warning(f"⚠️ **Atención:** Hay {len(unmatched_items)} producto(s) sin rango seguro (se conservó su código original):")
-                    for u_desc, u_code in unmatched_items:
+                    for u_idx, u_desc, u_code in unmatched_items:
                         st.markdown(f"- *{u_desc}* (Código original: `{u_code}`)")
-                        with st.expander(f"➕ Asignar Código POS correcto para: {u_desc}"):
-                            new_pos_code = st.text_input(f"Introduce el código POS correcto para '{u_desc}'", key=f"override_{u_desc}")
-                            if st.button("Guardar Regla Mapeo", key=f"btn_override_{u_desc}"):
+                        # Clave única garantizada utilizando el índice numérico `u_idx`
+                        with st.expander(f"➕ Asignar Código POS correcto para: {u_desc} (Ítem #{u_idx})"):
+                            new_pos_code = st.text_input(f"Introduce el código POS correcto", key=f"override_{u_idx}_{u_code}")
+                            if st.button("Guardar Regla Mapeo", key=f"btn_override_{u_idx}_{u_code}"):
                                 if new_pos_code:
                                     st.session_state["product_overrides"][u_desc.strip().upper()] = new_pos_code.strip()
                                     save_json_file(OVERRIDES_FILE, st.session_state["product_overrides"])
@@ -612,7 +611,7 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
                     
                     final_code, status_match = validate_with_master(desc, orig_code)
                     if "No Encontrado" in status_match or "Conserva" in status_match:
-                        unmatched_batch.append((desc, orig_code))
+                        unmatched_batch.append((idx, desc, orig_code))
 
                     costo = safe_float(item.get("costo_sin_itbis", 0))
                     raw_pv = (costo * 1.25) * 1.18
@@ -635,7 +634,7 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
 
                 if unmatched_batch:
                     st.warning(f"⚠️ **Atención en lote:** Hay {len(unmatched_batch)} producto(s) sin rango seguro:")
-                    for u_desc, u_code in unmatched_batch:
+                    for u_idx, u_desc, u_code in unmatched_batch:
                         st.markdown(f"- *{u_desc}* (Código original: `{u_code}`)")
 
                 df_batch = pd.DataFrame(rows_preview)
