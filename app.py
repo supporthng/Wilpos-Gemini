@@ -172,7 +172,7 @@ if template_uploaded is not None:
         f.write(template_uploaded.getbuffer())
     st.sidebar.success("✅ Plantilla oficial guardada.")
 
-# Equivalencias Directas seguras (Solo productos que SÍ son idénticos en marca y presentación)
+# Equivalencias Directas Completas y Definitivas
 if "custom_equivalences" not in st.session_state:
     st.session_state["custom_equivalences"] = {
         "BARCELO 40 ANIVERSARIO": "IMPERIAL PREMIUM BLEND 40 AÑOS",
@@ -180,16 +180,20 @@ if "custom_equivalences" not in st.session_state:
         "DOBEL": "MAESTRO DOBEL",
         "CLAMATO COCTEL TOMATE": "CLAMATO 221ML",
         "MY COCO PURE PLUS": "ALOE PURE PLUS COCONUT",
-        "CORONA EXTRA 330ML": "CORONA PEQ 12 OZ",
-        "CORONA CERO 355ML": "CERVEZA CORONA CERO 355ML",
+        "CORONA EXTRA": "CORONA PEQ 12 OZ",
+        "CORONA CERO": "CERVEZA CORONA CERO 355ML",
         "THE ONE 12OZ": "THE ONE 355ml",
         "THE ONE 22OZ": "THE ONE 355ml",
+        "THE ONE HU": "THE ONE 355ml",
+        "PTE. HU": "PRESIDENTE PEQ. 12oz Regular",
+        "PTE. CJ": "PRESIDENTE REG. 22  REGULAR oz",
         "PRESIDENTE 12 OZ": "PRESIDENTE PEQ. 12oz Regular",
-        "PRESIDENTE 22 OZ": "PRESIDENTE REG. 22  REGULAR oz"
+        "PRESIDENTE 22 OZ": "PRESIDENTE REG. 22  REGULAR oz",
+        "ENRIQUILLO SODA": "SODA, ENRRIQUILLO 400ML"
     }
 
 # ==========================================
-# MOTOR DE EMPAREJAMIENTO BLINDADO Y SEGURO
+# MOTOR DE EMPAREJAMIENTO MAESTRO BLINDADO
 # ==========================================
 SYNONYMS_MAP = {
     "JW ": "JOHNNIE WALKER ",
@@ -209,18 +213,18 @@ SYNONYMS_MAP = {
 def clean_and_normalize(text):
     upper_text = str(text).upper()
     
-    # Eliminar códigos numéricos de proveedor al inicio (ej: 94271BRAHMA -> BRAHMA)
+    # Eliminar códigos numéricos de proveedor al inicio (ej: 93100CLAMATO -> CLAMATO)
     upper_text = re.sub(r'^\d{4,6}', '', upper_text).strip()
 
     for prov, pos in st.session_state["custom_equivalences"].items():
-        if prov in upper_text or upper_text in prov:
+        if prov in upper_text:
             upper_text = upper_text.replace(prov, pos)
             
     for abbr, full in SYNONYMS_MAP.items():
         upper_text = upper_text.replace(abbr, full)
         
     cleaned = re.sub(r'[^A-Z0-9\s]', ' ', upper_text)
-    stopwords = {"DE", "EL", "LA", "LOS", "LAS", "Y", "EN", "UN", "UNA", "CON", "CL", "ML", "L", "BCA", "BOT", "HU", "CJ", "LP", "OZ"}
+    stopwords = {"DE", "EL", "LA", "LOS", "LAS", "Y", "EN", "UN", "UNA", "CON", "CL", "ML", "L", "BCA", "BOT", "HU", "CJ", "LP", "OZ", "P", "C", "EX"}
     tokens = [t for t in cleaned.split() if t not in stopwords]
     return tokens, upper_text
 
@@ -235,20 +239,20 @@ def validate_with_master(item_description, original_code):
         return st.session_state["product_overrides"][clean_desc_key], "Actualizado (Regla Guardada)"
 
     for k, v in st.session_state["custom_equivalences"].items():
-        if k in clean_desc_key or clean_desc_key in k:
-            if v in master_dict:
-                return master_dict[v], "Actualizado (Equivalencia Directa)"
+        if k in clean_desc_key:
+            target_name = v.strip().upper()
+            for m_name, m_code in master_dict.items():
+                if m_name.strip().upper() == target_name:
+                    return m_code, "Actualizado (Equivalencia Directa)"
 
     prov_tokens, norm_prov = clean_and_normalize(item_description)
     
-    # REGLA DE SEGURIDAD ESTRICTA: Extraer marca principal para evitar cruces entre Heineken y Brahma u otras marcas
-    brand_keywords = ["BRAHMA", "HEINEKEN", "CORONA", "PRESIDENTE", "MICHELOB", "COORS", "MILLER", "THE ONE", "CLAMATO", "ALOE"]
+    brand_keywords = ["BRAHMA", "HEINEKEN", "CORONA", "PRESIDENTE", "MICHELOB", "COORS", "MILLER", "THE ONE", "CLAMATO", "ALOE", "SODA"]
     prov_brand = next((b for b in brand_keywords if b in norm_prov), None)
 
     for m_name, m_code in master_dict.items():
         _, norm_m = clean_and_normalize(m_name)
         
-        # Validar que si hay marca detectada, coincida obligatoriamente
         if prov_brand and prov_brand not in norm_m:
             continue
 
@@ -267,7 +271,6 @@ def validate_with_master(item_description, original_code):
         if not prov_set or not master_set:
             continue
 
-        # Validar marca obligatoria en modo flexible también
         m_brand = next((b for b in brand_keywords if b in m_name.upper()), None)
         if prov_brand and m_brand and prov_brand != m_brand:
             continue
@@ -279,11 +282,11 @@ def validate_with_master(item_description, original_code):
         union = prov_set.union(master_set)
         score = len(common_keywords) / len(union)
 
-        if score > highest_score and score >= 0.40:
+        if score > highest_score and score >= 0.35:
             highest_score = score
             best_match_code = master_dict[m_name]
 
-    if highest_score >= 0.40:
+    if highest_score >= 0.35:
         return best_match_code, "Actualizado (IA Maestro Seguro)"
 
     return original_code, "⚠️ Conserva Código Original (Sin Match Seguro)"
