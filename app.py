@@ -322,7 +322,8 @@ def process_invoice_with_ai(file_obj, file_type):
     
     try:
         genai.configure(api_key=active_key)
-        model = genai.GenerativeModel('gemini-1.5-flash')
+        # Usamos el modelo estándar actual soportado universalmente
+        model = genai.GenerativeModel('gemini-2.5-flash')
         
         file_obj.seek(0)
         file_bytes = file_obj.read()
@@ -351,7 +352,6 @@ def process_invoice_with_ai(file_obj, file_type):
             }
             save_json_file(MEMORY_FILE, st.session_state["provider_memory"])
 
-            
     except Exception as e:
         st.error(f"Error detallado en la IA: {str(e)}")
         return None, ""
