@@ -733,4 +733,3 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
                 )
             else:
                 st.warning("No hay ítems válidos para consolidar.")
-                
