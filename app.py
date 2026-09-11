@@ -151,7 +151,7 @@ with st.sidebar.expander("Ver / Editar Equivalencias"):
             st.rerun()
 
 # ==========================================
-# MOTOR DE NORMALIZACIÓN Y AUDITORÍA BLINDADA
+# MOTOR DE INTELIGENCIA Y RANGOS DE EMPAREJAMIENTO SEGURO
 # ==========================================
 SYNONYMS_MAP = {
     "JW ": "JOHNNIE WALKER ",
@@ -168,7 +168,7 @@ SYNONYMS_MAP = {
     "BOTELL ": ""
 }
 
-def clean_and_tokenize(text):
+def clean_and_normalize(text):
     upper_text = str(text).upper()
     for prov, pos in st.session_state["custom_equivalences"].items():
         if prov in upper_text:
@@ -178,9 +178,22 @@ def clean_and_tokenize(text):
         upper_text = upper_text.replace(abbr, full)
         
     cleaned = re.sub(r'[^A-Z0-9\s]', ' ', upper_text)
-    stopwords = {"DE", "EL", "LA", "LOS", "LAS", "Y", "EN", "UN", "UNA", "CON", "CL", "ML", "L"}
+    stopwords = {"DE", "EL", "LA", "LOS", "LAS", "Y", "EN", "UN", "UNA", "CON", "CL", "ML", "L", "BCA", "BOT"}
     tokens = [t for t in cleaned.split() if t not in stopwords]
-    return set(tokens), upper_text
+    return tokens, upper_text
+
+def extract_volume_token(text):
+    match = re.search(r'(\d+\s*(?:ML|L|CL))', str(text).upper())
+    if match:
+        v = match.group(1).replace(" ", "")
+        if "L" in v and "ML" not in v:
+            try:
+                num = float(re.sub(r'[^0-9.]', '', v))
+                return f"{int(num * 1000)}ML"
+            except:
+                pass
+        return v
+    return ""
 
 def validate_with_master(item_description, original_code):
     if not master_dict:
@@ -192,61 +205,66 @@ def validate_with_master(item_description, original_code):
     if clean_desc_key in st.session_state["product_overrides"]:
         return st.session_state["product_overrides"][clean_desc_key], "Actualizado (Regla Guardada)"
 
-    desc_tokens, norm_desc = clean_and_tokenize(item_description)
+    prov_tokens, norm_prov = clean_and_normalize(item_description)
+    prov_volume = extract_volume_token(item_description)
     
     # 2. Búsqueda exacta normalizada
     for m_name, m_code in master_dict.items():
-        if m_name == norm_desc or m_name == clean_desc_key:
+        _, norm_m = clean_and_normalize(m_name)
+        if m_name == norm_prov or m_name == clean_desc_key or norm_m == norm_prov:
             return m_code, "Actualizado (Exacto)"
             
     best_match_code = original_code
     best_match_name = ""
+    max_matched_tiers = 0
     highest_score = 0.0
-    
-    # Extraer tokens significativos de la descripción del proveedor (descartando números sueltos de volumen o empaque)
-    meaningful_desc_tokens = {t for t in desc_tokens if not t.isdigit() and len(t) > 2}
+
+    prov_set = {t for t in prov_tokens if len(t) > 2}
 
     for m_name in master_names:
-        m_tokens, _ = clean_and_tokenize(m_name)
-        if not desc_tokens or not m_tokens:
+        m_tokens, _ = clean_and_normalize(m_name)
+        m_volume = extract_volume_token(m_name)
+        master_set = {t for t in m_tokens if len(t) > 2}
+
+        if not prov_set or not master_set:
             continue
-            
-        meaningful_master_tokens = {t for t in m_tokens if not t.isdigit() and len(t) > 2}
-        
-        # BLINDAJE DE SEGURIDAD 1: Las palabras clave principales (marca/producto base) DEBEN coincidir obligatoriamente.
-        # Esto evita que un "MAESTRO DOBEL" haga match con un "CLAMATO" o un "VINO".
-        common_meaningful = meaningful_desc_tokens.intersection(meaningful_master_tokens)
-        if not common_meaningful:
-            continue # Si no comparten ni una sola palabra clave relevante, se descarta de inmediato.
 
-        intersection = desc_tokens.intersection(m_tokens)
-        union = desc_tokens.union(m_tokens)
-        jaccard_score = len(intersection) / len(union)
-        
-        weight = 1.0
-        for token in intersection:
-            if token.isdigit() or len(token) > 3:
-                weight += 0.40
-                
-        final_score = jaccard_score * weight
-        
-        # BLINDAJE DE SEGURIDAD 2: Exigir un puntaje de coincidencia alto y al menos 2 tokens clave compartidos
-        if final_score > highest_score and len(common_meaningful) >= 1 and len(intersection) >= 2:
-            highest_score = final_score
-            best_match_code = master_dict[m_name]
-            best_match_name = m_name
-            
-    # Umbral de seguridad estricto (0.65)
-    if highest_score >= 0.65:
-        return best_match_code, f"Actualizado (IA Semántica: {best_match_name})"
-        
-    matches = difflib.get_close_matches(norm_desc, master_names, n=1, cutoff=0.65)
-    if matches:
-        matched_name = matches[0]
-        return master_dict[matched_name], f"Actualizado (Similitud: {matched_name})"
+        matched_tiers = 0
 
-    # MODO SEGURO: Si no hay certeza absoluta, se conserva el código original de la factura para evitar corrupción de inventario.
-    return original_code, "⚠️ Conserva Código Original (Sin Match Seguro)"
+        # RANGO 1: Coincidencia obligatoria de Marca o Término Principal (Evita cruzar tequila con jugo/tomate)
+        common_tokens = prov_set.intersection(master_set)
+        if not common_tokens:
+            continue
+        matched_tiers += 1
+
+        # RANGO 2: Coincidencia de Volumen / Presentación si ambos están especificados
+        if prov_volume and m_volume:
+            if prov_volume != m_volume:
+                continue
+        matched_tiers += 1
+
+        # RANGO 3: Coincidencia semántica de similitud alta
+        union_tokens = prov_set.union(master_set)
+        jaccard = len(common_tokens) / len(union_tokens)
+        
+        score = jaccard
+        for t in common_tokens:
+            if len(t) > 3:
+                score += 0.25
+
+        if matched_tiers >= 2 and score >= 0.50:
+            if score > highest_score:
+                highest_score = score
+                max_matched_tiers = matched_tiers
+                best_match_code = master_dict[m_name]
+                best_match_name = m_name
+
+    # Umbral estricto para evitar falsos positivos
+    if highest_score >= 0.55 and max_matched_tiers >= 2:
+        return best_match_code, f"Actualizado (IA por Rangos: {best_match_name})"
+
+    # MODO SEGURO: Si no pasa los filtros, NUNCA adivina y conserva el código original de la factura
+    return original_code, "⚠️ Conserva Código Original (Sin Rango Seguro)"
 
 # Función centralizada con Memoria de Proveedores
 def process_invoice_with_ai(file_obj, file_type):
@@ -376,7 +394,7 @@ if modulo == "📄 Factura Individual":
         if st.button("🚀 Procesar Factura") or st.session_state["use_paid_now"]:
             file_type = uploaded_file.type if hasattr(uploaded_file, 'type') else 'image/jpeg'
             
-            with st.spinner("Analizando factura con validación estricta de códigos..."):
+            with st.spinner("Analizando factura con validación de rangos estrictos..."):
                 parsed_data, success_msg = process_invoice_with_ai(uploaded_file, file_type)
 
             if parsed_data:
@@ -427,7 +445,7 @@ if modulo == "📄 Factura Individual":
                     })
                 
                 if unmatched_items:
-                    st.warning(f"⚠️ **Atención:** Hay {len(unmatched_items)} producto(s) sin match seguro en el maestro:")
+                    st.warning(f"⚠️ **Atención:** Hay {len(unmatched_items)} producto(s) sin rango seguro (se conservó su código original):")
                     for u_desc, u_code in unmatched_items:
                         st.markdown(f"- *{u_desc}* (Código original: `{u_code}`)")
                         with st.expander(f"➕ Asignar Código POS correcto para: {u_desc}"):
@@ -494,8 +512,8 @@ if modulo == "📄 Factura Individual":
 # MÓDULO 2: MÚLTIPLES FACTURAS (LOTE)
 # ==========================================
 elif modulo == "📂 Múltiples Facturas (Lote)":
-    st.title("📂 Procesador por Lotes (Con Validación Estricta)")
-    st.markdown("Sube varias facturas. El sistema validará los ítems con filtro estricto antiobstaculización de categorías.")
+    st.title("📂 Procesador por Lotes (Con Validación de Rangos)")
+    st.markdown("Sube varias facturas. El sistema validará los ítems mediante rangos estrictos para evitar falsos positivos.")
 
     if st.session_state["quota_exceeded"]:
         @st.dialog("⚠️ Confirmación Requerida: Límite de Cuota Alcanzado")
@@ -629,7 +647,7 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
                     })
 
                 if unmatched_batch:
-                    st.warning(f"⚠️ **Atención en lote:** Hay {len(unmatched_batch)} producto(s) sin match seguro:")
+                    st.warning(f"⚠️ **Atención en lote:** Hay {len(unmatched_batch)} producto(s) sin rango seguro:")
                     for u_desc, u_code in unmatched_batch:
                         st.markdown(f"- *{u_desc}* (Código original: `{u_code}`)")
 
