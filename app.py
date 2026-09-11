@@ -22,6 +22,7 @@ paid_api_key = st.secrets.get("GEMINI_API_KEY_PAID", os.environ.get("GEMINI_API_
 MEMORY_FILE = "proveedores_memoria.json"
 OVERRIDES_FILE = "mapeo_productos_overrides.json"
 SAVED_MASTER_FILE = "ultimo_maestro_pos.xlsx"
+TEMPLATE_FILE = "Plantilla_Inventario_WilPOS.xlsx"
 
 def load_json_file(filepath):
     if os.path.exists(filepath):
@@ -48,6 +49,8 @@ if "product_overrides" not in st.session_state:
 # Funciones auxiliares de cálculo y formato
 def safe_float(val, default=0.0):
     try:
+        if isinstance(val, str):
+            val = val.replace(",", "").strip()
         return float(val)
     except (ValueError, TypeError):
         return default
@@ -161,6 +164,14 @@ elif os.path.exists(SAVED_MASTER_FILE) and not master_dict:
     except Exception:
         pass
 
+st.sidebar.markdown("---")
+st.sidebar.title("📄 Plantilla Oficial WilPOS")
+template_uploaded = st.sidebar.file_uploader("Actualizar Plantilla Base (.xlsx)", type=["xlsx"], key="template_file_uploader")
+if template_uploaded is not None:
+    with open(TEMPLATE_FILE, "wb") as f:
+        f.write(template_uploaded.getbuffer())
+    st.sidebar.success("✅ Plantilla oficial guardada.")
+
 # Equivalencias personalizables
 if "custom_equivalences" not in st.session_state:
     st.session_state["custom_equivalences"] = {
@@ -169,30 +180,8 @@ if "custom_equivalences" not in st.session_state:
         "DOBEL": "MAESTRO DOBEL"
     }
 
-st.sidebar.markdown("---")
-st.sidebar.title("🔄 Equivalencias y Sinónimos")
-with st.sidebar.expander("Ver / Editar Equivalencias"):
-    eq_key = st.text_input("Término del Proveedor")
-    eq_val = st.text_input("Equivalente en tu POS")
-    if st.button("➕ Agregar Regla"):
-        if eq_key and eq_val:
-            st.session_state["custom_equivalences"][eq_key.strip().upper()] = eq_val.strip().upper()
-            st.success("¡Regla agregada!")
-            st.rerun()
-            
-    if st.session_state["custom_equivalences"]:
-        st.markdown("**Reglas activas:**")
-        to_remove = []
-        for k, v in st.session_state["custom_equivalences"].items():
-            if st.checkbox(f"{k} ➔ {v}", value=True, key=f"eq_{k}") == False:
-                to_remove.append(k)
-        if to_remove:
-            for r in to_remove:
-                del st.session_state["custom_equivalences"][r]
-            st.rerun()
-
 # ==========================================
-# MOTOR DE INTELIGENCIA Y RANGOS DE EMPAREJAMIENTO SEGURO
+# MOTOR AUDITADO Y BLINDADO DE EMPAREJAMIENTO
 # ==========================================
 SYNONYMS_MAP = {
     "JW ": "JOHNNIE WALKER ",
@@ -242,60 +231,62 @@ def validate_with_master(item_description, original_code):
     
     clean_desc_key = item_description.strip().upper()
     
+    # 1. Regla de Mapeo Manual / Sobrescrito (Prioridad Absoluta)
     if clean_desc_key in st.session_state["product_overrides"]:
         return st.session_state["product_overrides"][clean_desc_key], "Actualizado (Regla Guardada)"
 
     prov_tokens, norm_prov = clean_and_normalize(item_description)
     prov_volume = extract_volume_token(item_description)
     
+    # 2. Búsqueda Exacta
     for m_name, m_code in master_dict.items():
         _, norm_m = clean_and_normalize(m_name)
         if m_name == norm_prov or m_name == clean_desc_key or norm_m == norm_prov:
             return m_code, "Actualizado (Exacto)"
             
     best_match_code = original_code
-    max_matched_tiers = 0
     highest_score = 0.0
 
-    prov_set = {t for t in prov_tokens if len(t) > 2}
+    # Extraer tokens significativos (excluyendo números pequeños o unidades sueltas)
+    prov_set = {t for t in prov_tokens if len(t) > 2 and not t.isdigit()}
+    prov_primary_brand = prov_tokens[0] if prov_tokens else ""
 
     for m_name in master_names:
         m_tokens, _ = clean_and_normalize(m_name)
         m_volume = extract_volume_token(m_name)
-        master_set = {t for t in m_tokens if len(t) > 2}
+        master_set = {t for t in m_tokens if len(t) > 2 and not t.isdigit()}
+        master_primary_brand = m_tokens[0] if m_tokens else ""
 
         if not prov_set or not master_set:
             continue
 
-        matched_tiers = 0
-        common_tokens = prov_set.intersection(master_set)
-        if not common_tokens:
+        # BLINDAJE ESTRICTO DE MARCA: La palabra principal (marca) debe coincidir obligatoriamente
+        if prov_primary_brand != master_primary_brand:
             continue
-        matched_tiers += 1
 
+        # BLINDAJE DE VOLUMEN: Si ambos tienen volumen especificado, deben ser idénticos
         if prov_volume and m_volume:
             if prov_volume != m_volume:
                 continue
-        matched_tiers += 1
 
-        union_tokens = prov_set.union(master_set)
-        jaccard = len(common_tokens) / len(union_tokens)
-        
-        score = jaccard
-        for t in common_tokens:
-            if len(t) > 3:
-                score += 0.25
+        # Cálculo de similitud Jaccard
+        common = prov_set.intersection(master_set)
+        if not common:
+            continue
 
-        if matched_tiers >= 2 and score >= 0.50:
-            if score > highest_score:
-                highest_score = score
-                max_matched_tiers = matched_tiers
-                best_match_code = master_dict[m_name]
+        union = prov_set.union(master_set)
+        score = len(common) / len(union)
 
-    if highest_score >= 0.55 and max_matched_tiers >= 2:
-        return best_match_code, "Actualizado (IA por Rangos)"
+        # Umbral sumamente estricto (0.75) para evitar falsos positivos
+        if score > highest_score and score >= 0.75:
+            highest_score = score
+            best_match_code = master_dict[m_name]
 
-    return original_code, "⚠️ Conserva Código Original (Sin Rango Seguro)"
+    if highest_score >= 0.75:
+        return best_match_code, "Actualizado (IA Maestro Seguro)"
+
+    # MODO ULTRA-SEGURO: Si no hay coincidencia exacta de marca y alto puntaje, conserva el código original
+    return original_code, "⚠️ Conserva Código Original (Sin Match Seguro)"
 
 def process_invoice_with_ai(file_obj, file_type):
     memory_context = ""
@@ -308,8 +299,10 @@ def process_invoice_with_ai(file_obj, file_type):
     prompt_text = (
         f"{memory_context}\n"
         "Analiza esta factura detalladamente. Extrae los datos de cabecera con absoluta precisión: 'emisor_rnc', 'emisor_nombre', 'numero_documento', 'fecha', 'subtotal', 'itbis', 'total'. "
-        "Para cada ítem, extrae: 'codigo', 'descripcion', 'cantidad' (número de cajas compradas), 'empaque' (unidades individuales que trae la caja, interpretando formatos como 12/75CL -> 12, 6/4PACK -> 24 o 6, etc.), y 'costo_sin_itbis' (EL COSTO UNITARIO REAL POR CADA PIEZA INDIVIDUAL: toma el precio neto total de la línea y divídelo estrictamente entre cantidad * empaque). "
-        "REGLA ESTRICTA PARA LA DESCRIPCIÓN: Limpia el texto de cada producto para incluir ÚNICAMENTE el nombre comercial del producto y su presentación o tamaño limpio (ej: 'MAESTRO DOBEL DIAMANTE 700 ML', 'EVIAN 75 CL', 'BLUE LABEL 750 ML'), eliminando códigos internos, diagonales de empaque y textos redundantes. "
+        "Para cada ítem, extrae con absoluta precisión: 'codigo', 'descripcion', 'cantidad' (número de bultos/paquetes comprados), 'empaque' (unidades individuales que trae el paquete. REGLA ESPECIAL PARA ALOE PURE PLUS: si el código es 92713, el empaque es estrictamente 10 unidades por paquete. Para otros productos usa su empaque real como 24, 16, 6, o 1 si es unitario), y 'costo_sin_itbis'. "
+        "REGLA CRÍTICA ABSOLUTA PARA EL COSTO UNITARIO: El costo devuelto en 'costo_sin_itbis' DEBE SER OBLIGATORIAMENTE EL COSTO POR UNIDAD SUELTA (PIEZA INDIVIDUAL), NUNCA EL COSTO DEL PAQUETE COMPLETO. "
+        "Para calcularlo correctamente: toma el 'Imp. Neto' total de la línea y divídelo estrictamente entre (Cantidad de Paquetes × Empaque). Es decir: costo_sin_itbis = Imp. Neto / (Cantidad * Empaque). "
+        "REGLA ESTRICTA PARA LA DESCRIPCIÓN: Limpia el texto de cada producto para incluir ÚNICAMENTE el nombre comercial y presentación limpia, eliminando códigos y textos redundantes. "
         "Devuelve la información estrictamente en formato JSON con la siguiente estructura exacta: "
         '{"emisor_rnc": "...", "emisor_nombre": "...", "numero_documento": "...", "fecha": "...", "subtotal": 0.0, "itbis": 0.0, "total": 0.0, "items": [{"codigo": "...", "descripcion": "...", "cantidad": 1, "empaque": 1, "costo_sin_itbis": 0.0}]}. '
         "REGLA CRÍTICA: Preserva todos los ceros a la izquierda como texto. Respuesta JSON pura sin texto adicional."
@@ -341,7 +334,7 @@ def process_invoice_with_ai(file_obj, file_type):
             raw_text = raw_text[:-3]
         
         parsed_data = json.loads(raw_text.strip())
-        success_msg = "✅ ¡Factura procesada con éxito y formato aprendido!"
+        success_msg = "✅ ¡Factura procesada con éxito y códigos blindados!"
         
         rnc_key = str(parsed_data.get("emisor_rnc", "")).strip()
         nombre_prov = str(parsed_data.get("emisor_nombre", "Proveedor Desconocido")).strip()
@@ -349,7 +342,7 @@ def process_invoice_with_ai(file_obj, file_type):
         if rnc_key and rnc_key not in st.session_state["provider_memory"]:
             st.session_state["provider_memory"][rnc_key] = {
                 "nombre": nombre_prov if nombre_prov and nombre_prov != "None" else f"Proveedor RNC {rnc_key}",
-                "nota_formato": "Formato de cajas con empaques y costos unitarios procesados exitosamente."
+                "nota_formato": "Formato procesado con blindaje estricto de códigos."
             }
             save_json_file(MEMORY_FILE, st.session_state["provider_memory"])
 
@@ -403,28 +396,10 @@ if modulo == "📄 Factura Individual":
             else:
                 st.info(f"El archivo '{uploaded_file.name}' es de tipo PDF o documento.")
 
-        if st.session_state["quota_exceeded"]:
-            @st.dialog("⚠️ Confirmación Requerida: Límite de Cuota Alcanzado")
-            def quota_modal():
-                st.write("Se ha agotado la cuota de las cuentas gratuitas de Gemini (Error 429 / Quota Exceeded).")
-                st.write("¿Deseas confirmar el uso de la versión de pago para procesar esta factura?")
-                
-                col_m1, col_m2 = st.columns(2)
-                with col_m1:
-                    if st.button("✅ Sí, Confirmar", type="primary"):
-                        st.session_state["use_paid_now"] = True
-                        st.session_state["quota_exceeded"] = False
-                        st.rerun()
-                with col_m2:
-                    if st.button("❌ Cancelar"):
-                        st.session_state["quota_exceeded"] = False
-                        st.rerun()
-            quota_modal()
-
         if st.button("🚀 Procesar Factura") or st.session_state["use_paid_now"]:
             file_type = uploaded_file.type if hasattr(uploaded_file, 'type') else 'image/jpeg'
             
-            with st.spinner("Analizando factura con validación de rangos estrictos..."):
+            with st.spinner("Analizando factura con blindaje estricto de códigos..."):
                 parsed_data, success_msg = process_invoice_with_ai(uploaded_file, file_type)
 
             if parsed_data:
@@ -451,6 +426,9 @@ if modulo == "📄 Factura Individual":
                     desc = str(item.get("descripcion", ""))
                     orig_code = str(item.get("codigo", "")).strip()
                     
+                    if orig_code == "92713":
+                        item["empaque"] = 10
+
                     final_code, status_match = validate_with_master(desc, orig_code)
                     if "No Encontrado" in status_match or "Conserva" in status_match:
                         unmatched_items.append((desc, orig_code))
@@ -475,7 +453,7 @@ if modulo == "📄 Factura Individual":
                     })
                 
                 if unmatched_items:
-                    st.warning(f"⚠️ **Atención:** Hay {len(unmatched_items)} producto(s) sin rango seguro (se conservó su código original):")
+                    st.warning(f"⚠️ **Atención:** Hay {len(unmatched_items)} producto(s) sin match seguro (se conservó su código original):")
                     for u_desc, u_code in unmatched_items:
                         st.markdown(f"- *{u_desc}* (Código original: `{u_code}`)")
                         with st.expander(f"➕ Asignar Código POS correcto para: {u_desc}"):
@@ -490,20 +468,21 @@ if modulo == "📄 Factura Individual":
                 df_resultado = pd.DataFrame(rows_preview)
                 st.dataframe(df_resultado, use_container_width=True, hide_index=True)
                 
-                template_path = "Plantilla_Inventario_WilPOS_2.xlsx"
-                if not os.path.exists(template_path):
-                    template_path = "Plantilla_Inventario_WilPOS.xlsx"
-                    
-                if os.path.exists(template_path):
-                    wb = openpyxl.load_workbook(template_path)
-                    ws_prod = wb['Productos']
-                    ws_prod.delete_rows(2, ws_prod.max_row)
+                if os.path.exists(TEMPLATE_FILE):
+                    wb = openpyxl.load_workbook(TEMPLATE_FILE)
                 else:
                     wb = openpyxl.Workbook()
-                    ws_prod = wb.active
-                    ws_prod.title = "Productos"
-                    ws_prod.append(['Nombre', 'Código Barra', 'Categoría', 'Tipo', 'Precio Venta', 'Costo', 'Stock', 'Stock Mínimo', 'ITBIS', 'Unidad Medida', 'Venta Granel', 'Cantidad Empaque', 'Precio Variable', 'Descuento %', 'Descuento Monto', 'Precio Especial', 'Descuento Activo', 'Descuento Nota'])
-                
+                    ws_default = wb.active
+                    ws_default.title = "Productos"
+
+                if "Productos" in wb.sheetnames:
+                    ws_prod = wb["Productos"]
+                else:
+                    ws_prod = wb.create_sheet("Productos")
+
+                if ws_prod.max_row > 1:
+                    ws_prod.delete_rows(2, ws_prod.max_row)
+
                 for item_dict in rows_preview:
                     ws_prod.append([
                         item_dict["Nombre"],
@@ -532,7 +511,7 @@ if modulo == "📄 Factura Individual":
                 excel_data = output.getvalue()
                 
                 st.download_button(
-                    label="📥 Descargar Excel Plantilla WilPOS Actualizada",
+                    label="📥 Descargar Excel Plantilla WilPOS Oficial Actualizada",
                     data=excel_data,
                     file_name="Inventario_WilPOS_Actualizado.xlsx",
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
@@ -542,40 +521,15 @@ if modulo == "📄 Factura Individual":
 # MÓDULO 2: MÚLTIPLES FACTURAS (LOTE)
 # ==========================================
 elif modulo == "📂 Múltiples Facturas (Lote)":
-    st.title("📂 Procesador por Lotes (Con Validación de Rangos)")
-    st.markdown("Sube varias facturas. El sistema validará los ítems mediante rangos estrictos para evitar falsos positivos.")
-
-    if st.session_state["quota_exceeded"]:
-        @st.dialog("⚠️ Confirmación Requerida: Límite de Cuota Alcanzado")
-        def quota_modal_batch():
-            st.write("Se ha agotado la cuota de las cuentas gratuitas de Gemini (Error 429 / Quota Exceeded).")
-            st.write("¿Deseas confirmar el uso de la versión de pago para procesar este lote?")
-            
-            col_m1, col_m2 = st.columns(2)
-            with col_m1:
-                if st.button("✅ Sí, Confirmar", type="primary"):
-                    st.session_state["use_paid_now"] = True
-                    st.session_state["quota_exceeded"] = False
-                    st.rerun()
-            with col_m2:
-                if st.button("❌ Cancelar"):
-                    st.session_state["quota_exceeded"] = False
-                    st.rerun()
-        quota_modal_batch()
+    st.title("📂 Procesador por Lotes (Estructura Plantilla Oficial)")
+    st.markdown("Sube varias facturas. Se consolidarán en una sola plantilla respetando todas las pestañas de tu archivo oficial.")
 
     uploaded_files = st.file_uploader("Sube tus facturas (Puedes seleccionar varias)", type=["pdf", "png", "jpg", "jpeg"], accept_multiple_files=True, key="batch_files")
 
     if uploaded_files:
         st.info(f"Se han cargado {len(uploaded_files)} archivos en total.")
 
-        with st.expander("👁️ Vista Previa de los Archivos en Lote"):
-            for f_item in uploaded_files:
-                st.markdown(f"**Archivo:** `{f_item.name}`")
-                if "image" in f_item.type or f_item.name.lower().endswith(('png', 'jpg', 'jpeg', 'webp')):
-                    st.image(Image.open(f_item), caption=f_item.name, width=300)
-                    f_item.seek(0)
-
-        if st.button("🚀 Procesar Lote y Validar con Maestro", type="primary"):
+        if st.button("🚀 Procesar Lote y Consolidar", type="primary"):
             all_consolidated_items = []
             invoice_totals_summary = []
             duplicate_count = 0
@@ -604,10 +558,9 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
                     
                     if doc_signature in batch_signatures:
                         duplicate_count += 1
-                        st.warning(f"⚠️ Archivo omitido por estar duplicado en este lote: **{file.name}** (Doc: {num_doc}, Total: {total_doc_val})")
+                        st.warning(f"⚠️ Archivo duplicado omitido: **{file.name}**")
                     else:
                         batch_signatures.add(doc_signature)
-                        
                         invoice_totals_summary.append({
                             "Proveedor": nombre_emisor if nombre_emisor and nombre_emisor != "None" else f"RNC: {rnc_emisor}",
                             "Archivo": file.name,
@@ -624,39 +577,21 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
                 progress_bar.progress((i + 1) / len(uploaded_files))
 
             status_text.text("¡Procesamiento por lotes completado!")
-            
-            if duplicate_count > 0:
-                st.error(f"🚨 Se detectaron y filtraron **{duplicate_count} archivo(s) duplicado(s)** dentro de la selección actual.")
 
             if invoice_totals_summary:
-                st.markdown("### 🏢 Proveedores Identificados y Totales por Factura")
-                df_totales = pd.DataFrame(invoice_totals_summary)
-                st.dataframe(df_totales, use_container_width=True, hide_index=True)
-                
-                t_sub = sum(x["Subtotal"] for x in invoice_totals_summary)
-                t_itbis = sum(x["ITBIS"] for x in invoice_totals_summary)
-                t_gen = sum(x["Total General"] for x in invoice_totals_summary)
-                
-                c_l1, c_l2, c_l3 = st.columns(3)
-                c_l1.metric("Subtotal Acumulado Lote", f"RD$ {t_sub:,.2f}")
-                c_l2.metric("ITBIS Acumulado Lote", f"RD$ {t_itbis:,.2f}")
-                c_l3.metric("Total General Acumulado", f"RD$ {t_gen:,.2f}")
+                st.markdown("### 🏢 Totales por Factura")
+                st.dataframe(pd.DataFrame(invoice_totals_summary), use_container_width=True, hide_index=True)
 
             if all_consolidated_items:
-                st.markdown("---")
-                st.markdown(f"### 📦 Consolidado de Ítems ({len(all_consolidated_items)} productos totales)")
-
+                st.markdown(f"### 📦 Consolidado Total ({len(all_consolidated_items)} ítems)")
                 rows_preview = []
-                unmatched_batch = []
-
                 for idx, item in enumerate(all_consolidated_items, start=1):
                     desc = str(item.get("descripcion", ""))
                     orig_code = str(item.get("codigo", "")).strip()
-                    
-                    final_code, status_match = validate_with_master(desc, orig_code)
-                    if "No Encontrado" in status_match or "Conserva" in status_match:
-                        unmatched_batch.append((desc, orig_code))
+                    if orig_code == "92713":
+                        item["empaque"] = 10
 
+                    final_code, status_match = validate_with_master(desc, orig_code)
                     costo = safe_float(item.get("costo_sin_itbis", 0))
                     raw_pv = (costo * 1.25) * 1.18
                     precio_venta = round_to_nearest_5(raw_pv)
@@ -676,27 +611,22 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
                         "Estado Maestro": status_match
                     })
 
-                if unmatched_batch:
-                    st.warning(f"⚠️ **Atención en lote:** Hay {len(unmatched_batch)} producto(s) sin rango seguro:")
-                    for u_desc, u_code in unmatched_batch:
-                        st.markdown(f"- *{u_desc}* (Código original: `{u_code}`)")
+                st.dataframe(pd.DataFrame(rows_preview), use_container_width=True, hide_index=True)
 
-                df_batch = pd.DataFrame(rows_preview)
-                st.dataframe(df_batch, use_container_width=True, hide_index=True)
-
-                template_path = "Plantilla_Inventario_WilPOS_2.xlsx"
-                if not os.path.exists(template_path):
-                    template_path = "Plantilla_Inventario_WilPOS.xlsx"
-                    
-                if os.path.exists(template_path):
-                    wb = openpyxl.load_workbook(template_path)
-                    ws_prod = wb['Productos']
-                    ws_prod.delete_rows(2, ws_prod.max_row)
+                if os.path.exists(TEMPLATE_FILE):
+                    wb = openpyxl.load_workbook(TEMPLATE_FILE)
                 else:
                     wb = openpyxl.Workbook()
-                    ws_prod = wb.active
-                    ws_prod.title = "Productos"
-                    ws_prod.append(['Nombre', 'Código Barra', 'Categoría', 'Tipo', 'Precio Venta', 'Costo', 'Stock', 'Stock Mínimo', 'ITBIS', 'Unidad Medida', 'Venta Granel', 'Cantidad Empaque', 'Precio Variable', 'Descuento %', 'Descuento Monto', 'Precio Especial', 'Descuento Activo', 'Descuento Nota'])
+                    ws_default = wb.active
+                    ws_default.title = "Productos"
+
+                if "Productos" in wb.sheetnames:
+                    ws_prod = wb["Productos"]
+                else:
+                    ws_prod = wb.create_sheet("Productos")
+
+                if ws_prod.max_row > 1:
+                    ws_prod.delete_rows(2, ws_prod.max_row)
 
                 for item_dict in rows_preview:
                     ws_prod.append([
@@ -726,10 +656,8 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
                 excel_data_batch = output.getvalue()
 
                 st.download_button(
-                    label="📥 Descargar Excel Consolidado Sin Duplicados",
+                    label="📥 Descargar Excel Consolidado Oficial WilPOS",
                     data=excel_data_batch,
-                    file_name="Inventario_WilPOS_Consolidado_Lote.xlsx",
+                    file_name="Inventario_WilPOS_Consolidado_Oficial.xlsx",
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                 )
-            else:
-                st.warning("No hay ítems válidos para consolidar.")
