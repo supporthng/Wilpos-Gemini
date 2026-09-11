@@ -18,7 +18,7 @@ free_key_1 = st.secrets.get("GEMINI_API_KEY_1", os.environ.get("GEMINI_API_KEY_1
 free_key_2 = st.secrets.get("GEMINI_API_KEY_2", os.environ.get("GEMINI_API_KEY_2", ""))
 paid_api_key = st.secrets.get("GEMINI_API_KEY_PAID", os.environ.get("GEMINI_API_KEY_PAID", ""))
 
-# Archivo persistente de memoria de proveedores
+# Archivos persistentes de memoria y reglas
 MEMORY_FILE = "proveedores_memoria.json"
 OVERRIDES_FILE = "mapeo_productos_overrides.json"
 
@@ -120,7 +120,7 @@ if master_file_uploaded is not None:
     except Exception as e:
         st.sidebar.error(f"Error al leer el maestro: {e}")
 
-# Diccionario de equivalencias personalizables guardado en session_state
+# Equivalencias personalizables
 if "custom_equivalences" not in st.session_state:
     st.session_state["custom_equivalences"] = {
         "BARCELO 40 ANIVERSARIO": "IMPERIAL PREMIUM BLEND 40 AÑOS",
@@ -151,7 +151,7 @@ with st.sidebar.expander("Ver / Editar Equivalencias"):
             st.rerun()
 
 # ==========================================
-# MOTOR DE NORMALIZACIÓN Y COINCIDENCIA BLINDADA
+# MOTOR DE NORMALIZACIÓN Y AUDITORÍA BLINDADA
 # ==========================================
 SYNONYMS_MAP = {
     "JW ": "JOHNNIE WALKER ",
@@ -178,7 +178,7 @@ def clean_and_tokenize(text):
         upper_text = upper_text.replace(abbr, full)
         
     cleaned = re.sub(r'[^A-Z0-9\s]', ' ', upper_text)
-    stopwords = {"DE", "EL", "LA", "LOS", "LAS", "Y", "EN", "UN", "UNA", "CON", "CL"}
+    stopwords = {"DE", "EL", "LA", "LOS", "LAS", "Y", "EN", "UN", "UNA", "CON", "CL", "ML", "L"}
     tokens = [t for t in cleaned.split() if t not in stopwords]
     return set(tokens), upper_text
 
@@ -188,7 +188,7 @@ def validate_with_master(item_description, original_code):
     
     clean_desc_key = item_description.strip().upper()
     
-    # 1. Verificar si hay una regla de mapeo manual o aprendida previa
+    # 1. Prioridad absoluta a reglas manuales o aprendidas previamente
     if clean_desc_key in st.session_state["product_overrides"]:
         return st.session_state["product_overrides"][clean_desc_key], "Actualizado (Regla Guardada)"
 
@@ -203,45 +203,49 @@ def validate_with_master(item_description, original_code):
     best_match_name = ""
     highest_score = 0.0
     
+    # Extraer tokens significativos de la descripción del proveedor (descartando números sueltos de volumen o empaque)
+    meaningful_desc_tokens = {t for t in desc_tokens if not t.isdigit() and len(t) > 2}
+
     for m_name in master_names:
         m_tokens, _ = clean_and_tokenize(m_name)
         if not desc_tokens or not m_tokens:
             continue
             
+        meaningful_master_tokens = {t for t in m_tokens if not t.isdigit() and len(t) > 2}
+        
+        # BLINDAJE DE SEGURIDAD 1: Las palabras clave principales (marca/producto base) DEBEN coincidir obligatoriamente.
+        # Esto evita que un "MAESTRO DOBEL" haga match con un "CLAMATO" o un "VINO".
+        common_meaningful = meaningful_desc_tokens.intersection(meaningful_master_tokens)
+        if not common_meaningful:
+            continue # Si no comparten ni una sola palabra clave relevante, se descarta de inmediato.
+
         intersection = desc_tokens.intersection(m_tokens)
         union = desc_tokens.union(m_tokens)
-        
-        # FILTRO DE SEGURIDAD ANTICruce: Exigir al menos una marca o palabra clave principal pesada (ej: DOBEL, BUCHANANS, EVIAN, BLACK, GOLD)
-        # para evitar cruzar productos de categorías totalmente distintas (como tequila con jugo de tomate).
-        brand_or_core_match = any(len(t) > 3 and t in m_tokens for t in desc_tokens if not t.isdigit())
-        if not brand_or_core_match and len(intersection) < 2:
-            continue
-            
         jaccard_score = len(intersection) / len(union)
         
         weight = 1.0
         for token in intersection:
             if token.isdigit() or len(token) > 3:
-                weight += 0.35
+                weight += 0.40
                 
         final_score = jaccard_score * weight
         
-        # Umbral estricto para evitar falsos positivos
-        if final_score > highest_score and len(intersection) >= 2:
+        # BLINDAJE DE SEGURIDAD 2: Exigir un puntaje de coincidencia alto y al menos 2 tokens clave compartidos
+        if final_score > highest_score and len(common_meaningful) >= 1 and len(intersection) >= 2:
             highest_score = final_score
             best_match_code = master_dict[m_name]
             best_match_name = m_name
             
-    # Umbral de confianza elevado (0.60) para garantizar precisión total
-    if highest_score >= 0.60:
+    # Umbral de seguridad estricto (0.65)
+    if highest_score >= 0.65:
         return best_match_code, f"Actualizado (IA Semántica: {best_match_name})"
         
-    matches = difflib.get_close_matches(norm_desc, master_names, n=1, cutoff=0.60)
+    matches = difflib.get_close_matches(norm_desc, master_names, n=1, cutoff=0.65)
     if matches:
         matched_name = matches[0]
         return master_dict[matched_name], f"Actualizado (Similitud: {matched_name})"
 
-    # Si no hay certeza absoluta, se respeta el código original de la factura para evitar errores
+    # MODO SEGURO: Si no hay certeza absoluta, se conserva el código original de la factura para evitar corrupción de inventario.
     return original_code, "⚠️ Conserva Código Original (Sin Match Seguro)"
 
 # Función centralizada con Memoria de Proveedores
@@ -426,7 +430,6 @@ if modulo == "📄 Factura Individual":
                     st.warning(f"⚠️ **Atención:** Hay {len(unmatched_items)} producto(s) sin match seguro en el maestro:")
                     for u_desc, u_code in unmatched_items:
                         st.markdown(f"- *{u_desc}* (Código original: `{u_code}`)")
-                        # Interfaz rápida para corregir y guardar regla manual en el momento
                         with st.expander(f"➕ Asignar Código POS correcto para: {u_desc}"):
                             new_pos_code = st.text_input(f"Introduce el código POS correcto para '{u_desc}'", key=f"override_{u_desc}")
                             if st.button("Guardar Regla Mapeo", key=f"btn_override_{u_desc}"):
@@ -517,7 +520,7 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
     if uploaded_files:
         st.info(f"Se han cargado {len(uploaded_files)} archivos en total.")
 
-        with st.expander("👁️ Vista Previa de los Archivos en Lote"):
+        with st.expander("👁️ Vista Previa del Archivo en Lote"):
             for f_item in uploaded_files:
                 st.markdown(f"**Archivo:** `{f_item.name}`")
                 if "image" in f_item.type or f_item.name.lower().endswith(('png', 'jpg', 'jpeg', 'webp')):
