@@ -240,13 +240,16 @@ def validate_with_master(item_description, original_code):
     
     clean_desc_key = str(item_description).strip().upper()
     
-    # =========================================================================
-    # BLINDAJE ABSOLUTO INICIAL: Captura directa para Corona Cero sin filtros previos
-    # =========================================================================
+    # Limpieza estricta de códigos vacíos, nulos o con texto 'nan'
+    clean_orig_code = str(original_code).strip()
+    if not clean_orig_code or clean_orig_code.lower() in ["nan", "none", ""]:
+        clean_orig_code = ""
+
+    # Regla Maestra Inmediata para Corona Cero
     if "CORONA CERO" in clean_desc_key or "CERO 355" in clean_desc_key:
         for m_name, m_code in master_dict.items():
             if "CORONA" in m_name and "CERO" in m_name:
-                return m_code, "Actualizado (Regla Maestra Inmediata)"
+                return m_code, "Actualizado (Regla Maestra Corona Cero)"
 
     if clean_desc_key in st.session_state["product_overrides"]:
         return st.session_state["product_overrides"][clean_desc_key], "Actualizado (Regla Guardada)"
@@ -259,7 +262,7 @@ def validate_with_master(item_description, original_code):
         if m_name == norm_prov or m_name == clean_desc_key or norm_m == norm_prov:
             return m_code, "Actualizado (Exacto)"
             
-    best_match_code = original_code
+    best_match_code = clean_orig_code
     max_matched_tiers = 0
     highest_score = 0.0
 
@@ -301,7 +304,11 @@ def validate_with_master(item_description, original_code):
     if highest_score >= 0.50 and max_matched_tiers >= 2:
         return best_match_code, "Actualizado (IA por Rangos)"
 
-    return original_code, "⚠️ Conserva Código Original (Sin Rango Seguro)"
+    # Si no hubo match y el código original está vacío, devolvemos una alerta clara en lugar de 'nan'
+    if not clean_orig_code:
+        return "S/C (Sin Código)", "⚠️ Sin Código Original en Factura"
+
+    return clean_orig_code, "⚠️ Conserva Código Original (Sin Rango Seguro)"
 
 # Función centralizada con conmutación automática a la Clave de Pago ante error 429
 def process_invoice_with_ai(file_obj, file_type):
@@ -434,7 +441,7 @@ if modulo == "📄 Factura Individual":
                     orig_code = str(item.get("codigo", "")).strip()
                     
                     final_code, status_match = validate_with_master(desc, orig_code)
-                    if "No Encontrado" in status_match or "Conserva" in status_match:
+                    if "No Encontrado" in status_match or "Conserva" in status_match or "Sin Código" in status_match:
                         unmatched_items.append((idx, desc, orig_code))
 
                     costo = safe_float(item.get("costo_sin_itbis", 0))
@@ -457,9 +464,9 @@ if modulo == "📄 Factura Individual":
                     })
                 
                 if unmatched_items:
-                    st.warning(f"⚠️ **Atención:** Hay {len(unmatched_items)} producto(s) sin rango seguro (se conservó su código original):")
+                    st.warning(f"⚠️ **Atención:** Hay {len(unmatched_items)} producto(s) sin match automático:")
                     for u_idx, u_desc, u_code in unmatched_items:
-                        st.markdown(f"- *{u_desc}* (Código original: `{u_code}`)")
+                        st.markdown(f"- *{u_desc}*")
                         with st.expander(f"➕ Asignar Código POS correcto para: {u_desc} (Ítem #{u_idx})"):
                             new_pos_code = st.text_input(f"Introduce el código POS correcto", key=f"override_{u_idx}_{u_code}")
                             if st.button("Guardar Regla Mapeo", key=f"btn_override_{u_idx}_{u_code}"):
@@ -618,7 +625,7 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
                     orig_code = str(item.get("codigo", "")).strip()
                     
                     final_code, status_match = validate_with_master(desc, orig_code)
-                    if "No Encontrado" in status_match or "Conserva" in status_match:
+                    if "No Encontrado" in status_match or "Conserva" in status_match or "Sin Código" in status_match:
                         unmatched_batch.append((idx, desc, orig_code))
 
                     costo = safe_float(item.get("costo_sin_itbis", 0))
@@ -641,9 +648,9 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
                     })
 
                 if unmatched_batch:
-                    st.warning(f"⚠️ **Atención en lote:** Hay {len(unmatched_batch)} producto(s) sin rango seguro:")
+                    st.warning(f"⚠️ **Atención en lote:** Hay {len(unmatched_batch)} producto(s) sin match automático:")
                     for u_idx, u_desc, u_code in unmatched_batch:
-                        st.markdown(f"- *{u_desc}* (Código original: `{u_code}`)")
+                        st.markdown(f"- *{u_desc}*")
 
                 df_batch = pd.DataFrame(rows_preview)
                 st.dataframe(df_batch, use_container_width=True, hide_index=True)
