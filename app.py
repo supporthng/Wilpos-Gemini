@@ -21,7 +21,7 @@ paid_api_key = st.secrets.get("GEMINI_API_KEY_PAID", os.environ.get("GEMINI_API_
 # Archivos persistentes de memoria y reglas
 MEMORY_FILE = "proveedores_memoria.json"
 OVERRIDES_FILE = "mapeo_productos_overrides.json"
-SAVED_MASTER_FILE = "ultimo_maestro_pos.xlsx"
+SAVED_MASTER_FILE = "Inventario_Completo_2026-09-11.xlsx"
 TEMPLATE_FILE = "Plantilla_Inventario_WilPOS.xlsx"
 
 def load_json_file(filepath):
@@ -115,7 +115,7 @@ if os.path.exists(SAVED_MASTER_FILE) and "master_loaded_once" not in st.session_
             if p_name and p_name != "NAN":
                 master_dict[p_name] = p_code
                 master_names.append(p_name)
-        st.sidebar.success(f"📂 Maestro anterior cargado: {len(master_dict)} productos.")
+        st.sidebar.success(f"📂 Maestro cargado: {len(master_dict)} productos.")
         st.session_state["master_loaded_once"] = True
     except Exception as e:
         print(f"Error cargando maestro previo: {e}")
@@ -181,7 +181,7 @@ if "custom_equivalences" not in st.session_state:
     }
 
 # ==========================================
-# MOTOR AUDITADO Y FLEXIBLE DE EMPAREJAMIENTO
+# MOTOR DE EMPAREJAMIENTO INTELIGENTE Y OPTIMIZADO
 # ==========================================
 SYNONYMS_MAP = {
     "JW ": "JOHNNIE WALKER ",
@@ -266,12 +266,12 @@ def validate_with_master(item_description, original_code):
         union = prov_set.union(master_set)
         score = len(common_keywords) / len(union)
 
-        if score > highest_score and score >= 0.50:
+        if score > highest_score and score >= 0.40:
             highest_score = score
             best_match_code = master_dict[m_name]
 
-    if highest_score >= 0.50:
-        return best_match_code, "Actualizado (IA Maestro Flexible)"
+    if highest_score >= 0.40:
+        return best_match_code, "Actualizado (IA Maestro Optimizado)"
 
     return original_code, "⚠️ Conserva Código Original (Sin Match Seguro)"
 
@@ -321,7 +321,7 @@ def process_invoice_with_ai(file_obj, file_type):
             raw_text = raw_text[:-3]
         
         parsed_data = json.loads(raw_text.strip())
-        success_msg = "✅ ¡Factura procesada con éxito!"
+        success_msg = "✅ ¡Factura procesada con éxito y coincidencia optimizada!"
         
         rnc_key = str(parsed_data.get("emisor_rnc", "")).strip()
         nombre_prov = str(parsed_data.get("emisor_nombre", "Proveedor Desconocido")).strip()
@@ -329,7 +329,7 @@ def process_invoice_with_ai(file_obj, file_type):
         if rnc_key and rnc_key not in st.session_state["provider_memory"]:
             st.session_state["provider_memory"][rnc_key] = {
                 "nombre": nombre_prov if nombre_prov and nombre_prov != "None" else f"Proveedor RNC {rnc_key}",
-                "nota_formato": "Formato procesado con éxito."
+                "nota_formato": "Formato procesado exitosamente."
             }
             save_json_file(MEMORY_FILE, st.session_state["provider_memory"])
 
@@ -384,10 +384,9 @@ if modulo == "📄 Factura Individual":
                 st.info(f"El archivo '{uploaded_file.name}' es de tipo PDF o documento.")
 
         if st.button("🚀 Procesar Factura") or st.session_state["use_paid_now"]:
-            # Corregido: se usa uploaded_file en lugar de file
             file_type = uploaded_file.type if hasattr(uploaded_file, 'type') else 'image/jpeg'
             
-            with st.spinner("Analizando factura..."):
+            with st.spinner("Analizando factura con maestro optimizado..."):
                 parsed_data, success_msg = process_invoice_with_ai(uploaded_file, file_type)
 
             if parsed_data:
