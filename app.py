@@ -172,14 +172,12 @@ if template_uploaded is not None:
         f.write(template_uploaded.getbuffer())
     st.sidebar.success("✅ Plantilla oficial guardada.")
 
-# Equivalencias personalizables directas para Brahma Light 12 oz y otros
+# Equivalencias personalizables base
 if "custom_equivalences" not in st.session_state:
     st.session_state["custom_equivalences"] = {
         "BARCELO 40 ANIVERSARIO": "IMPERIAL PREMIUM BLEND 40 AÑOS",
         "BARCELO IMPERIAL PORTO": "IMPERIAL PORTO",
-        "DOBEL": "MAESTRO DOBEL",
-        "BRAHMA LIGHT 12 OZ": "CERVEZA BRAHMA LIGHT PEQUEÑA 0.3L",
-        "BRAHMA LIGHT 12OZ": "CERVEZA BRAHMA LIGHT PEQUEÑA 0.3L"
+        "DOBEL": "MAESTRO DOBEL"
     }
 
 # ==========================================
@@ -203,7 +201,7 @@ SYNONYMS_MAP = {
 def clean_and_normalize(text):
     upper_text = str(text).upper()
     
-    # Limpiar prefijos numéricos de proveedor si los trae al inicio (ej: 94270BRAHMA)
+    # REGLA CLAVE: Eliminar códigos numéricos de proveedor al inicio (ej: 93100CLAMATO -> CLAMATO)
     upper_text = re.sub(r'^\d{4,6}', '', upper_text).strip()
 
     for prov, pos in st.session_state["custom_equivalences"].items():
@@ -214,7 +212,7 @@ def clean_and_normalize(text):
         upper_text = upper_text.replace(abbr, full)
         
     cleaned = re.sub(r'[^A-Z0-9\s]', ' ', upper_text)
-    stopwords = {"DE", "EL", "LA", "LOS", "LAS", "Y", "EN", "UN", "UNA", "CON", "CL", "ML", "L", "BCA", "BOT", "OZ", "HU"}
+    stopwords = {"DE", "EL", "LA", "LOS", "LAS", "Y", "EN", "UN", "UNA", "CON", "CL", "ML", "L", "BCA", "BOT", "HU", "CJ", "LP", "OZ"}
     tokens = [t for t in cleaned.split() if t not in stopwords]
     return tokens, upper_text
 
@@ -240,11 +238,6 @@ def validate_with_master(item_description, original_code):
     
     if clean_desc_key in st.session_state["product_overrides"]:
         return st.session_state["product_overrides"][clean_desc_key], "Actualizado (Regla Guardada)"
-
-    for k, v in st.session_state["custom_equivalences"].items():
-        if k in clean_desc_key or clean_desc_key in k:
-            if v in master_dict:
-                return master_dict[v], "Actualizado (Equivalencia Directa)"
 
     prov_tokens, norm_prov = clean_and_normalize(item_description)
     prov_volume = extract_volume_token(item_description)
@@ -278,11 +271,11 @@ def validate_with_master(item_description, original_code):
         union = prov_set.union(master_set)
         score = len(common_keywords) / len(union)
 
-        if score > highest_score and score >= 0.40:
+        if score > highest_score and score >= 0.35:
             highest_score = score
             best_match_code = master_dict[m_name]
 
-    if highest_score >= 0.40:
+    if highest_score >= 0.35:
         return best_match_code, "Actualizado (IA Maestro Optimizado)"
 
     return original_code, "⚠️ Conserva Código Original (Sin Match Seguro)"
@@ -301,7 +294,7 @@ def process_invoice_with_ai(file_obj, file_type):
         "Para cada ítem, extrae con absoluta precisión: 'codigo', 'descripcion', 'cantidad' (número de bultos/paquetes comprados), 'empaque' (unidades individuales que trae el paquete. REGLA ESPECIAL PARA ALOE PURE PLUS: si el código es 92713, el empaque es estrictamente 10 unidades por paquete. Para otros productos usa su empaque real como 24, 16, 6, o 1 si es unitario), y 'costo_sin_itbis'. "
         "REGLA CRÍTICA ABSOLUTA PARA EL COSTO UNITARIO: El costo devuelto en 'costo_sin_itbis' DEBE SER OBLIGATORIAMENTE EL COSTO POR UNIDAD SUELTA (PIEZA INDIVIDUAL), NUNCA EL COSTO DEL PAQUETE COMPLETO. "
         "Para calcularlo correctamente: toma el 'Imp. Neto' total de la línea y divídelo estrictamente entre (Cantidad de Paquetes × Empaque). Es decir: costo_sin_itbis = Imp. Neto / (Cantidad * Empaque). "
-        "REGLA ESTRICTA PARA LA DESCRIPCIÓN: Limpia el texto de cada producto para incluir ÚNICAMENTE el nombre comercial y presentación limpia, eliminando códigos y textos redundantes. "
+        "REGLA ESTRICTA PARA LA DESCRIPCIÓN: Limpia el texto de cada producto para incluir ÚNICAMENTE el nombre comercial y presentación limpia, eliminando códigos de proveedor y textos redundantes. "
         "Devuelve la información estrictamente en formato JSON con la siguiente estructura exacta: "
         '{"emisor_rnc": "...", "emisor_nombre": "...", "numero_documento": "...", "fecha": "...", "subtotal": 0.0, "itbis": 0.0, "total": 0.0, "items": [{"codigo": "...", "descripcion": "...", "cantidad": 1, "empaque": 1, "costo_sin_itbis": 0.0}]}. '
         "REGLA CRÍTICA: Preserva todos los ceros a la izquierda como texto. Respuesta JSON pura sin texto adicional."
