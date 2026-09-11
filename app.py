@@ -158,7 +158,7 @@ elif os.path.exists(SAVED_MASTER_FILE) and not master_dict:
     except Exception:
         pass
 
-# Equivalencias personalizables con inclusión de Corona Cero y variantes
+# Equivalencias personalizables
 if "custom_equivalences" not in st.session_state:
     st.session_state["custom_equivalences"] = {
         "BARCELO 40 ANIVERSARIO": "IMPERIAL PREMIUM BLEND 40 AÑOS",
@@ -239,6 +239,12 @@ def validate_with_master(item_description, original_code):
         return original_code, "Sin Maestro Cargado"
     
     clean_desc_key = item_description.strip().upper()
+    
+    # REGLA MAESTRA DIRECTA PARA CORONA CERO (Solución definitiva anti-fallos)
+    if "CORONA CERO" in clean_desc_key:
+        for m_name, m_code in master_dict.items():
+            if "CORONA" in m_name and "CERO" in m_name:
+                return m_code, "Actualizado (Regla Maestra Corona Cero)"
     
     if clean_desc_key in st.session_state["product_overrides"]:
         return st.session_state["product_overrides"][clean_desc_key], "Actualizado (Regla Guardada)"
@@ -415,7 +421,7 @@ if modulo == "📄 Factura Individual":
                 c_t3.metric("Total General", f"RD$ {safe_float(parsed_data.get('total', 0)):,.2f}")
                 
                 st.markdown("---")
-                st.markdown("### 📦 Validaciónกับ Maestro y Precios de Venta")
+                st.markdown("### 📦 Validación con Maestro y Precios de Venta")
 
                 data_items = parsed_data.get("items", [])
                 rows_preview = []
