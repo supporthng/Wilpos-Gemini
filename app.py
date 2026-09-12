@@ -225,9 +225,6 @@ def extract_volume_token(text):
 def validate_with_master(item_description, original_code):
     clean_desc_key = str(item_description).strip().upper()
     
-    # =========================================================================
-    # BLINDAJE ABSOLUTO INMEDIATO PARA CORONA CERO (Inyecta el código exacto)
-    # =========================================================================
     if "CORONA CERO" in clean_desc_key or "CERO 355" in clean_desc_key:
         return "750304423180", "Actualizado (Regla Maestra Inmediata Corona Cero)"
 
@@ -298,6 +295,25 @@ def validate_with_master(item_description, original_code):
 
     return clean_orig_code, "⚠️ Conserva Código Original (Sin Rango Seguro)"
 
+# Auditoría matemática de costos unitarios adaptada a la factura de AD ROYAL
+def audit_and_correct_cost(costo_unit, cantidad, empaque):
+    c = safe_float(costo_unit)
+    cant = safe_int(cantidad, 1)
+    emp = safe_int(empaque, 1)
+    
+    # Si empaque es 1 y el costo unitario coincide exactamente con el neto impreso dividido por cantidad (ej: Aloe o Clamato)
+    if emp == 1 and cant > 1:
+        # El costo unitario real es el valor neto total de la línea dividido entre la cantidad de piezas
+        return c
+    
+    # Si por error el costo unitario viene inflado como el total de la línea para empaques múltiples
+    if c > 5000 and (cant * emp) > 1:
+        corrected = c / (cant * emp)
+        if corrected > 0:
+            return corrected
+            
+    return c
+
 # Función centralizada con conmutación automática a la Clave de Pago ante error 429
 def process_invoice_with_ai(file_obj, file_type):
     memory_context = ""
@@ -310,7 +326,7 @@ def process_invoice_with_ai(file_obj, file_type):
     prompt_text = (
         f"{memory_context}\n"
         "Analiza esta factura detalladamente. Extrae los datos de cabecera con absoluta precisión: 'emisor_rnc', 'emisor_nombre', 'numero_documento', 'fecha', 'subtotal', 'itbis', 'total'. "
-        "Para cada ítem, extrae: 'codigo', 'descripcion', 'cantidad' (número de cajas compradas), 'empaque' (unidades individuales que trae la caja, interpretando formatos como 12/75CL -> 12, 6/4PACK -> 24 o 6, etc.), y 'costo_sin_itbis' (EL COSTO UNITARIO REAL POR CADA PIEZA INDIVIDUAL: toma el precio neto total de la línea y divídelo estrictamente entre cantidad * empaque). "
+        "Para cada ítem, extrae: 'codigo', 'descripcion', 'cantidad' (número de unidades o bultos según la factura), 'empaque' (unidades individuales por caja/bulto. Si la factura muestra 'UN' o 'PC' con empaque 1, asigna empaque 1), y 'costo_sin_itbis' (EL COSTO UNITARIO REAL POR CADA PIEZA INDIVIDUAL: si la línea muestra un Impuesto Neto total y la cantidad es N con empaque 1, el costo unitario es Impuesto_Neto / cantidad. Si es por cajas, divide Impuesto_Neto / (cantidad * empaque)). "
         "REGLA ESTRICTA PARA LA DESCRIPCIÓN: Limpia el texto de cada producto para incluir ÚNICAMENTE el nombre comercial del producto y su presentación o tamaño limpio (ej: 'CORONA CERO 355 ML', 'MAESTRO DOBEL DIAMANTE 700 ML', 'EVIAN 75 CL'), eliminando códigos internos, diagonales de empaque y textos redundantes. "
         "Devuelve la información estrictamente en formato JSON con la siguiente estructura exacta: "
         '{"emisor_rnc": "...", "emisor_nombre": "...", "numero_documento": "...", "fecha": "...", "subtotal": 0.0, "itbis": 0.0, "total": 0.0, "items": [{"codigo": "...", "descripcion": "...", "cantidad": 1, "empaque": 1, "costo_sin_itbis": 0.0}]}. '
@@ -401,7 +417,7 @@ if modulo == "📄 Factura Individual":
         if st.button("🚀 Procesar Factura"):
             file_type = uploaded_file.type if hasattr(uploaded_file, 'type') else 'image/jpeg'
             
-            with st.spinner("Analizando factura con validación de rangos estrictos..."):
+            with st.spinner("Analizando factura con auditoría de costos y rangos estrictos..."):
                 parsed_data, success_msg = process_invoice_with_ai(uploaded_file, file_type)
 
             if parsed_data:
@@ -432,11 +448,14 @@ if modulo == "📄 Factura Individual":
                     if "No Encontrado" in status_match or "Conserva" in status_match or "Sin Código" in status_match:
                         unmatched_items.append((idx, desc, orig_code))
 
-                    costo = safe_float(item.get("costo_sin_itbis", 0))
-                    raw_pv = (costo * 1.25) * 1.18
-                    precio_venta = round_to_nearest_5(raw_pv)
+                    raw_costo = safe_float(item.get("costo_sin_itbis", 0))
                     cant_comprada = safe_int(item.get("cantidad", 1), 1)
                     empaque_val = safe_int(item.get("empaque", 1), 1)
+                    
+                    costo = audit_and_correct_cost(raw_costo, cant_comprada, empaque_val)
+
+                    raw_pv = (costo * 1.25) * 1.18
+                    precio_venta = round_to_nearest_5(raw_pv)
                     stock_val = cant_comprada * empaque_val
                     
                     rows_preview.append({
@@ -616,11 +635,14 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
                     if "No Encontrado" in status_match or "Conserva" in status_match or "Sin Código" in status_match:
                         unmatched_batch.append((idx, desc, orig_code))
 
-                    costo = safe_float(item.get("costo_sin_itbis", 0))
-                    raw_pv = (costo * 1.25) * 1.18
-                    precio_venta = round_to_nearest_5(raw_pv)
+                    raw_costo = safe_float(item.get("costo_sin_itbis", 0))
                     cant_comprada = safe_int(item.get("cantidad", 1), 1)
                     empaque_val = safe_int(item.get("empaque", 1), 1)
+                    
+                    costo = audit_and_correct_cost(raw_costo, cant_comprada, empaque_val)
+
+                    raw_pv = (costo * 1.25) * 1.18
+                    precio_venta = round_to_nearest_5(raw_pv)
                     stock_val = cant_comprada * empaque_val
                     
                     rows_preview.append({
