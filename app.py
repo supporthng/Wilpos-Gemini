@@ -223,22 +223,22 @@ def extract_volume_token(text):
     return ""
 
 def validate_with_master(item_description, original_code):
-    if not master_dict:
-        return original_code, "Sin Maestro Cargado"
-    
     clean_desc_key = str(item_description).strip().upper()
+    
+    # =========================================================================
+    # BLINDAJE ABSOLUTO INMEDIATO PARA CORONA CERO (Inyecta el código exacto)
+    # =========================================================================
+    if "CORONA CERO" in clean_desc_key or "CERO 355" in clean_desc_key:
+        return "750304423180", "Actualizado (Regla Maestra Inmediata Corona Cero)"
+
+    if not master_dict:
+        return str(original_code).strip(), "Sin Maestro Cargado"
     
     clean_orig_code = str(original_code).strip()
     if clean_orig_code.endswith('.0'):
         clean_orig_code = clean_orig_code[:-2]
     if not clean_orig_code or clean_orig_code.lower() in ["nan", "none", ""]:
         clean_orig_code = ""
-
-    # Regla Maestra Inmediata para Corona Cero
-    if "CORONA CERO" in clean_desc_key or "CERO 355" in clean_desc_key:
-        for m_name, m_code in master_dict.items():
-            if "CORONA" in m_name and "CERO" in m_name:
-                return str(m_code).strip(), "Actualizado (Regla Maestra Corona Cero)"
 
     if clean_desc_key in st.session_state["product_overrides"]:
         return str(st.session_state["product_overrides"][clean_desc_key]).strip(), "Actualizado (Regla Guardada)"
@@ -441,7 +441,7 @@ if modulo == "📄 Factura Individual":
                     
                     rows_preview.append({
                         "No.": idx,
-                        "Código Barra POS": final_code,
+                        "Código Barra POS": str(final_code),
                         "Nombre": desc,
                         "Cant. Compra": cant_comprada,
                         "Empaque": empaque_val,
@@ -484,7 +484,7 @@ if modulo == "📄 Factura Individual":
                 for item_dict in rows_preview:
                     ws_prod.append([
                         item_dict["Nombre"],
-                        item_dict["Código Barra POS"],
+                        str(item_dict["Código Barra POS"]),
                         "General",
                         "producto",
                         item_dict["Precio Venta (M5)"],
@@ -625,7 +625,7 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
                     
                     rows_preview.append({
                         "No.": idx,
-                        "Código Barra POS": final_code,
+                        "Código Barra POS": str(final_code),
                         "Nombre": desc,
                         "Cant. Compra": cant_comprada,
                         "Empaque": empaque_val,
@@ -660,7 +660,7 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
                 for item_dict in rows_preview:
                     ws_prod.append([
                         item_dict["Nombre"],
-                        item_dict["Código Barra POS"],
+                        str(item_dict["Código Barra POS"]),
                         "General",
                         "producto",
                         item_dict["Precio Venta (M5)"],
