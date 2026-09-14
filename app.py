@@ -371,11 +371,11 @@ if modulo == "📄 Factura Individual":
                 st.download_button("📥 Descargar Excel Plantilla WilPOS Actualizada", output.getvalue(), "Inventario_WilPOS_Actualizado.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
 # ==========================================
-# MÓDULO 2: MÚLTIPLES FACTURAS (LOTE CON PERSISTENCIA DE BYTES)
+# MÓDULO 2: MÚLTIPLES FACTURAS (LOTE EN TIEMPO REAL ARCHIVO POR ARCHIVO)
 # ==========================================
 elif modulo == "📂 Múltiples Facturas (Lote)":
-    st.markdown("<h2>📂 Procesador por <span style='color: #0284c7;'>Lotes Automáticos (Bloques de 15)</span></h2>", unsafe_allow_html=True)
-    st.markdown("<p style='color: #64748b;'>Procesa tus facturas en bloques seguros de 15 con persistencia de archivos en memoria.</p>", unsafe_allow_html=True)
+    st.markdown("<h2>📂 Procesador por <span style='color: #0284c7;'>Lotes en Tiempo Real (Archivo por Archivo)</span></h2>", unsafe_allow_html=True)
+    st.markdown("<p style='color: #64748b;'>Procesa tus facturas una por una automáticamente sin congelar la pantalla.</p>", unsafe_allow_html=True)
     st.markdown("---")
 
     st.markdown('<div class="card-container">', unsafe_allow_html=True)
@@ -385,7 +385,7 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
     uploaded_files = st.file_uploader("📂 Sube tus facturas (Selección múltiple)", type=["pdf", "png", "jpg", "jpeg"], accept_multiple_files=True, key="batch_files")
     st.markdown('</div>', unsafe_allow_html=True)
 
-    # 💾 Guardar bytes de archivos en session_state para evitar que se pierdan durante los st.rerun()
+    # Guardar bytes en session_state para persistencia absoluta
     if uploaded_files:
         if "cached_uploaded_files" not in st.session_state or len(st.session_state["cached_uploaded_files"]) != len(uploaded_files):
             st.session_state["cached_uploaded_files"] = [
@@ -403,12 +403,12 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
             st.session_state["batch_signatures"] = set()
             st.session_state["batch_processed_count"] = 0
             st.session_state["batch_ok_count"] = 0
-            st.session_state["is_auto_processing"] = False
+            st.session_state["is_live_processing"] = False
 
         processed_so_far = st.session_state["batch_processed_count"]
 
         b_col1, b_col2 = st.columns(2)
-        iniciar_btn = b_col1.button("🚀 Iniciar Procesamiento Automático (Bloques de 15)", type="primary")
+        iniciar_btn = b_col1.button("🚀 Iniciar Procesamiento en Vivo (Archivo por Archivo)", type="primary")
         reiniciar_lote = b_col2.button("🔄 Reiniciar / Limpiar Lote")
 
         if reiniciar_lote:
@@ -417,86 +417,80 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
             st.session_state["batch_signatures"] = set()
             st.session_state["batch_processed_count"] = 0
             st.session_state["batch_ok_count"] = 0
-            st.session_state["is_auto_processing"] = False
+            st.session_state["is_live_processing"] = False
             if "cached_uploaded_files" in st.session_state:
                 del st.session_state["cached_uploaded_files"]
             st.success("¡Lote reiniciado!")
             st.rerun()
 
         if iniciar_btn:
-            st.session_state["is_auto_processing"] = True
+            st.session_state["is_live_processing"] = True
             st.rerun()
 
-        # 🟢 PROCESAMIENTO AUTOMÁTICO EN BLOQUES DE 15 CON ARCHIVOS EN MEMORIA
-        is_running = st.session_state.get("is_auto_processing", False)
-        if is_running:
+        # 🟢 PROCESAMIENTO UNO A UNO EN VIVO CON RE-RUN INSTANTÁNEO
+        is_live = st.session_state.get("is_live_processing", False)
+        if is_live:
             if processed_so_far < total_files:
-                block_size = 15
-                end_target = min(processed_so_far + block_size, total_files)
+                file_info = cached_files[processed_so_far]
+                current_num = processed_so_far + 1
                 
-                st.info(f"⏳ **Procesando bloque automático:** Archivos del **{processed_so_far + 1}** al **{end_target}** de **{total_files}**...")
-                
-                for idx_file in range(processed_so_far, end_target):
-                    file_info = cached_files[idx_file]
-                    file_bytes_io = io.BytesIO(file_info["bytes"])
-                    file_name = file_info["name"]
-                    file_type = file_info["type"]
+                st.info(f"⚡ **Analizando archivo {current_num} de {total_files}:** `{file_info['name']}`...")
+                st.progress(processed_so_far / total_files)
 
-                    parsed_data, err_msg = process_invoice_with_ai(file_bytes_io, file_type)
+                file_bytes_io = io.BytesIO(file_info["bytes"])
+                parsed_data, err_msg = process_invoice_with_ai(file_bytes_io, file_info["type"])
 
-                    if parsed_data and isinstance(parsed_data, dict):
-                        rnc_emisor = str(parsed_data.get("emisor_rnc", "")).strip()
-                        nombre_prov = str(parsed_data.get("emisor_nombre", "Desconocido")).strip()
-                        num_doc = str(parsed_data.get("numero_documento", "")).strip()
-                        fecha_doc = str(parsed_data.get("fecha", "")).strip()
-                        total_doc_val = safe_float(parsed_data.get("total", 0))
-                        
-                        signature_string = f"{rnc_emisor}_{num_doc}_{fecha_doc}_{total_doc_val}"
-                        doc_signature = hashlib.md5(signature_string.encode('utf-8')).hexdigest()
-                        
-                        if doc_signature in st.session_state["batch_signatures"]:
-                            st.session_state["batch_audit_log"].append({
-                                "Archivo": file_name,
-                                "Proveedor": nombre_prov,
-                                "Nº Documento": num_doc if num_doc else "N/D",
-                                "Estado": "🔴 Omitido (Duplicado)",
-                                "Motivo": f"Factura ya existente (RNC: {rnc_emisor}, Doc: {num_doc}, Total: RD$ {total_doc_val:,.2f})"
-                            })
-                        else:
-                            st.session_state["batch_signatures"].add(doc_signature)
-                            st.session_state["batch_ok_count"] += 1
-                            st.session_state["batch_audit_log"].append({
-                                "Archivo": file_name,
-                                "Proveedor": nombre_prov,
-                                "Nº Documento": num_doc if num_doc else "N/D",
-                                "Estado": "🟢 Procesado Exitosamente",
-                                "Motivo": f"Extraídos {len(parsed_data.get('items', []))} ítems."
-                            })
-                            items = parsed_data.get("items", [])
-                            if isinstance(items, list):
-                                st.session_state["batch_accumulated_items"].extend(items)
-                    else:
+                if parsed_data and isinstance(parsed_data, dict):
+                    rnc_emisor = str(parsed_data.get("emisor_rnc", "")).strip()
+                    nombre_prov = str(parsed_data.get("emisor_nombre", "Desconocido")).strip()
+                    num_doc = str(parsed_data.get("numero_documento", "")).strip()
+                    fecha_doc = str(parsed_data.get("fecha", "")).strip()
+                    total_doc_val = safe_float(parsed_data.get("total", 0))
+                    
+                    signature_string = f"{rnc_emisor}_{num_doc}_{fecha_doc}_{total_doc_val}"
+                    doc_signature = hashlib.md5(signature_string.encode('utf-8')).hexdigest()
+                    
+                    if doc_signature in st.session_state["batch_signatures"]:
                         st.session_state["batch_audit_log"].append({
-                            "Archivo": file_name,
-                            "Proveedor": "Desconocido",
-                            "Nº Documento": "N/D",
-                            "Estado": "🔴 Omitido (Error de Lectura/IA)",
-                            "Motivo": "La IA no pudo estructurar correctamente el documento."
+                            "Archivo": file_info["name"],
+                            "Proveedor": nombre_prov,
+                            "Nº Documento": num_doc if num_doc else "N/D",
+                            "Estado": "🔴 Omitido (Duplicado)",
+                            "Motivo": f"Factura ya existente (RNC: {rnc_emisor}, Doc: {num_doc}, Total: RD$ {total_doc_val:,.2f})"
                         })
-
-                st.session_state["batch_processed_count"] = end_target
-                
-                if st.session_state["batch_processed_count"] < total_files:
-                    st.rerun() # Salta automáticamente al siguiente bloque
+                    else:
+                        st.session_state["batch_signatures"].add(doc_signature)
+                        st.session_state["batch_ok_count"] += 1
+                        st.session_state["batch_audit_log"].append({
+                            "Archivo": file_info["name"],
+                            "Proveedor": nombre_prov,
+                            "Nº Documento": num_doc if num_doc else "N/D",
+                            "Estado": "🟢 Procesado Exitosamente",
+                            "Motivo": f"Extraídos {len(parsed_data.get('items', []))} ítems."
+                        })
+                        items = parsed_data.get("items", [])
+                        if isinstance(items, list):
+                            st.session_state["batch_accumulated_items"].extend(items)
                 else:
-                    st.session_state["is_auto_processing"] = False
-                    st.success("🎉 ¡Procesamiento automático de todo el lote completado con éxito!")
-                    st.rerun()
+                    st.session_state["batch_audit_log"].append({
+                        "Archivo": file_info["name"],
+                        "Proveedor": "Desconocido",
+                        "Nº Documento": "N/D",
+                        "Estado": "🔴 Omitido (Error de Lectura/IA)",
+                        "Motivo": "La IA no pudo estructurar correctamente el documento."
+                    })
 
-        # Mostrar Dashboard y Resultados Actuales
+                st.session_state["batch_processed_count"] += 1
+                st.rerun() # Recarga instantánea para procesar el siguiente archivo en vivo
+            else:
+                st.session_state["is_live_processing"] = False
+                st.success("🎉 ¡Procesamiento de todo el lote finalizado con éxito!")
+                st.rerun()
+
+        # Mostrar Dashboard y Resultados Actuales en Tiempo Real
         if st.session_state["batch_processed_count"] > 0:
             st.markdown("---")
-            st.markdown("## 📊 Dashboard de Auditoría y Progreso del Lote")
+            st.markdown("## 📊 Dashboard de Auditoría y Progreso en Vivo")
             
             p_ok = st.session_state["batch_ok_count"]
             p_total_done = st.session_state["batch_processed_count"]
@@ -638,7 +632,7 @@ elif modulo == "📋 Ver Códigos Almacenados":
                 del st.session_state["last_uploaded_excel_name"]
             if "df_imported" in st.session_state:
                 del st.session_state["df_imported"]
-            st.success("¡Memoria reseteada con éxito! Ya puedes subir un nuevo archivo Excel.")
+            st.success("¡Reseteado con éxito!")
             st.rerun()
 
         st.markdown("---")
