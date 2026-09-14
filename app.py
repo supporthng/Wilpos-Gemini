@@ -357,7 +357,6 @@ if modulo == "📄 Factura Individual":
     st.markdown("<p style='color: #64748b;'>Sube tu factura individual para extraer ítems, validar con memoria POS y generar la plantilla Excel.</p>", unsafe_allow_html=True)
     st.markdown("---")
 
-    # Tarjeta compacta usando columnas estrictas para evitar que el input se estire
     st.markdown('<div class="card-container">', unsafe_allow_html=True)
     c_col1, c_col2 = st.columns([1, 3])
     with c_col1:
@@ -507,7 +506,6 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
     st.markdown("<p style='color: #64748b;'>Sube múltiples facturas simultáneamente. El sistema filtrará duplicados y consolidará el inventario.</p>", unsafe_allow_html=True)
     st.markdown("---")
 
-    # Tarjeta compacta para lote
     st.markdown('<div class="card-container">', unsafe_allow_html=True)
     l_col1, l_col2 = st.columns([1, 3])
     with l_col1:
@@ -658,7 +656,7 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
 # ==========================================
 elif modulo == "📸 Extraer Código desde Imagen":
     st.markdown("<h2>📸 Lector de Códigos y <span style='color: #0284c7;'>Productos</span></h2>", unsafe_allow_html=True)
-    st.markdown("<p style='color: #64748b;'>Sube una foto del código de barras o producto. Si no está registrado, se buscará automáticamente en internet.</p>", unsafe_allow_html=True)
+    st.markdown("<p style='color: #64748b;'>Sube una foto del código de barras o producto. Si não está registrado, se buscará automáticamente en internet.</p>", unsafe_allow_html=True)
     st.markdown("---")
 
     st.markdown('<div class="card-container">', unsafe_allow_html=True)
@@ -773,13 +771,18 @@ elif modulo == "📋 Ver Códigos Almacenados":
             
             st.dataframe(df_codes, use_container_width=True, hide_index=True, height=450)
 
-            csv_data = df_codes.to_csv(index=False).encode('utf-8')
+            # Generación de archivo Excel (.xlsx) en memoria para la descarga
+            output_db = io.BytesIO()
+            with pd.ExcelWriter(output_db, engine='openpyxl') as writer:
+                df_codes.to_excel(writer, index=False, sheet_name="Codigos_Almacenados")
+            excel_db_data = output_db.getvalue()
+
             st.markdown("---")
             st.download_button(
-                label="📥 Descargar Lista de Códigos (CSV)",
-                data=csv_data,
-                file_name="codigos_barras_almacenados.csv",
-                mime="text/csv"
+                label="📥 Descargar Lista de Códigos (.xlsx)",
+                data=excel_db_data,
+                file_name="codigos_barras_almacenados.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
             )
         else:
             st.warning("⚠️ Aún no hay códigos de barras almacenados en la memoria.")
