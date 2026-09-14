@@ -847,7 +847,7 @@ elif modulo == "📸 Extraer Código desde Imagen":
                         st.error("No se pudo extraer un código de barras claro de la imagen.")
 
 # ==========================================
-# MÓDULO 4: VER CÓDIGOS ALMACENADOS ( CON DETALLE DE NO PROCESADOS )
+# MÓDULO 4: VER CÓDIGOS ALMACENADOS ( CON DETALLE DE ARTÍCULOS NO PROCESADOS )
 # ==========================================
 elif modulo == "📋 Ver Códigos Almacenados":
     st.title("📋 Listado de Códigos y Nombres Almacenados")
@@ -904,20 +904,23 @@ elif modulo == "📋 Ver Códigos Almacenados":
                         motivos_no_procesados = []
 
                         for row_idx, row in df_imp.iterrows():
-                            fila_num = row_idx + 2  # Número de fila real en Excel (contando encabezado)
+                            fila_num = row_idx + 2  # Fila real de Excel
                             c_val = str(row[c_code]).strip()
                             n_val = str(row[c_name]).strip().upper()
+                            
+                            # Obtener el nombre del artículo para mostrarlo claramente
+                            nombre_articulo = n_val if (n_val and n_val.lower() not in ["nan", "none", ""]) else "(Sin Nombre / Artículo Desconocido)"
                             
                             # Validar si el código está vacío o es inválido
                             if not c_val or c_val.lower() in ["nan", "none", ""]:
                                 no_procesados += 1
-                                motivos_no_procesados.append(f"Fila #{fila_num}: Código de barras vacío o nulo.")
+                                motivos_no_procesados.append(f"Fila #{fila_num} ➔ **Artículo:** *{nombre_articulo}* | **Motivo:** Código de barras vacío o nulo.")
                                 continue
                                 
                             # Validar si el nombre está vacío o es inválido
                             if not n_val or n_val.lower() in ["nan", "none", ""]:
                                 no_procesados += 1
-                                motivos_no_procesados.append(f"Fila #{fila_num} (Código: `{c_val}`): Nombre o descripción vacía.")
+                                motivos_no_procesados.append(f"Fila #{fila_num} ➔ **Código:** `{c_val}` | **Motivo:** Nombre o descripción vacía.")
                                 continue
                             
                             if c_val.endswith('.0'):
@@ -944,7 +947,7 @@ elif modulo == "📋 Ver Códigos Almacenados":
                         col_r5.metric("No Procesados", no_procesados)
 
                         if motivos_no_procesados:
-                            with st.expander(f"⚠️ Ver detalle de los {len(motivos_no_procesados)} elementos no procesados y su motivo"):
+                            with st.expander(f"⚠️ Ver detalle de los {len(motivos_no_procesados)} elementos no procesados y su artículo"):
                                 for motivo in motivos_no_procesados:
                                     st.markdown(f"- {motivo}")
                 else:
@@ -1027,14 +1030,16 @@ elif modulo == "📋 Ver Códigos Almacenados":
                             code_v = str(item.get("codigo_barras", "")).strip()
                             name_v = str(item.get("nombre_producto", "")).strip().upper()
                             
+                            nombre_articulo = name_v if (name_v and name_v.lower() not in ["nan", "none", ""]) else f"Ítem #${idx}"
+                            
                             if not code_v or code_v.lower() in ["nan", "none", ""]:
                                 no_procesados += 1
-                                motivos_no_procesados_img.append(f"Ítem #{idx} (Nombre: '{name_v}'): Código de barras faltante o no detectado.")
+                                motivos_no_procesados_img.append(f"Ítem #{idx} ➔ **Artículo:** *{nombre_articulo}* | **Motivo:** Código de barras faltante o no detectado.")
                                 continue
                                 
                             if not name_v or name_v.lower() in ["nan", "none", ""]:
                                 no_procesados += 1
-                                motivos_no_procesados_img.append(f"Ítem #{idx} (Código: `{code_v}`): Nombre de producto faltante.")
+                                motivos_no_procesados_img.append(f"Ítem #{idx} ➔ **Código:** `{code_v}` | **Motivo:** Nombre de producto faltante.")
                                 continue
                             
                             procesados_ok += 1
@@ -1058,7 +1063,7 @@ elif modulo == "📋 Ver Códigos Almacenados":
                         col_i5.metric("No Procesados", no_procesados)
 
                         if motivos_no_procesados_img:
-                            with st.expander(f"⚠️ Ver detalle de los {len(motivos_no_procesados_img)} elementos no procesados y su motivo"):
+                            with st.expander(f"⚠️ Ver detalle de los {len(motivos_no_procesados_img)} elementos no procesados y su artículo"):
                                 for motivo in motivos_no_procesados_img:
                                     st.markdown(f"- {motivo}")
                     else:
