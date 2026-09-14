@@ -371,7 +371,7 @@ if modulo == "📄 Factura Individual":
                 st.download_button("📥 Descargar Excel Plantilla WilPOS Actualizada", output.getvalue(), "Inventario_WilPOS_Actualizado.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
 # ==========================================
-# MÓDULO 2: MÚLTIPLES FACTURAS (LOTE) CON DASHBOARD DE AUDITORÍA
+# MÓDULO 2: MÚLTIPLES FACTURAS (LOTE)
 # ==========================================
 elif modulo == "📂 Múltiples Facturas (Lote)":
     st.markdown("<h2>📂 Procesador por <span style='color: #0284c7;'>Lotes con Dashboard de Auditoría</span></h2>", unsafe_allow_html=True)
@@ -541,7 +541,7 @@ elif modulo == "📸 Extraer Código desde Imagen":
     if img_uploaded is not None:
         st.image(img_uploaded, caption="Imagen analizada", width=400)
         if st.button("🔍 Escanear y Registrar"):
-            st.info("Esc rápido disponible en la versión completa.")
+            st.info("Escáner rápido disponible en la versión completa.")
 
 # ==========================================
 # MÓDULO 4: VER CÓDIGOS ALMACENADOS E IMPORTAR EXCEL
@@ -580,6 +580,19 @@ elif modulo == "📋 Ver Códigos Almacenados":
         st.subheader("📂 Importación Masiva desde Excel Maestro")
         st.markdown("Al importar, los códigos de barras se leen explícitamente como texto para conservar todos los ceros a la izquierda.")
         
+        # 🔄 BOTÓN DE REINICIO RÁPIDO PARA PRUEBAS
+        if st.button("🔄 Reiniciar Memoria (Borrar Todo) y Subir Nuevo Excel"):
+            st.session_state["barcode_memory"] = {}
+            if os.path.exists(BARCODE_MEMORY_FILE):
+                os.remove(BARCODE_MEMORY_FILE)
+            if "last_uploaded_excel_name" in st.session_state:
+                del st.session_state["last_uploaded_excel_name"]
+            if "df_imported" in st.session_state:
+                del st.session_state["df_imported"]
+            st.success("¡Memoria reseteada con éxito! Ya puedes subir un nuevo archivo Excel.")
+            st.rerun()
+
+        st.markdown("---")
         st.markdown('<div class="card-container">', unsafe_allow_html=True)
         excel_import_file = st.file_uploader("📂 Sube tu archivo Excel", type=["xlsx", "xls", "csv"], key="import_memory_file")
         st.markdown('</div>', unsafe_allow_html=True)
@@ -613,7 +626,6 @@ elif modulo == "📋 Ver Códigos Almacenados":
                             c_val = clean_barcode(row[c_code])
                             n_val = str(row[c_name]).strip().upper()
                             
-                            # Validaciones de omisión
                             if c_val == "S/C (Sin Código)" or not c_val:
                                 omitidos += 1
                                 log_omitidos.append({"Fila": idx + 2, "Nombre": n_val if n_val else "N/A", "Motivo": "Código de barras ausente o inválido"})
@@ -635,7 +647,6 @@ elif modulo == "📋 Ver Códigos Almacenados":
                         
                         st.success(f"🎯 ¡Sincronización completada con éxito protegiendo los ceros a la izquierda!")
                         
-                        # 📊 DASHBOARD DE RESULTADOS DE IMPORTACIÓN EXCEL
                         col_r1, col_r2, col_r3 = st.columns(3)
                         col_r1.metric("✨ Nuevos Agregados", nuevos)
                         col_r2.metric("🔄 Actualizados", actualizados)
