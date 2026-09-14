@@ -48,8 +48,9 @@ st.markdown("""
         color: white;
         border: none;
         border-radius: 8px;
-        padding: 0.5rem 1.2rem;
+        padding: 0.6rem 1.5rem;
         font-weight: 600;
+        font-size: 1rem;
         transition: all 0.2s ease;
     }
     .stButton>button:hover {
@@ -163,7 +164,6 @@ with st.sidebar.expander("🛠️ Correcciones Manuales"):
     else:
         st.info("Sin reglas manuales.")
 
-# Equivalencias personalizables
 if "custom_equivalences" not in st.session_state:
     st.session_state["custom_equivalences"] = {
         "BARCELO 40 ANIVERSARIO": "IMPERIAL PREMIUM BLEND 40 AÑOS",
@@ -187,17 +187,14 @@ def validate_with_master(item_description, original_code):
     if not clean_orig_code or clean_orig_code.lower() in ["nan", "none", ""]:
         clean_orig_code = ""
 
-    # 1. Buscar en reglas manuales
     if clean_desc_key in st.session_state["product_overrides"]:
         return str(st.session_state["product_overrides"][clean_desc_key]).strip(), "Actualizado (Regla Guardada)"
 
-    # 2. Búsqueda exacta en la memoria viva de códigos
     b_mem = st.session_state["barcode_memory"]
     for b_code, b_name in b_mem.items():
         if b_name == clean_desc_key:
             return str(b_code).strip(), "Actualizado (Memoria Viva Exacta)"
 
-    # 3. Búsqueda por aproximación (Fuzzy Matching) en la memoria viva
     if b_mem:
         name_to_code = {str(name).upper(): code for code, name in b_mem.items()}
         close_matches = difflib.get_close_matches(clean_desc_key, name_to_code.keys(), n=1, cutoff=0.65)
@@ -206,7 +203,6 @@ def validate_with_master(item_description, original_code):
             code_found = name_to_code[matched_name]
             return code_found, f"Actualizado (Memoria Viva por Similitud: '{matched_name}')"
 
-    # 4. Si trae código original válido, lo aprendemos automáticamente
     if clean_orig_code and clean_orig_code != "S/C":
         b_mem[clean_orig_code] = clean_desc_key
         save_json_file(BARCODE_MEMORY_FILE, b_mem)
@@ -258,7 +254,6 @@ def process_invoice_with_ai(file_obj, file_type):
         keys_to_try.append((free_key_2, "Respaldo Gratuito #2"))
 
     if not keys_to_try:
-        st.error("❌ No se encontró ninguna clave de API configurada en los secrets de Streamlit.")
         return None, ""
 
     for api_k, label in keys_to_try:
@@ -281,16 +276,14 @@ def process_invoice_with_ai(file_obj, file_type):
                 raw_text = raw_text[:-3]
             
             parsed_data = json.loads(raw_text.strip())
-            success_msg = f"✅ ¡Factura procesada con éxito usando {label}!"
+            success_msg = f"✅ Éxito con {label}"
             return parsed_data, success_msg
         except Exception as e:
             if "429" in str(e) or "Quota exceeded" in str(e):
                 continue
             else:
-                st.error(f"Error al procesar con {label}: {e}")
                 break
 
-    st.error("🚨 Se ha agotado la cuota de todas las claves configuradas.")
     return None, ""
 
 # ==========================================
@@ -304,30 +297,20 @@ if modulo == "📄 Factura Individual":
     st.markdown('<div class="card-container">', unsafe_allow_html=True)
     c_col1, c_col2 = st.columns([1, 3])
     with c_col1:
-        margen_ganancia = st.number_input(
-            "⚙️ Ganancia (%)", 
-            min_value=0.0, 
-            max_value=500.0, 
-            value=25.0, 
-            step=1.0, 
-            key="textbox_individual"
-        )
+        margen_ganancia = st.number_input("⚙️ Ganancia (%)", min_value=0.0, max_value=500.0, value=25.0, step=1.0, key="textbox_individual")
     
     uploaded_file = st.file_uploader("📂 Sube tu factura (PDF o Imagen)", type=["pdf", "png", "jpg", "jpeg"], key="single_file")
     st.markdown('</div>', unsafe_allow_html=True)
 
     if uploaded_file is not None:
         st.success(f"¡Archivo cargado: {uploaded_file.name}!")
-
         if st.button("🚀 Procesar Factura"):
             file_type = uploaded_file.type if hasattr(uploaded_file, 'type') else 'image/jpeg'
-            
             with st.spinner("Analizando factura y consultando memoria viva..."):
                 parsed_data, success_msg = process_invoice_with_ai(uploaded_file, file_type)
 
             if parsed_data:
                 st.success(success_msg)
-                
                 data_items = parsed_data.get("items", [])
                 rows_preview = []
                 unmatched_items = []
@@ -361,18 +344,6 @@ if modulo == "📄 Factura Individual":
                         "Precio Venta": precio_venta,
                         "Estado Memoria": status_match
                     })
-                
-                if unmatched_items:
-                    st.warning(f"⚠️ **Atención:** Hay {len(unmatched_items)} producto(s) sin código detectado:")
-                    for u_idx, u_desc, u_code in unmatched_items:
-                        with st.expander(f"➕ Asignar Código POS para: {u_desc} (Ítem #{u_idx})"):
-                            new_pos_code = st.text_input(f"Introduce el código POS correcto", key=f"override_{u_idx}_{u_code}")
-                            if st.button("Guardar y Aprender", key=f"btn_override_{u_idx}_{u_code}"):
-                                if new_pos_code:
-                                    st.session_state["barcode_memory"][new_pos_code.strip()] = u_desc.strip().upper()
-                                    save_json_file(BARCODE_MEMORY_FILE, st.session_state["barcode_memory"])
-                                    st.success("¡Aprendido y guardado en memoria con éxito!")
-                                    st.rerun()
 
                 df_resultado = pd.DataFrame(rows_preview)
                 st.dataframe(df_resultado, use_container_width=True, hide_index=True)
@@ -407,17 +378,10 @@ if modulo == "📄 Factura Individual":
                 
                 output = io.BytesIO()
                 wb.save(output)
-                
-                st.markdown("---")
-                st.download_button(
-                    label="📥 Descargar Excel Plantilla WilPOS Actualizada",
-                    data=output.getvalue(),
-                    file_name="Inventario_WilPOS_Actualizado.xlsx",
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                )
+                st.download_button("📥 Descargar Excel Plantilla WilPOS Actualizada", output.getvalue(), "Inventario_WilPOS_Actualizado.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
 # ==========================================
-# MÓDULO 2: MÚLTIPLES FACTURAS (LOTE) CON DETECCIÓN DE DUPLICADOS
+# MÓDULO 2: MÚLTIPLES FACTURAS (LOTE) CON PROGRESO EN VIVO
 # ==========================================
 elif modulo == "📂 Múltiples Facturas (Lote)":
     st.markdown("<h2>📂 Procesador por <span style='color: #0284c7;'>Lotes con Antiduplicados</span></h2>", unsafe_allow_html=True)
@@ -433,19 +397,21 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
     st.markdown('</div>', unsafe_allow_html=True)
 
     if uploaded_files:
-        st.info(f"Se han cargado {len(uploaded_files)} archivos en total.")
-
-        if st.button("🚀 Procesar Lote, Filtrar Duplicados y Alimentar Memoria"):
+        st.info(f"📁 Se han cargado **{len(uploaded_files)} archivo(s)** listos para procesar.")
+        
+        if st.button("🚀 Procesar Lote, Filtrar Duplicados y Alimentar Memoria", type="primary"):
             all_consolidated_items = []
             invoice_totals_summary = []
             duplicate_count = 0
             batch_signatures = set()
 
             progress_bar = st.progress(0)
-            status_text = st.empty()
+            status_placeholder = st.empty()
+            total_files = len(uploaded_files)
 
             for i, file in enumerate(uploaded_files):
-                status_text.text(f"Analizando archivo {i+1} de {len(uploaded_files)}: {file.name}...")
+                # Actualizar estado visible en tiempo real para que no parezca congelado
+                status_placeholder.markdown(f"⏳ **Procesando archivo ({i+1} de {total_files}):** `{file.name}`...")
                 file_type = file.type if hasattr(file, 'type') else 'image/jpeg'
                 
                 parsed_data, _ = process_invoice_with_ai(file, file_type)
@@ -457,7 +423,6 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
                     fecha_doc = str(parsed_data.get("fecha", "")).strip()
                     total_doc_val = safe_float(parsed_data.get("total", 0))
                     
-                    # Generar huella digital única para detectar duplicados
                     signature_string = f"{rnc_emisor}_{num_doc}_{fecha_doc}_{total_doc_val}"
                     doc_signature = hashlib.md5(signature_string.encode('utf-8')).hexdigest()
                     
@@ -466,20 +431,13 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
                         st.warning(f"⚠️ Factura duplicada detectada y omitida: **{file.name}** (Documento Nº: {num_doc})")
                     else:
                         batch_signatures.add(doc_signature)
-                        invoice_totals_summary.append({
-                            "Proveedor": nombre_emisor if nombre_emisor and nombre_emisor != "None" else f"RNC: {rnc_emisor}",
-                            "Archivo": file.name,
-                            "Nº Documento": num_doc if num_doc else "N/D",
-                            "Total General": total_doc_val
-                        })
-
                         items = parsed_data.get("items", [])
                         if isinstance(items, list):
                             all_consolidated_items.extend(items)
 
-                progress_bar.progress((i + 1) / len(uploaded_files))
+                progress_bar.progress((i + 1) / total_files)
 
-            status_text.text("¡Procesamiento por lotes y filtro de duplicados completado!")
+            status_placeholder.success("🎉 ¡Procesamiento de todo el lote completado con éxito!")
 
             if duplicate_count > 0:
                 st.error(f"🚨 Se detectaron y filtraron **{duplicate_count} factura(s) duplicada(s)** en este lote.")
