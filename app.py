@@ -77,17 +77,6 @@ modulo = st.sidebar.radio(
 )
 
 st.sidebar.markdown("---")
-st.sidebar.title("⚙️ Configuración de Precios")
-margen_ganancia = st.sidebar.slider(
-    "Porcentaje de Ganancia (%)", 
-    min_value=0.0, 
-    max_value=100.0, 
-    value=25.0, 
-    step=1.0, 
-    help="Margen de ganancia aplicado sobre el costo para calcular el precio de venta antes de impuestos."
-)
-
-st.sidebar.markdown("---")
 st.sidebar.title("🧠 Memoria y Reglas POS")
 with st.sidebar.expander("Ver Códigos Escaneados Guardados"):
     b_mem = st.session_state["barcode_memory"]
@@ -293,6 +282,17 @@ if modulo == "📄 Factura Individual":
     st.title("📊 Automatizador de Facturas para WilPOS (Individual)")
     st.markdown("Sube tu factura para extraer sus ítems, validar códigos con tu memoria POS y generar la plantilla actualizada.")
 
+    # Control de margen interno de la función
+    margen_ganancia = st.slider(
+        "⚙️ Configurar Porcentaje de Ganancia (%) para esta Factura", 
+        min_value=0.0, 
+        max_value=100.0, 
+        value=25.0, 
+        step=1.0, 
+        key="slider_individual",
+        help="Margen de ganancia aplicado sobre el costo para calcular el precio de venta."
+    )
+
     uploaded_file = st.file_uploader("Sube tu factura (PDF o Imagen)", type=["pdf", "png", "jpg", "jpeg"], key="single_file")
 
     if uploaded_file is not None:
@@ -327,7 +327,7 @@ if modulo == "📄 Factura Individual":
                 c_t3.metric("Total General", f"RD$ {safe_float(parsed_data.get('total', 0)):,.2f}")
                 
                 st.markdown("---")
-                st.markdown(f"### 📦 Validación con Memoria y Precios de Venta (Margen de Ganancia: {margen_ganancia}%)")
+                st.markdown(f"### 📦 Validación con Memoria y Precios de Venta (Margen aplicado: {margen_ganancia}%)")
 
                 data_items = parsed_data.get("items", [])
                 rows_preview = []
@@ -424,7 +424,18 @@ if modulo == "📄 Factura Individual":
 # ==========================================
 elif modulo == "📂 Múltiples Facturas (Lote)":
     st.title("📂 Procesador por Lotes")
-    st.markdown(f"Sube varias facturas. El sistema validará los ítems con tu memoria de códigos aplicando un margen de ganancia del **{margen_ganancia}%**.")
+    st.markdown("Sube varias facturas. El sistema validará los ítems con tu memoria de códigos.")
+
+    # Control de margen interno de la función lote
+    margen_ganancia_lote = st.slider(
+        "⚙️ Configurar Porcentaje de Ganancia (%) para este Lote", 
+        min_value=0.0, 
+        max_value=100.0, 
+        value=25.0, 
+        step=1.0, 
+        key="slider_lote",
+        help="Margen de ganancia aplicado sobre el costo para calcular el precio de venta de todo el lote."
+    )
 
     uploaded_files = st.file_uploader("Sube tus facturas (Puedes seleccionar varias)", type=["pdf", "png", "jpg", "jpeg"], accept_multiple_files=True, key="batch_files")
 
@@ -481,10 +492,10 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
 
             if all_consolidated_items:
                 st.markdown("---")
-                st.markdown(f"### 📦 Consolidado de Ítems ({len(all_consolidated_items)} productos totales)")
+                st.markdown(f"### 📦 Consolidado de Ítems ({len(all_consolidated_items)} productos totales - Margen: {margen_ganancia_lote}%)")
 
                 rows_preview = []
-                multiplicador_ganancia = 1 + (margen_ganancia / 100.0)
+                multiplicador_ganancia = 1 + (margen_ganancia_lote / 100.0)
 
                 for idx, item in enumerate(all_consolidated_items, start=1):
                     desc = str(item.get("descripcion", ""))
