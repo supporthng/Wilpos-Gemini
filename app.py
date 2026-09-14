@@ -20,7 +20,7 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# Estilos CSS personalizados para un look moderno tipo SaaS
+# Estilos CSS limpios y profesionales (sin romper elementos nativos)
 st.markdown("""
     <style>
     /* Tipografía general y colores de fondo */
@@ -73,7 +73,6 @@ st.markdown("""
     .stButton>button:hover {
         background: linear-gradient(135deg, #0369a1 0%, #075985 100%);
         box-shadow: 0 6px 15px rgba(2, 132, 199, 0.5);
-        border-color: transparent;
         color: white;
     }
 
@@ -94,28 +93,14 @@ st.markdown("""
         color: white;
     }
 
-    /* Tarjetas de expansores */
-    .streamlit-expanderHeader {
+    /* Contenedor específico para restringir el ancho del input de ganancia */
+    .ganancia-container {
+        max-width: 180px;
         background-color: #1e293b;
+        padding: 10px 14px;
+        border-radius: 10px;
         border: 1px solid #334155;
-        border-radius: 8px;
-        color: #f8fafc !important;
-        font-weight: 600;
-    }
-    
-    /* Inputs de texto y números */
-    .stTextInput>div>div>input, .stNumberInput>div>div>input {
-        background-color: #1e293b;
-        color: #f8fafc;
-        border: 1px solid #475569;
-        border-radius: 8px;
-    }
-    
-    /* Dataframes y tablas */
-    [data-testid="stDataFrame"] {
-        border: 1px solid #334155;
-        border-radius: 8px;
-        overflow: hidden;
+        margin-bottom: 20px;
     }
     </style>
 """, unsafe_allow_html=True)
@@ -395,17 +380,18 @@ if modulo == "📄 Factura Individual":
     st.markdown("<p style='color: #94a3b8;'>Sube tu factura individual para extraer ítems, validar con memoria POS y generar la plantilla en formato Excel.</p>", unsafe_allow_html=True)
     st.markdown("---")
 
-    col_g1, col_g2, col_g3 = st.columns([1, 2, 5])
-    with col_g1:
-        margen_ganancia = st.number_input(
-            "⚙️ Ganancia (%)", 
-            min_value=0.0, 
-            max_value=500.0, 
-            value=25.0, 
-            step=1.0, 
-            key="textbox_individual",
-            help="Margen de ganancia aplicado sobre el costo."
-        )
+    # Contenedor compacto optimizado para que el input sea pequeño
+    st.markdown('<div class="ganancia-container">', unsafe_allow_html=True)
+    margen_ganancia = st.number_input(
+        "⚙️ Ganancia (%)", 
+        min_value=0.0, 
+        max_value=500.0, 
+        value=25.0, 
+        step=1.0, 
+        key="textbox_individual",
+        help="Margen de ganancia aplicado sobre el costo."
+    )
+    st.markdown('</div>', unsafe_allow_html=True)
 
     uploaded_file = st.file_uploader("📂 Sube tu factura (PDF o Imagen)", type=["pdf", "png", "jpg", "jpeg"], key="single_file")
 
@@ -422,7 +408,7 @@ if modulo == "📄 Factura Individual":
                 st.info(f"El archivo '{uploaded_file.name}' es de tipo PDF o documento.")
 
         if st.button("🚀 Procesar Factura"):
-            file_type = uploaded_file.type if hasattr(file, 'type') else 'image/jpeg'
+            file_type = uploaded_file.type if hasattr(uploaded_file, 'type') else 'image/jpeg'
             
             with st.spinner("Analizando factura con auditoría de costos..."):
                 parsed_data, success_msg = process_invoice_with_ai(uploaded_file, file_type)
@@ -542,17 +528,18 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
     st.markdown("<p style='color: #94a3b8;'>Sube múltiples facturas simultáneamente. El sistema filtrará duplicados y consolidará el inventario.</p>", unsafe_allow_html=True)
     st.markdown("---")
 
-    col_l1, col_l2, col_l3 = st.columns([1, 2, 5])
-    with col_l1:
-        margen_ganancia_lote = st.number_input(
-            "⚙️ Ganancia (%) Lote", 
-            min_value=0.0, 
-            max_value=500.0, 
-            value=25.0, 
-            step=1.0, 
-            key="textbox_lote",
-            help="Margen de ganancia aplicado sobre el costo de todo el lote."
-        )
+    # Contenedor compacto optimizado para lote
+    st.markdown('<div class="ganancia-container">', unsafe_allow_html=True)
+    margen_ganancia_lote = st.number_input(
+        "⚙️ Ganancia (%) Lote", 
+        min_value=0.0, 
+        max_value=500.0, 
+        value=25.0, 
+        step=1.0, 
+        key="textbox_lote",
+        help="Margen de ganancia aplicado sobre el costo de todo el lote."
+    )
+    st.markdown('</div>', unsafe_allow_html=True)
 
     uploaded_files = st.file_uploader("📂 Sube tus facturas (Selección múltiple permitida)", type=["pdf", "png", "jpg", "jpeg"], accept_multiple_files=True, key="batch_files")
 
