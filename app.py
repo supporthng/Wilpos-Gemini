@@ -282,14 +282,14 @@ if modulo == "📄 Factura Individual":
     st.title("📊 Automatizador de Facturas para WilPOS (Individual)")
     st.markdown("Sube tu factura para extraer sus ítems, validar códigos con tu memoria POS y generar la plantilla actualizada.")
 
-    # Control de margen interno de la función
-    margen_ganancia = st.slider(
-        "⚙️ Configurar Porcentaje de Ganancia (%) para esta Factura", 
+    # TextBox para configurar el margen de ganancia
+    margen_ganancia = st.number_input(
+        "⚙️ Porcentaje de Ganancia (%) para esta Factura", 
         min_value=0.0, 
-        max_value=100.0, 
+        max_value=500.0, 
         value=25.0, 
         step=1.0, 
-        key="slider_individual",
+        key="textbox_individual",
         help="Margen de ganancia aplicado sobre el costo para calcular el precio de venta."
     )
 
@@ -426,14 +426,14 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
     st.title("📂 Procesador por Lotes")
     st.markdown("Sube varias facturas. El sistema validará los ítems con tu memoria de códigos.")
 
-    # Control de margen interno de la función lote
-    margen_ganancia_lote = st.slider(
-        "⚙️ Configurar Porcentaje de Ganancia (%) para este Lote", 
+    # TextBox para configurar el margen de ganancia en lote
+    margen_ganancia_lote = st.number_input(
+        "⚙️ Porcentaje de Ganancia (%) para este Lote", 
         min_value=0.0, 
-        max_value=100.0, 
+        max_value=500.0, 
         value=25.0, 
         step=1.0, 
-        key="slider_lote",
+        key="textbox_lote",
         help="Margen de ganancia aplicado sobre el costo para calcular el precio de venta de todo el lote."
     )
 
