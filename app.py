@@ -847,7 +847,7 @@ elif modulo == "📸 Extraer Código desde Imagen":
                         st.error("No se pudo extraer un código de barras claro de la imagen.")
 
 # ==========================================
-# MÓDULO 4: VER CÓDIGOS ALMACENADOS ( CON REPORTE DETALLADO DE AUDITORÍA )
+# MÓDULO 4: VER CÓDIGOS ALMACENADOS ( CON DETALLE DE NO PROCESADOS )
 # ==========================================
 elif modulo == "📋 Ver Códigos Almacenados":
     st.title("📋 Listado de Códigos y Nombres Almacenados")
@@ -901,13 +901,23 @@ elif modulo == "📋 Ver Códigos Almacenados":
                         nuevos_agregados = 0
                         actualizados = 0
                         no_procesados = 0
+                        motivos_no_procesados = []
 
-                        for _, row in df_imp.iterrows():
+                        for row_idx, row in df_imp.iterrows():
+                            fila_num = row_idx + 2  # Número de fila real en Excel (contando encabezado)
                             c_val = str(row[c_code]).strip()
                             n_val = str(row[c_name]).strip().upper()
                             
-                            if not c_val or c_val.lower() in ["nan", "none", ""] or not n_val or n_val.lower() in ["nan", "none", ""]:
+                            # Validar si el código está vacío o es inválido
+                            if not c_val or c_val.lower() in ["nan", "none", ""]:
                                 no_procesados += 1
+                                motivos_no_procesados.append(f"Fila #{fila_num}: Código de barras vacío o nulo.")
+                                continue
+                                
+                            # Validar si el nombre está vacío o es inválido
+                            if not n_val or n_val.lower() in ["nan", "none", ""]:
+                                no_procesados += 1
+                                motivos_no_procesados.append(f"Fila #{fila_num} (Código: `{c_val}`): Nombre o descripción vacía.")
                                 continue
                             
                             if c_val.endswith('.0'):
@@ -925,15 +935,18 @@ elif modulo == "📋 Ver Códigos Almacenados":
                         save_json_file(BARCODE_MEMORY_FILE, st.session_state["barcode_memory"])
                         
                         # Notificación del resultado detallado
-                        st.success("🎯 **¡Proceso de importación finalizado con éxito!**")
+                        st.success("🎯 **¡Proceso de importación finalizado!**")
                         col_r1, col_r2, col_r3, col_r4, col_r5 = st.columns(5)
                         col_r1.metric("Total Filas", total_filas)
                         col_r2.metric("Procesados", procesados_ok)
                         col_r3.metric("Nuevos Agregados", nuevos_agregados)
                         col_r4.metric("Actualizados", actualizados)
                         col_r5.metric("No Procesados", no_procesados)
-                        
-                        st.balloons()
+
+                        if motivos_no_procesados:
+                            with st.expander(f"⚠️ Ver detalle de los {len(motivos_no_procesados)} elementos no procesados y su motivo"):
+                                for motivo in motivos_no_procesados:
+                                    st.markdown(f"- {motivo}")
                 else:
                     st.error("❌ No se pudieron detectar automáticamente las columnas de 'Código de Barras' y 'Nombre/Descripción' en el archivo.")
             except Exception as ex:
@@ -1008,13 +1021,20 @@ elif modulo == "📋 Ver Códigos Almacenados":
                         nuevos_agregados = 0
                         actualizados = 0
                         no_procesados = 0
+                        motivos_no_procesados_img = []
 
-                        for item in extracted_list:
+                        for idx, item in enumerate(extracted_list, start=1):
                             code_v = str(item.get("codigo_barras", "")).strip()
                             name_v = str(item.get("nombre_producto", "")).strip().upper()
                             
-                            if not code_v or code_v.lower() in ["nan", "none", ""] or not name_v or name_v.lower() in ["nan", "none", ""]:
+                            if not code_v or code_v.lower() in ["nan", "none", ""]:
                                 no_procesados += 1
+                                motivos_no_procesados_img.append(f"Ítem #{idx} (Nombre: '{name_v}'): Código de barras faltante o no detectado.")
+                                continue
+                                
+                            if not name_v or name_v.lower() in ["nan", "none", ""]:
+                                no_procesados += 1
+                                motivos_no_procesados_img.append(f"Ítem #{idx} (Código: `{code_v}`): Nombre de producto faltante.")
                                 continue
                             
                             procesados_ok += 1
@@ -1029,14 +1049,17 @@ elif modulo == "📋 Ver Códigos Almacenados":
                         save_json_file(BARCODE_MEMORY_FILE, st.session_state["barcode_memory"])
                         
                         # Notificación del resultado detallado desde imagen
-                        st.success("🎯 **¡Procesamiento de imagen finalizado con éxito!**")
+                        st.success("🎯 **¡Procesamiento de imagen finalizado!**")
                         col_i1, col_i2, col_i3, col_i4, col_i5 = st.columns(5)
                         col_i1.metric("Detectados", total_detectados)
                         col_i2.metric("Procesados", procesados_ok)
                         col_i3.metric("Nuevos Agregados", nuevos_agregados)
                         col_i4.metric("Actualizados", actualizados)
                         col_i5.metric("No Procesados", no_procesados)
-                        
-                        st.balloons()
+
+                        if motivos_no_procesados_img:
+                            with st.expander(f"⚠️ Ver detalle de los {len(motivos_no_procesados_img)} elementos no procesados y su motivo"):
+                                for motivo in motivos_no_procesados_img:
+                                    st.markdown(f"- {motivo}")
                     else:
                         st.error("No se pudieron extraer códigos estructurados de la imagen.")
