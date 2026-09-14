@@ -847,7 +847,7 @@ elif modulo == "📸 Extraer Código desde Imagen":
                         st.error("No se pudo extraer un código de barras claro de la imagen.")
 
 # ==========================================
-# MÓDULO 4: VER CÓDIGOS ALMACENADOS ( VISTA COMPLETA + EXCEL + IMAGEN MASIVA )
+# MÓDULO 4: VER CÓDIGOS ALMACENADOS ( CON REPORTE DETALLADO DE AUDITORÍA )
 # ==========================================
 elif modulo == "📋 Ver Códigos Almacenados":
     st.title("📋 Listado de Códigos y Nombres Almacenados")
@@ -862,7 +862,6 @@ elif modulo == "📋 Ver Códigos Almacenados":
             list_data = [{"Código de Barras": code, "Nombre del Producto": name} for code, name in b_mem.items()]
             df_codes = pd.DataFrame(list_data)
             
-            # Mostrar tabla interactiva completa con altura ajustable para ver todos
             st.dataframe(df_codes, use_container_width=True, hide_index=True, height=450)
 
             csv_data = df_codes.to_csv(index=False).encode('utf-8')
@@ -888,7 +887,6 @@ elif modulo == "📋 Ver Códigos Almacenados":
                 else:
                     df_imp = pd.read_excel(excel_import_file, dtype=str)
                 
-                # Vista previa completa (sin restringir a 3 filas)
                 st.markdown(f"**Vista previa completa del archivo cargado ({len(df_imp)} filas en total):**")
                 st.dataframe(df_imp, use_container_width=True, hide_index=True, height=300)
                 
@@ -898,26 +896,44 @@ elif modulo == "📋 Ver Códigos Almacenados":
                 
                 if c_code and c_name:
                     if st.button("📥 Importar, Actualizar y Agregar Nuevos a Memoria"):
-                        added_count = 0
-                        updated_count = 0
+                        total_filas = len(df_imp)
+                        procesados_ok = 0
+                        nuevos_agregados = 0
+                        actualizados = 0
+                        no_procesados = 0
+
                         for _, row in df_imp.iterrows():
                             c_val = str(row[c_code]).strip()
                             n_val = str(row[c_name]).strip().upper()
-                            if c_val and c_val != "NAN" and n_val and n_val != "NAN":
-                                if c_val.endswith('.0'):
-                                    c_val = c_val[:-2]
-                                
-                                if c_val in st.session_state["barcode_memory"]:
-                                    if st.session_state["barcode_memory"][c_val] != n_val:
-                                        st.session_state["barcode_memory"][c_val] = n_val
-                                        updated_count += 1
-                                else:
+                            
+                            if not c_val or c_val.lower() in ["nan", "none", ""] or not n_val or n_val.lower() in ["nan", "none", ""]:
+                                no_procesados += 1
+                                continue
+                            
+                            if c_val.endswith('.0'):
+                                c_val = c_val[:-2]
+                            
+                            procesados_ok += 1
+                            if c_val in st.session_state["barcode_memory"]:
+                                if st.session_state["barcode_memory"][c_val] != n_val:
                                     st.session_state["barcode_memory"][c_val] = n_val
-                                    added_count += 1
+                                    actualizados += 1
+                            else:
+                                st.session_state["barcode_memory"][c_val] = n_val
+                                nuevos_agregados += 1
                         
                         save_json_file(BARCODE_MEMORY_FILE, st.session_state["barcode_memory"])
-                        st.success(f"✅ ¡Operación completada! **{added_count}** códigos nuevos agregados y **{updated_count}** nombres actualizados en la memoria.")
-                        st.rerun()
+                        
+                        # Notificación del resultado detallado
+                        st.success("🎯 **¡Proceso de importación finalizado con éxito!**")
+                        col_r1, col_r2, col_r3, col_r4, col_r5 = st.columns(5)
+                        col_r1.metric("Total Filas", total_filas)
+                        col_r2.metric("Procesados", procesados_ok)
+                        col_r3.metric("Nuevos Agregados", nuevos_agregados)
+                        col_r4.metric("Actualizados", actualizados)
+                        col_r5.metric("No Procesados", no_procesados)
+                        
+                        st.balloons()
                 else:
                     st.error("❌ No se pudieron detectar automáticamente las columnas de 'Código de Barras' y 'Nombre/Descripción' en el archivo.")
             except Exception as ex:
@@ -987,22 +1003,40 @@ elif modulo == "📋 Ver Códigos Almacenados":
                                     break
                     
                     if success_batch and extracted_list:
-                        new_added = 0
-                        updated_count = 0
+                        total_detectados = len(extracted_list)
+                        procesados_ok = 0
+                        nuevos_agregados = 0
+                        actualizados = 0
+                        no_procesados = 0
+
                         for item in extracted_list:
                             code_v = str(item.get("codigo_barras", "")).strip()
                             name_v = str(item.get("nombre_producto", "")).strip().upper()
-                            if code_v and code_v != "NAN" and name_v and name_v != "NAN":
-                                if code_v in st.session_state["barcode_memory"]:
-                                    if st.session_state["barcode_memory"][code_v] != name_v:
-                                        st.session_state["barcode_memory"][code_v] = name_v
-                                        updated_count += 1
-                                else:
+                            
+                            if not code_v or code_v.lower() in ["nan", "none", ""] or not name_v or name_v.lower() in ["nan", "none", ""]:
+                                no_procesados += 1
+                                continue
+                            
+                            procesados_ok += 1
+                            if code_v in st.session_state["barcode_memory"]:
+                                if st.session_state["barcode_memory"][code_v] != name_v:
                                     st.session_state["barcode_memory"][code_v] = name_v
-                                    new_added += 1
+                                    actualizados += 1
+                            else:
+                                st.session_state["barcode_memory"][code_v] = name_v
+                                nuevos_agregados += 1
                         
                         save_json_file(BARCODE_MEMORY_FILE, st.session_state["barcode_memory"])
-                        st.success(f"✨ ¡Listo! **{new_added}** códigos nuevos agregados y **{updated_count}** actualizados desde la imagen.")
-                        st.rerun()
+                        
+                        # Notificación del resultado detallado desde imagen
+                        st.success("🎯 **¡Procesamiento de imagen finalizado con éxito!**")
+                        col_i1, col_i2, col_i3, col_i4, col_i5 = st.columns(5)
+                        col_i1.metric("Detectados", total_detectados)
+                        col_i2.metric("Procesados", procesados_ok)
+                        col_i3.metric("Nuevos Agregados", nuevos_agregados)
+                        col_i4.metric("Actualizados", actualizados)
+                        col_i5.metric("No Procesados", no_procesados)
+                        
+                        st.balloons()
                     else:
                         st.error("No se pudieron extraer códigos estructurados de la imagen.")
