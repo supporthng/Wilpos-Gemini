@@ -811,7 +811,6 @@ elif modulo == "📸 Extraer Código desde Imagen":
                         st.markdown("### 🎯 Resultado del Escaneo")
                         st.info(f"🔢 **Código de Barras Detectado:** `{extracted_code}`")
                         
-                        # 1. Buscar en el Excel Maestro
                         product_info = master_code_to_details.get(extracted_code, None)
                         
                         if product_info:
@@ -821,15 +820,12 @@ elif modulo == "📸 Extraer Código desde Imagen":
                             st.markdown(f"📦 **Costo:** RD$ {product_info['costo']}")
                             st.markdown(f"📊 **Stock Actual:** {product_info['stock']}")
                         else:
-                            # 2. Buscar en la memoria previa de códigos escaneados
                             if extracted_code in st.session_state["barcode_memory"]:
                                 mem_name = st.session_state["barcode_memory"][extracted_code]
                                 st.success("💾 ¡Encontrado en la memoria de códigos registrados!")
                                 st.markdown(f"🏷️ **Nombre Registrado:** **{mem_name}**")
                             else:
-                                # 3. Si no está en el maestro ni memoria, consultar en internet usando Gemini
-                                st.warning("⚠️ Código nuevo (No está en tu maestro POS). Consultando coincidencias en Internet...")
-                                
+                                st.warning("⚠️ Código nuevo. Consultando coincidencias en Internet...")
                                 internet_product_name = "Producto Nuevo Escaneado"
                                 with st.spinner("Buscando información del producto en internet..."):
                                     try:
@@ -842,24 +838,21 @@ elif modulo == "📸 Extraer Código desde Imagen":
                                     except Exception as ex:
                                         print(f"Error en búsqueda web: {ex}")
                                 
-                                # Registrar automáticamente en la memoria persistente
                                 st.session_state["barcode_memory"][extracted_code] = internet_product_name
                                 save_json_file(BARCODE_MEMORY_FILE, st.session_state["barcode_memory"])
                                 
                                 st.success("✨ ¡Producto nuevo identificado mediante internet y registrado en tu memoria!")
                                 st.markdown(f"🏷️ **Nombre Identificado:** **{internet_product_name}**")
-                                st.markdown(f"📌 *El código `{extracted_code}` ha sido guardado automáticamente en tu archivo de memoria.*")
                     else:
                         st.error("No se pudo extraer un código de barras claro de la imagen.")
 
 # ==========================================
-# MÓDULO 4: VER CÓDIGOS ALMACENADOS (CON EXTRACCIÓN DESDE EXCEL O IMAGEN MASIVA)
+# MÓDULO 4: VER CÓDIGOS ALMACENADOS ( VISTA COMPLETA + EXCEL + IMAGEN MASIVA )
 # ==========================================
 elif modulo == "📋 Ver Códigos Almacenados":
     st.title("📋 Listado de Códigos y Nombres Almacenados")
-    st.markdown("Consulta y alimenta tu memoria de códigos escaneados mediante carga de Excel o lectura masiva de imágenes.")
+    st.markdown("Consulta y alimenta tu memoria de códigos escaneados mediante carga masiva de Excel o lectura de imágenes.")
 
-    # Pestañas secundarias para organizar la carga y visualización
     tab_view, tab_import_excel, tab_import_image = st.tabs(["📊 Ver Almacenados", "📂 Extraer desde Excel", "📸 Leer desde Imagen"])
 
     with tab_view:
@@ -868,7 +861,9 @@ elif modulo == "📋 Ver Códigos Almacenados":
             st.info(f"📊 Total de códigos registrados en memoria: **{len(b_mem)}**")
             list_data = [{"Código de Barras": code, "Nombre del Producto": name} for code, name in b_mem.items()]
             df_codes = pd.DataFrame(list_data)
-            st.dataframe(df_codes, use_container_width=True, hide_index=True)
+            
+            # Mostrar tabla interactiva completa con altura ajustable para ver todos
+            st.dataframe(df_codes, use_container_width=True, hide_index=True, height=450)
 
             csv_data = df_codes.to_csv(index=False).encode('utf-8')
             st.download_button(
@@ -881,8 +876,8 @@ elif modulo == "📋 Ver Códigos Almacenados":
             st.warning("⚠️ Aún no hay códigos de barras almacenados en la memoria.")
 
     with tab_import_excel:
-        st.subheader("📂 Importar Códigos y Nombres desde un Archivo Excel o CSV")
-        st.markdown("Sube un archivo Excel o CSV que contenga columnas de códigos de barras y descripciones para alimentar la memoria de golpe.")
+        st.subheader("📂 Importar y Actualizar Códigos desde Excel o CSV")
+        st.markdown("Sube tu archivo. Los códigos nuevos se agregarán y los existentes actualizarán su nombre automáticamente.")
         
         excel_import_file = st.file_uploader("Sube tu archivo Excel o CSV", type=["xlsx", "xls", "csv"], key="import_memory_file")
         
@@ -893,26 +888,35 @@ elif modulo == "📋 Ver Códigos Almacenados":
                 else:
                     df_imp = pd.read_excel(excel_import_file, dtype=str)
                 
-                st.write("Vista previa del archivo cargado:", df_imp.head(3))
+                # Vista previa completa (sin restringir a 3 filas)
+                st.markdown(f"**Vista previa completa del archivo cargado ({len(df_imp)} filas en total):**")
+                st.dataframe(df_imp, use_container_width=True, hide_index=True, height=300)
                 
                 cols_lower = [str(c).lower() for c in df_imp.columns]
                 c_code = next((df_imp.columns[i] for i, c in enumerate(cols_lower) if 'codigo' in c or 'barra' in c or 'barcode' in c), None)
                 c_name = next((df_imp.columns[i] for i, c in enumerate(cols_lower) if 'nombre' in c or 'descripcion' in c), None)
                 
                 if c_code and c_name:
-                    if st.button("📥 Importar y Combinar con Memoria Actual"):
+                    if st.button("📥 Importar, Actualizar y Agregar Nuevos a Memoria"):
                         added_count = 0
+                        updated_count = 0
                         for _, row in df_imp.iterrows():
                             c_val = str(row[c_code]).strip()
                             n_val = str(row[c_name]).strip().upper()
                             if c_val and c_val != "NAN" and n_val and n_val != "NAN":
                                 if c_val.endswith('.0'):
                                     c_val = c_val[:-2]
-                                st.session_state["barcode_memory"][c_val] = n_val
-                                added_count += 1
+                                
+                                if c_val in st.session_state["barcode_memory"]:
+                                    if st.session_state["barcode_memory"][c_val] != n_val:
+                                        st.session_state["barcode_memory"][c_val] = n_val
+                                        updated_count += 1
+                                else:
+                                    st.session_state["barcode_memory"][c_val] = n_val
+                                    added_count += 1
                         
                         save_json_file(BARCODE_MEMORY_FILE, st.session_state["barcode_memory"])
-                        st.success(f"✅ ¡Se han importado y guardado exitosamente **{added_count}** productos en la memoria!")
+                        st.success(f"✅ ¡Operación completada! **{added_count}** códigos nuevos agregados y **{updated_count}** nombres actualizados en la memoria.")
                         st.rerun()
                 else:
                     st.error("❌ No se pudieron detectar automáticamente las columnas de 'Código de Barras' y 'Nombre/Descripción' en el archivo.")
@@ -921,13 +925,13 @@ elif modulo == "📋 Ver Códigos Almacenados":
 
     with tab_import_image:
         st.subheader("📸 Extraer Códigos y Nombres desde Imagen (Masivo / Lista / Factura)")
-        st.markdown("Sube una foto o factura que contenga varios productos con sus códigos de barras. La IA los extraerá y registrará todos en tu memoria.")
+        st.markdown("Sube una foto que contenga productos y códigos. Se actualizarán los existentes y se agregarán los nuevos.")
         
         batch_img = st.file_uploader("Sube la imagen con los códigos", type=["png", "jpg", "jpeg", "webp"], key="batch_img_upload")
         
         if batch_img is not None:
             st.image(batch_img, caption="Imagen cargada", width=400)
-            if st.button("🚀 Extraer y Registrar Códigos de la Imagen"):
+            if st.button("🚀 Extraer, Actualizar y Agregar desde Imagen"):
                 keys_to_try = []
                 if paid_api_key:
                     keys_to_try.append((paid_api_key, "Versión de Pago"))
@@ -984,15 +988,21 @@ elif modulo == "📋 Ver Códigos Almacenados":
                     
                     if success_batch and extracted_list:
                         new_added = 0
+                        updated_count = 0
                         for item in extracted_list:
                             code_v = str(item.get("codigo_barras", "")).strip()
                             name_v = str(item.get("nombre_producto", "")).strip().upper()
                             if code_v and code_v != "NAN" and name_v and name_v != "NAN":
-                                st.session_state["barcode_memory"][code_v] = name_v
-                                new_added += 1
+                                if code_v in st.session_state["barcode_memory"]:
+                                    if st.session_state["barcode_memory"][code_v] != name_v:
+                                        st.session_state["barcode_memory"][code_v] = name_v
+                                        updated_count += 1
+                                else:
+                                    st.session_state["barcode_memory"][code_v] = name_v
+                                    new_added += 1
                         
                         save_json_file(BARCODE_MEMORY_FILE, st.session_state["barcode_memory"])
-                        st.success(f"✨ ¡Se han extraído y registrado con éxito **{new_added}** productos desde la imagen en tu memoria!")
+                        st.success(f"✨ ¡Listo! **{new_added}** códigos nuevos agregados y **{updated_count}** actualizados desde la imagen.")
                         st.rerun()
                     else:
                         st.error("No se pudieron extraer códigos estructurados de la imagen.")
