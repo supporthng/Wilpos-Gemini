@@ -382,7 +382,7 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
     l_col1, l_col2 = st.columns([1, 3])
     with l_col1:
         margen_ganancia_lote = st.number_input("⚙️ Ganancia (%) Lote", min_value=0.0, max_value=500.0, value=25.0, step=1.0)
-    uploaded_files = st.file_uploader("📂 Sube tus facturas (Selección múltiple)", type=["pdf", "png", "jpg", "jpeg"], accept_multiple_files=True, key="batch_files")
+    uploaded_files = st.file_uploader("📂 Sube tu factura (Selección múltiple)", type=["pdf", "png", "jpg", "jpeg"], accept_multiple_files=True, key="batch_files")
     st.markdown('</div>', unsafe_allow_html=True)
 
     if uploaded_files:
@@ -541,7 +541,7 @@ elif modulo == "📸 Extraer Código desde Imagen":
     if img_uploaded is not None:
         st.image(img_uploaded, caption="Imagen analizada", width=400)
         if st.button("🔍 Escanear y Registrar"):
-            st.info("Esc rápido disponible en la versión completa.")
+            st.info("Escaneo rápido disponible en la versión completa.")
 
 # ==========================================
 # MÓDULO 4: VER CÓDIGOS ALMACENADOS E IMPORTAR EXCEL
@@ -586,10 +586,15 @@ elif modulo == "📋 Ver Códigos Almacenados":
         
         if excel_import_file is not None:
             try:
-                if excel_import_file.name.endswith('.csv'):
-                    df_imp = pd.read_csv(excel_import_file, dtype=str)
-                else:
-                    df_imp = pd.read_excel(excel_import_file, sheet_name=0, dtype=str)
+                # 🛡️ Guardamos el archivo en session_state para evitar que se pierda al hacer clic en el botón
+                if "last_uploaded_excel_name" not in st.session_state or st.session_state["last_uploaded_excel_name"] != excel_import_file.name:
+                    st.session_state["last_uploaded_excel_name"] = excel_import_file.name
+                    if excel_import_file.name.endswith('.csv'):
+                        st.session_state["df_imported"] = pd.read_csv(excel_import_file, dtype=str)
+                    else:
+                        st.session_state["df_imported"] = pd.read_excel(excel_import_file, sheet_name=0, dtype=str)
+
+                df_imp = st.session_state["df_imported"]
                 
                 st.markdown(f"**Vista previa del archivo cargado ({len(df_imp)} filas):**")
                 st.dataframe(df_imp.head(10), use_container_width=True, hide_index=True)
@@ -619,8 +624,7 @@ elif modulo == "📋 Ver Códigos Almacenados":
                                 
                         save_json_file(BARCODE_MEMORY_FILE, st.session_state["barcode_memory"])
                         
-                        # 🟢 MENSAJE DE ÉXITO VISIBLE Y CLARO EN PANTALLA
-                        st.success(f"🎯 ¡Sincronización completada con éxito! Se cargaron y protegieron los ceros de {nuevos + actualizados} productos en memoria.")
+                        st.success(f"🎯 ¡Sincronización completada con éxito! Se procesaron {len(df_imp)} filas protegiendo los ceros a la izquierda.")
                         
                         col_r1, col_r2 = st.columns(2)
                         col_r1.metric("✨ Productos Nuevos Agregados", nuevos)
