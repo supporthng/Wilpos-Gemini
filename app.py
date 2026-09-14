@@ -10,8 +10,115 @@ import streamlit as st
 import openpyxl
 import pandas as pd
 
-# Configuración de la página
-st.set_page_config(page_title="WilPOS - Automatizador de Facturas", page_icon="📊", layout="wide")
+# ==========================================
+# CONFIGURACIÓN DE LA PÁGINA Y ESTILOS CSS
+# ==========================================
+st.set_page_config(
+    page_title="WilPOS - Automatizador Inteligente", 
+    page_icon="⚡", 
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
+
+# Estilos CSS personalizados para un look moderno tipo SaaS
+st.markdown("""
+    <style>
+    /* Tipografía general y colores de fondo */
+    .stApp {
+        background-color: #0f172a;
+        color: #f8fafc;
+        font-family: 'Inter', sans-serif;
+    }
+    
+    /* Barra lateral moderna */
+    [data-testid="stSidebar"] {
+        background-color: #1e293b;
+        border-right: 1px solid #334155;
+    }
+    
+    /* Títulos y cabeceras */
+    h1, h2, h3 {
+        color: #f1f5f9;
+        font-weight: 700;
+    }
+    
+    /* Tarjetas contenedoras de métricas */
+    div[data-testid="stMetric"] {
+        background-color: #1e293b;
+        border: 1px solid #334155;
+        padding: 15px 20px;
+        border-radius: 12px;
+        box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+    }
+    div[data-testid="stMetric"] label {
+        color: #94a3b8 !important;
+        font-weight: 500;
+    }
+    div[data-testid="stMetric"] div[data-testid="stMetricValue"] {
+        color: #38bdf8 !important;
+        font-weight: 700;
+    }
+
+    /* Botones principales estilo moderno */
+    .stButton>button {
+        background: linear-gradient(135deg, #0284c7 0%, #0369a1 100%);
+        color: white;
+        border: none;
+        border-radius: 8px;
+        padding: 0.6rem 1.2rem;
+        font-weight: 600;
+        box-shadow: 0 4px 12px rgba(2, 132, 199, 0.3);
+        transition: all 0.3s ease;
+    }
+    .stButton>button:hover {
+        background: linear-gradient(135deg, #0369a1 0%, #075985 100%);
+        box-shadow: 0 6px 15px rgba(2, 132, 199, 0.5);
+        border-color: transparent;
+        color: white;
+    }
+
+    /* Botón de descarga */
+    .stDownloadButton>button {
+        background: linear-gradient(135deg, #10b981 0%, #059669 100%);
+        color: white;
+        border: none;
+        border-radius: 8px;
+        padding: 0.6rem 1.2rem;
+        font-weight: 600;
+        box-shadow: 0 4px 12px rgba(16, 185, 129, 0.3);
+        transition: all 0.3s ease;
+    }
+    .stDownloadButton>button:hover {
+        background: linear-gradient(135deg, #059669 0%, #047857 100%);
+        box-shadow: 0 6px 15px rgba(16, 185, 129, 0.5);
+        color: white;
+    }
+
+    /* Tarjetas de expansores */
+    .streamlit-expanderHeader {
+        background-color: #1e293b;
+        border: 1px solid #334155;
+        border-radius: 8px;
+        color: #f8fafc !important;
+        font-weight: 600;
+    }
+    
+    /* Inputs de texto y números */
+    .stTextInput>div>div>input, .stNumberInput>div>div>input {
+        background-color: #1e293b;
+        color: #f8fafc;
+        border: 1px solid #475569;
+        border-radius: 8px;
+    }
+    
+    /* Dataframes y tablas */
+    [data-testid="stDataFrame"] {
+        border: 1px solid #334155;
+        border-radius: 8px;
+        overflow: hidden;
+    }
+    </style>
+""", unsafe_allow_html=True)
 
 # Configuración de Claves API desde secrets de Streamlit o variables de entorno
 free_key_1 = st.secrets.get("GEMINI_API_KEY_1", os.environ.get("GEMINI_API_KEY_1", ""))
@@ -70,43 +177,48 @@ if "quota_exceeded" not in st.session_state:
 # ==========================================
 # MENÚ Y CONFIGURACIÓN LATERAL
 # ==========================================
-st.sidebar.title("Menú de Navegación")
+st.sidebar.markdown("<h2 style='text-align: center; color: #38bdf8;'>⚡ WilPOS</h2>", unsafe_allow_html=True)
+st.sidebar.markdown("<p style='text-align: center; color: #94a3b8; font-size: 0.85rem;'>Automatizador Inteligente de Inventarios</p>", unsafe_allow_html=True)
+st.sidebar.markdown("---")
+
+st.sidebar.markdown("### 🧭 Menú Principal")
 modulo = st.sidebar.radio(
     "Selecciona el Módulo",
-    ["📄 Factura Individual", "📂 Múltiples Facturas (Lote)", "📸 Extraer Código desde Imagen", "📋 Ver Códigos Almacenados"]
+    ["📄 Factura Individual", "📂 Múltiples Facturas (Lote)", "📸 Extraer Código desde Imagen", "📋 Ver Códigos Almacenados"],
+    label_visibility="collapsed"
 )
 
 st.sidebar.markdown("---")
-st.sidebar.title("🧠 Memoria y Reglas POS")
-with st.sidebar.expander("Ver Códigos Escaneados Guardados"):
+st.sidebar.markdown("### 🧠 Sistema de Memoria")
+with st.sidebar.expander("📦 Códigos Escaneados"):
     b_mem = st.session_state["barcode_memory"]
     if b_mem:
-        st.write(f"Total códigos en memoria: {len(b_mem)}")
+        st.write(f"Registrados: {len(b_mem)}")
         for b_code, b_name in b_mem.items():
             st.markdown(f"- `{b_code}` ➔ **{b_name}**")
-        if st.button("🗑️ Limpiar Memoria de Códigos"):
+        if st.button("🗑️ Limpiar Memoria"):
             st.session_state["barcode_memory"] = {}
             if os.path.exists(BARCODE_MEMORY_FILE):
                 os.remove(BARCODE_MEMORY_FILE)
-            st.success("¡Memoria de códigos reseteada!")
+            st.success("¡Reseteado!")
             st.rerun()
     else:
-        st.info("No hay códigos guardados en memoria aún.")
+        st.info("Sin códigos guardados.")
 
-with st.sidebar.expander("Ver Correcciones de Productos"):
+with st.sidebar.expander("🛠️ Correcciones Manuales"):
     overrides = st.session_state["product_overrides"]
     if overrides:
-        st.write(f"Total reglas de mapeo: {len(overrides)}")
+        st.write(f"Reglas: {len(overrides)}")
         for prov_desc, pos_code in overrides.items():
-            st.markdown(f"- `{prov_desc}` ➔ Código: **{pos_code}**")
-        if st.button("🗑️ Limpiar Reglas de Mapeo"):
+            st.markdown(f"- `{prov_desc}` ➔ **{pos_code}**")
+        if st.button("🗑️ Limpiar Reglas"):
             st.session_state["product_overrides"] = {}
             if os.path.exists(OVERRIDES_FILE):
                 os.remove(OVERRIDES_FILE)
-            st.success("¡Reglas reseteadas!")
+            st.success("¡Reseteado!")
             st.rerun()
     else:
-        st.info("No hay reglas manuales registradas.")
+        st.info("Sin reglas manuales.")
 
 # Equivalencias personalizables
 if "custom_equivalences" not in st.session_state:
@@ -118,18 +230,18 @@ if "custom_equivalences" not in st.session_state:
     }
 
 st.sidebar.markdown("---")
-st.sidebar.title("🔄 Equivalencias y Sinónimos")
+st.sidebar.markdown("### 🔄 Sinónimos y Reglas")
 with st.sidebar.expander("Ver / Editar Equivalencias"):
     eq_key = st.text_input("Término del Proveedor")
     eq_val = st.text_input("Equivalente en tu POS")
     if st.button("➕ Agregar Regla"):
         if eq_key and eq_val:
             st.session_state["custom_equivalences"][eq_key.strip().upper()] = eq_val.strip().upper()
-            st.success("¡Regla agregada!")
+            st.success("¡Agregado!")
             st.rerun()
             
     if st.session_state["custom_equivalences"]:
-        st.markdown("**Reglas activas:**")
+        st.markdown("**Activas:**")
         to_remove = []
         for k, v in st.session_state["custom_equivalences"].items():
             if st.checkbox(f"{k} ➔ {v}", value=True, key=f"eq_{k}") == False:
@@ -279,10 +391,10 @@ def process_invoice_with_ai(file_obj, file_type):
 # MÓDULO 1: FACTURA INDIVIDUAL
 # ==========================================
 if modulo == "📄 Factura Individual":
-    st.title("📊 Automatizador de Facturas para WilPOS (Individual)")
-    st.markdown("Sube tu factura para extraer sus ítems, validar códigos con tu memoria POS y generar la plantilla actualizada.")
+    st.markdown("<h1>📊 Automatizador de Facturas <span style='color: #38bdf8;'>(Individual)</span></h1>", unsafe_allow_html=True)
+    st.markdown("<p style='color: #94a3b8;'>Sube tu factura individual para extraer ítems, validar con memoria POS y generar la plantilla en formato Excel.</p>", unsafe_allow_html=True)
+    st.markdown("---")
 
-    # Columna muy estrecha para que el cuadro de ganancia sea pequeño
     col_g1, col_g2, col_g3 = st.columns([1, 2, 5])
     with col_g1:
         margen_ganancia = st.number_input(
@@ -295,7 +407,7 @@ if modulo == "📄 Factura Individual":
             help="Margen de ganancia aplicado sobre el costo."
         )
 
-    uploaded_file = st.file_uploader("Sube tu factura (PDF o Imagen)", type=["pdf", "png", "jpg", "jpeg"], key="single_file")
+    uploaded_file = st.file_uploader("📂 Sube tu factura (PDF o Imagen)", type=["pdf", "png", "jpg", "jpeg"], key="single_file")
 
     if uploaded_file is not None:
         st.success(f"¡Archivo cargado: {uploaded_file.name}!")
@@ -310,7 +422,7 @@ if modulo == "📄 Factura Individual":
                 st.info(f"El archivo '{uploaded_file.name}' es de tipo PDF o documento.")
 
         if st.button("🚀 Procesar Factura"):
-            file_type = uploaded_file.type if hasattr(uploaded_file, 'type') else 'image/jpeg'
+            file_type = uploaded_file.type if hasattr(file, 'type') else 'image/jpeg'
             
             with st.spinner("Analizando factura con auditoría de costos..."):
                 parsed_data, success_msg = process_invoice_with_ai(uploaded_file, file_type)
@@ -322,14 +434,14 @@ if modulo == "📄 Factura Individual":
                 prov_rnc = parsed_data.get("emisor_rnc", "N/D")
                 st.info(f"🏢 **Proveedor Procesado:** {prov_nombre} | **RNC:** `{prov_rnc}`")
 
-                st.markdown("### 📋 Resumen de Totales de la Factura")
+                st.markdown("### 📋 Resumen de Totales")
                 c_t1, c_t2, c_t3 = st.columns(3)
                 c_t1.metric("Subtotal", f"RD$ {safe_float(parsed_data.get('subtotal', 0)):,.2f}")
                 c_t2.metric("ITBIS", f"RD$ {safe_float(parsed_data.get('itbis', 0)):,.2f}")
                 c_t3.metric("Total General", f"RD$ {safe_float(parsed_data.get('total', 0)):,.2f}")
                 
                 st.markdown("---")
-                st.markdown(f"### 📦 Validación con Memoria y Precios de Venta (Margen aplicado: {margen_ganancia}%)")
+                st.markdown(f"### 📦 Validación y Precios de Venta (Margen: {margen_ganancia}%)")
 
                 data_items = parsed_data.get("items", [])
                 rows_preview = []
@@ -414,6 +526,7 @@ if modulo == "📄 Factura Individual":
                 wb.save(output)
                 excel_data = output.getvalue()
                 
+                st.markdown("---")
                 st.download_button(
                     label="📥 Descargar Excel Plantilla WilPOS Actualizada",
                     data=excel_data,
@@ -425,10 +538,10 @@ if modulo == "📄 Factura Individual":
 # MÓDULO 2: MÚLTIPLES FACTURAS (LOTE)
 # ==========================================
 elif modulo == "📂 Múltiples Facturas (Lote)":
-    st.title("📂 Procesador por Lotes")
-    st.markdown("Sube varias facturas. El sistema validará los ítems con tu memoria de códigos.")
+    st.markdown("<h1>📂 Procesador por <span style='color: #38bdf8;'>Lotes</span></h1>", unsafe_allow_html=True)
+    st.markdown("<p style='color: #94a3b8;'>Sube múltiples facturas simultáneamente. El sistema filtrará duplicados y consolidará el inventario.</p>", unsafe_allow_html=True)
+    st.markdown("---")
 
-    # Columna muy estrecha para lote
     col_l1, col_l2, col_l3 = st.columns([1, 2, 5])
     with col_l1:
         margen_ganancia_lote = st.number_input(
@@ -438,10 +551,10 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
             value=25.0, 
             step=1.0, 
             key="textbox_lote",
-            help="Margen de ganancia aplicado sobre el costo para calcular el precio de venta de todo el lote."
+            help="Margen de ganancia aplicado sobre el costo de todo el lote."
         )
 
-    uploaded_files = st.file_uploader("Sube tus facturas (Puedes seleccionar varias)", type=["pdf", "png", "jpg", "jpeg"], accept_multiple_files=True, key="batch_files")
+    uploaded_files = st.file_uploader("📂 Sube tus facturas (Selección múltiple permitida)", type=["pdf", "png", "jpg", "jpeg"], accept_multiple_files=True, key="batch_files")
 
     if uploaded_files:
         st.info(f"Se han cargado {len(uploaded_files)} archivos en total.")
@@ -564,6 +677,7 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
                 wb.save(output)
                 excel_data_batch = output.getvalue()
 
+                st.markdown("---")
                 st.download_button(
                     label="📥 Descargar Excel Consolidado Sin Duplicados",
                     data=excel_data_batch,
@@ -575,10 +689,11 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
 # MÓDULO 3: EXTRAER CÓDIGO DESDE IMAGEN
 # ==========================================
 elif modulo == "📸 Extraer Código desde Imagen":
-    st.title("📸 Lector de Códigos y Productos (Memoria e Internet)")
-    st.markdown("Sube la foto del código de barras o producto. Si no está en tu memoria, el sistema lo buscará en internet y lo registrará.")
+    st.markdown("<h1>📸 Lector de Códigos y <span style='color: #38bdf8;'>Productos</span></h1>", unsafe_allow_html=True)
+    st.markdown("<p style='color: #94a3b8;'>Sube una foto del código de barras o producto. Si no está registrado, se buscará automáticamente en internet.</p>", unsafe_allow_html=True)
+    st.markdown("---")
 
-    img_uploaded = st.file_uploader("Sube la imagen del producto (PNG, JPG, JPEG)", type=["png", "jpg", "jpeg", "webp"], key="barcode_img_upload")
+    img_uploaded = st.file_uploader("📂 Sube la imagen del producto", type=["png", "jpg", "jpeg", "webp"], key="barcode_img_upload")
 
     if img_uploaded is not None:
         st.success(f"Imagen cargada: {img_uploaded.name}")
@@ -667,14 +782,15 @@ elif modulo == "📸 Extraer Código desde Imagen":
                             st.success("✨ ¡Producto nuevo identificado mediante internet y registrado en tu memoria!")
                             st.markdown(f"🏷️ **Nombre Identificado:** **{internet_product_name}**")
                     else:
-                        st.error("No se pudieron extraer códigos estructurados de la imagen.")
+                        st.error("No se pudo extraer un código de barras claro de la imagen.")
 
 # ==========================================
 # MÓDULO 4: VER CÓDIGOS ALMACENADOS
 # ==========================================
 elif modulo == "📋 Ver Códigos Almacenados":
-    st.title("📋 Listado de Códigos y Nombres Almacenados")
-    st.markdown("Consulta y alimenta tu memoria de códigos escaneados mediante carga masiva de Excel o lectura de imágenes.")
+    st.markdown("<h1>📋 Base de Datos de <span style='color: #38bdf8;'>Códigos Almacenados</span></h1>", unsafe_allow_html=True)
+    st.markdown("<p style='color: #94a3b8;'>Consulta, importa masivamente desde Excel o actualiza tu memoria de códigos con IA.</p>", unsafe_allow_html=True)
+    st.markdown("---")
 
     tab_view, tab_import_excel, tab_import_image = st.tabs(["📊 Ver Almacenados", "📂 Extraer desde Excel", "📸 Leer desde Imagen"])
 
@@ -688,6 +804,7 @@ elif modulo == "📋 Ver Códigos Almacenados":
             st.dataframe(df_codes, use_container_width=True, hide_index=True, height=450)
 
             csv_data = df_codes.to_csv(index=False).encode('utf-8')
+            st.markdown("---")
             st.download_button(
                 label="📥 Descargar Lista de Códigos (CSV)",
                 data=csv_data,
@@ -701,7 +818,7 @@ elif modulo == "📋 Ver Códigos Almacenados":
         st.subheader("📂 Importar y Actualizar Códigos desde Excel o CSV")
         st.markdown("Sube tu archivo. Los códigos nuevos se agregarán y los existentes actualizarán su nombre automáticamente.")
         
-        excel_import_file = st.file_uploader("Sube tu archivo Excel o CSV", type=["xlsx", "xls", "csv"], key="import_memory_file")
+        excel_import_file = st.file_uploader("📂 Sube tu archivo Excel o CSV", type=["xlsx", "xls", "csv"], key="import_memory_file")
         
         if excel_import_file is not None:
             try:
@@ -766,7 +883,7 @@ elif modulo == "📋 Ver Códigos Almacenados":
                         col_r5.metric("No Procesados", no_procesados)
 
                         if motivos_no_procesados:
-                            with st.expander(f"⚠️ Ver detalle de los {len(motivos_no_procesados)} elementos no procesados y su artículo"):
+                            with st.expander(f"⚠️ Ver detalle de los {len(motivos_no_procesados)} elementos no procesados"):
                                 for motivo in motivos_no_procesados:
                                     st.markdown(f"- {motivo}")
                 else:
@@ -778,7 +895,7 @@ elif modulo == "📋 Ver Códigos Almacenados":
         st.subheader("📸 Extraer Códigos y Nombres desde Imagen (Masivo / Lista / Factura)")
         st.markdown("Sube una foto que contenga productos y códigos. Se actualizarán los existentes y se agregarán los nuevos.")
         
-        batch_img = st.file_uploader("Sube la imagen con los códigos", type=["png", "jpg", "jpeg", "webp"], key="batch_img_upload")
+        batch_img = st.file_uploader("📂 Sube la imagen con los códigos", type=["png", "jpg", "jpeg", "webp"], key="batch_img_upload")
         
         if batch_img is not None:
             st.image(batch_img, caption="Imagen cargada", width=400)
@@ -877,7 +994,7 @@ elif modulo == "📋 Ver Códigos Almacenados":
                         col_i5.metric("No Procesados", no_procesados)
 
                         if motivos_no_procesados_img:
-                            with st.expander(f"⚠️ Ver detalle de los {len(motivos_no_procesados_img)} elementos no procesados y su artículo"):
+                            with st.expander(f"⚠️ Ver detalle de los {len(motivos_no_procesados_img)} elementos no procesados"):
                                 for motivo in motivos_no_procesados_img:
                                     st.markdown(f"- {motivo}")
                     else:
