@@ -282,8 +282,8 @@ if modulo == "📄 Factura Individual":
     st.title("📊 Automatizador de Facturas para WilPOS (Individual)")
     st.markdown("Sube tu factura para extraer sus ítems, validar códigos con tu memoria POS y generar la plantilla actualizada.")
 
-    # TextBox compacto en columna
-    col_g1, col_g2 = st.columns([1, 2])
+    # Columna muy estrecha para que el cuadro de ganancia sea pequeño
+    col_g1, col_g2, col_g3 = st.columns([1, 2, 5])
     with col_g1:
         margen_ganancia = st.number_input(
             "⚙️ Ganancia (%)", 
@@ -292,7 +292,7 @@ if modulo == "📄 Factura Individual":
             value=25.0, 
             step=1.0, 
             key="textbox_individual",
-            help="Margen de ganancia aplicado sobre el costo para calcular el precio de venta."
+            help="Margen de ganancia aplicado sobre el costo."
         )
 
     uploaded_file = st.file_uploader("Sube tu factura (PDF o Imagen)", type=["pdf", "png", "jpg", "jpeg"], key="single_file")
@@ -428,8 +428,8 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
     st.title("📂 Procesador por Lotes")
     st.markdown("Sube varias facturas. El sistema validará los ítems con tu memoria de códigos.")
 
-    # TextBox compacto en columna para lote
-    col_l1, col_l2 = st.columns([1, 2])
+    # Columna muy estrecha para lote
+    col_l1, col_l2, col_l3 = st.columns([1, 2, 5])
     with col_l1:
         margen_ganancia_lote = st.number_input(
             "⚙️ Ganancia (%) Lote", 
