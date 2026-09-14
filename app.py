@@ -282,16 +282,18 @@ if modulo == "📄 Factura Individual":
     st.title("📊 Automatizador de Facturas para WilPOS (Individual)")
     st.markdown("Sube tu factura para extraer sus ítems, validar códigos con tu memoria POS y generar la plantilla actualizada.")
 
-    # TextBox para configurar el margen de ganancia
-    margen_ganancia = st.number_input(
-        "⚙️ Porcentaje de Ganancia (%) para esta Factura", 
-        min_value=0.0, 
-        max_value=500.0, 
-        value=25.0, 
-        step=1.0, 
-        key="textbox_individual",
-        help="Margen de ganancia aplicado sobre el costo para calcular el precio de venta."
-    )
+    # TextBox compacto en columna
+    col_g1, col_g2 = st.columns([1, 2])
+    with col_g1:
+        margen_ganancia = st.number_input(
+            "⚙️ Ganancia (%)", 
+            min_value=0.0, 
+            max_value=500.0, 
+            value=25.0, 
+            step=1.0, 
+            key="textbox_individual",
+            help="Margen de ganancia aplicado sobre el costo para calcular el precio de venta."
+        )
 
     uploaded_file = st.file_uploader("Sube tu factura (PDF o Imagen)", type=["pdf", "png", "jpg", "jpeg"], key="single_file")
 
@@ -426,16 +428,18 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
     st.title("📂 Procesador por Lotes")
     st.markdown("Sube varias facturas. El sistema validará los ítems con tu memoria de códigos.")
 
-    # TextBox para configurar el margen de ganancia en lote
-    margen_ganancia_lote = st.number_input(
-        "⚙️ Porcentaje de Ganancia (%) para este Lote", 
-        min_value=0.0, 
-        max_value=500.0, 
-        value=25.0, 
-        step=1.0, 
-        key="textbox_lote",
-        help="Margen de ganancia aplicado sobre el costo para calcular el precio de venta de todo el lote."
-    )
+    # TextBox compacto en columna para lote
+    col_l1, col_l2 = st.columns([1, 2])
+    with col_l1:
+        margen_ganancia_lote = st.number_input(
+            "⚙️ Ganancia (%) Lote", 
+            min_value=0.0, 
+            max_value=500.0, 
+            value=25.0, 
+            step=1.0, 
+            key="textbox_lote",
+            help="Margen de ganancia aplicado sobre el costo para calcular el precio de venta de todo el lote."
+        )
 
     uploaded_files = st.file_uploader("Sube tus facturas (Puedes seleccionar varias)", type=["pdf", "png", "jpg", "jpeg"], accept_multiple_files=True, key="batch_files")
 
@@ -663,7 +667,7 @@ elif modulo == "📸 Extraer Código desde Imagen":
                             st.success("✨ ¡Producto nuevo identificado mediante internet y registrado en tu memoria!")
                             st.markdown(f"🏷️ **Nombre Identificado:** **{internet_product_name}**")
                     else:
-                        st.error("No se pudo extraer un código de barras claro de la imagen.")
+                        st.error("No se pudieron extraer códigos estructurados de la imagen.")
 
 # ==========================================
 # MÓDULO 4: VER CÓDIGOS ALMACENADOS
@@ -846,7 +850,9 @@ elif modulo == "📋 Ver Códigos Almacenados":
                                 motivos_no_procesados_img.append(f"Ítem #{idx} ➔ **Artículo:** *{nombre_articulo}* | **Motivo:** Código de barras faltante o no detectado.")
                                 continue
                                 
-                            if not name_v or name_v.lower() in ["nan", "none", ""]:
+                            if not name_v or name_v.lower() not in ["nan", "none", ""]:
+                                pass
+                            else:
                                 no_procesados += 1
                                 motivos_no_procesados_img.append(f"Ítem #{idx} ➔ **Código:** `{code_v}` | **Motivo:** Nombre de producto faltante.")
                                 continue
