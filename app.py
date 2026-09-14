@@ -11,7 +11,7 @@ import openpyxl
 import pandas as pd
 
 # ==========================================
-# CONFIGURACIÓN DE LA PÁGINA Y ESTILOS CSS
+# CONFIGURACIÓN DE LA PÁGINA Y ESTILOS CSS SUAVES
 # ==========================================
 st.set_page_config(
     page_title="WilPOS - Automatizador Inteligente", 
@@ -20,87 +20,66 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# Estilos CSS limpios y profesionales (sin romper elementos nativos)
+# Estilos minimalistas y cómodos para la vista
 st.markdown("""
     <style>
-    /* Tipografía general y colores de fondo */
+    /* Estilo general limpio y sin fatiga visual */
     .stApp {
-        background-color: #0f172a;
-        color: #f8fafc;
+        background-color: #f8fafc;
+        color: #1e293b;
         font-family: 'Inter', sans-serif;
     }
     
-    /* Barra lateral moderna */
+    /* Barra lateral elegante */
     [data-testid="stSidebar"] {
-        background-color: #1e293b;
-        border-right: 1px solid #334155;
+        background-color: #ffffff;
+        border-right: 1px solid #e2e8f0;
     }
     
-    /* Títulos y cabeceras */
+    /* Títulos profesionales */
     h1, h2, h3 {
-        color: #f1f5f9;
+        color: #0f172a;
         font-weight: 700;
     }
     
-    /* Tarjetas contenedoras de métricas */
-    div[data-testid="stMetric"] {
-        background-color: #1e293b;
-        border: 1px solid #334155;
-        padding: 15px 20px;
+    /* Tarjetas contenedoras sutiles */
+    .card-container {
+        background-color: #ffffff;
+        border: 1px solid #e2e8f0;
+        padding: 24px;
         border-radius: 12px;
-        box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
-    }
-    div[data-testid="stMetric"] label {
-        color: #94a3b8 !important;
-        font-weight: 500;
-    }
-    div[data-testid="stMetric"] div[data-testid="stMetricValue"] {
-        color: #38bdf8 !important;
-        font-weight: 700;
+        box-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.05);
+        margin-bottom: 20px;
     }
 
-    /* Botones principales estilo moderno */
+    /* Botones principales modernos */
     .stButton>button {
-        background: linear-gradient(135deg, #0284c7 0%, #0369a1 100%);
+        background: #0284c7;
         color: white;
         border: none;
         border-radius: 8px;
-        padding: 0.6rem 1.2rem;
+        padding: 0.5rem 1.2rem;
         font-weight: 600;
-        box-shadow: 0 4px 12px rgba(2, 132, 199, 0.3);
-        transition: all 0.3s ease;
+        transition: all 0.2s ease;
     }
     .stButton>button:hover {
-        background: linear-gradient(135deg, #0369a1 0%, #075985 100%);
-        box-shadow: 0 6px 15px rgba(2, 132, 199, 0.5);
+        background: #0369a1;
         color: white;
     }
 
     /* Botón de descarga */
     .stDownloadButton>button {
-        background: linear-gradient(135deg, #10b981 0%, #059669 100%);
+        background: #10b981;
         color: white;
         border: none;
         border-radius: 8px;
-        padding: 0.6rem 1.2rem;
+        padding: 0.5rem 1.2rem;
         font-weight: 600;
-        box-shadow: 0 4px 12px rgba(16, 185, 129, 0.3);
-        transition: all 0.3s ease;
+        transition: all 0.2s ease;
     }
     .stDownloadButton>button:hover {
-        background: linear-gradient(135deg, #059669 0%, #047857 100%);
-        box-shadow: 0 6px 15px rgba(16, 185, 129, 0.5);
+        background: #059669;
         color: white;
-    }
-
-    /* Contenedor específico para restringir el ancho del input de ganancia */
-    .ganancia-container {
-        max-width: 180px;
-        background-color: #1e293b;
-        padding: 10px 14px;
-        border-radius: 10px;
-        border: 1px solid #334155;
-        margin-bottom: 20px;
     }
     </style>
 """, unsafe_allow_html=True)
@@ -162,15 +141,13 @@ if "quota_exceeded" not in st.session_state:
 # ==========================================
 # MENÚ Y CONFIGURACIÓN LATERAL
 # ==========================================
-st.sidebar.markdown("<h2 style='text-align: center; color: #38bdf8;'>⚡ WilPOS</h2>", unsafe_allow_html=True)
-st.sidebar.markdown("<p style='text-align: center; color: #94a3b8; font-size: 0.85rem;'>Automatizador Inteligente de Inventarios</p>", unsafe_allow_html=True)
+st.sidebar.markdown("<h3 style='color: #0284c7; text-align: center;'>⚡ WilPOS</h3>", unsafe_allow_html=True)
+st.sidebar.markdown("<p style='text-align: center; color: #64748b; font-size: 0.8rem;'>Automatizador Inteligente</p>", unsafe_allow_html=True)
 st.sidebar.markdown("---")
 
-st.sidebar.markdown("### 🧭 Menú Principal")
 modulo = st.sidebar.radio(
-    "Selecciona el Módulo",
-    ["📄 Factura Individual", "📂 Múltiples Facturas (Lote)", "📸 Extraer Código desde Imagen", "📋 Ver Códigos Almacenados"],
-    label_visibility="collapsed"
+    "Menú de Navegación",
+    ["📄 Factura Individual", "📂 Múltiples Facturas (Lote)", "📸 Extraer Código desde Imagen", "📋 Ver Códigos Almacenados"]
 )
 
 st.sidebar.markdown("---")
@@ -376,24 +353,26 @@ def process_invoice_with_ai(file_obj, file_type):
 # MÓDULO 1: FACTURA INDIVIDUAL
 # ==========================================
 if modulo == "📄 Factura Individual":
-    st.markdown("<h1>📊 Automatizador de Facturas <span style='color: #38bdf8;'>(Individual)</span></h1>", unsafe_allow_html=True)
-    st.markdown("<p style='color: #94a3b8;'>Sube tu factura individual para extraer ítems, validar con memoria POS y generar la plantilla en formato Excel.</p>", unsafe_allow_html=True)
+    st.markdown("<h2>📊 Automatizador de Facturas <span style='color: #0284c7;'>(Individual)</span></h2>", unsafe_allow_html=True)
+    st.markdown("<p style='color: #64748b;'>Sube tu factura individual para extraer ítems, validar con memoria POS y generar la plantilla Excel.</p>", unsafe_allow_html=True)
     st.markdown("---")
 
-    # Contenedor compacto optimizado para que el input sea pequeño
-    st.markdown('<div class="ganancia-container">', unsafe_allow_html=True)
-    margen_ganancia = st.number_input(
-        "⚙️ Ganancia (%)", 
-        min_value=0.0, 
-        max_value=500.0, 
-        value=25.0, 
-        step=1.0, 
-        key="textbox_individual",
-        help="Margen de ganancia aplicado sobre el costo."
-    )
-    st.markdown('</div>', unsafe_allow_html=True)
-
+    # Tarjeta compacta usando columnas estrictas para evitar que el input se estire
+    st.markdown('<div class="card-container">', unsafe_allow_html=True)
+    c_col1, c_col2 = st.columns([1, 3])
+    with c_col1:
+        margen_ganancia = st.number_input(
+            "⚙️ Ganancia (%)", 
+            min_value=0.0, 
+            max_value=500.0, 
+            value=25.0, 
+            step=1.0, 
+            key="textbox_individual",
+            help="Margen de ganancia aplicado sobre el costo."
+        )
+    
     uploaded_file = st.file_uploader("📂 Sube tu factura (PDF o Imagen)", type=["pdf", "png", "jpg", "jpeg"], key="single_file")
+    st.markdown('</div>', unsafe_allow_html=True)
 
     if uploaded_file is not None:
         st.success(f"¡Archivo cargado: {uploaded_file.name}!")
@@ -524,24 +503,26 @@ if modulo == "📄 Factura Individual":
 # MÓDULO 2: MÚLTIPLES FACTURAS (LOTE)
 # ==========================================
 elif modulo == "📂 Múltiples Facturas (Lote)":
-    st.markdown("<h1>📂 Procesador por <span style='color: #38bdf8;'>Lotes</span></h1>", unsafe_allow_html=True)
-    st.markdown("<p style='color: #94a3b8;'>Sube múltiples facturas simultáneamente. El sistema filtrará duplicados y consolidará el inventario.</p>", unsafe_allow_html=True)
+    st.markdown("<h2>📂 Procesador por <span style='color: #0284c7;'>Lotes</span></h2>", unsafe_allow_html=True)
+    st.markdown("<p style='color: #64748b;'>Sube múltiples facturas simultáneamente. El sistema filtrará duplicados y consolidará el inventario.</p>", unsafe_allow_html=True)
     st.markdown("---")
 
-    # Contenedor compacto optimizado para lote
-    st.markdown('<div class="ganancia-container">', unsafe_allow_html=True)
-    margen_ganancia_lote = st.number_input(
-        "⚙️ Ganancia (%) Lote", 
-        min_value=0.0, 
-        max_value=500.0, 
-        value=25.0, 
-        step=1.0, 
-        key="textbox_lote",
-        help="Margen de ganancia aplicado sobre el costo de todo el lote."
-    )
-    st.markdown('</div>', unsafe_allow_html=True)
+    # Tarjeta compacta para lote
+    st.markdown('<div class="card-container">', unsafe_allow_html=True)
+    l_col1, l_col2 = st.columns([1, 3])
+    with l_col1:
+        margen_ganancia_lote = st.number_input(
+            "⚙️ Ganancia (%) Lote", 
+            min_value=0.0, 
+            max_value=500.0, 
+            value=25.0, 
+            step=1.0, 
+            key="textbox_lote",
+            help="Margen de ganancia aplicado sobre el costo de todo el lote."
+        )
 
     uploaded_files = st.file_uploader("📂 Sube tus facturas (Selección múltiple permitida)", type=["pdf", "png", "jpg", "jpeg"], accept_multiple_files=True, key="batch_files")
+    st.markdown('</div>', unsafe_allow_html=True)
 
     if uploaded_files:
         st.info(f"Se han cargado {len(uploaded_files)} archivos en total.")
@@ -676,11 +657,13 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
 # MÓDULO 3: EXTRAER CÓDIGO DESDE IMAGEN
 # ==========================================
 elif modulo == "📸 Extraer Código desde Imagen":
-    st.markdown("<h1>📸 Lector de Códigos y <span style='color: #38bdf8;'>Productos</span></h1>", unsafe_allow_html=True)
-    st.markdown("<p style='color: #94a3b8;'>Sube una foto del código de barras o producto. Si no está registrado, se buscará automáticamente en internet.</p>", unsafe_allow_html=True)
+    st.markdown("<h2>📸 Lector de Códigos y <span style='color: #0284c7;'>Productos</span></h2>", unsafe_allow_html=True)
+    st.markdown("<p style='color: #64748b;'>Sube una foto del código de barras o producto. Si no está registrado, se buscará automáticamente en internet.</p>", unsafe_allow_html=True)
     st.markdown("---")
 
+    st.markdown('<div class="card-container">', unsafe_allow_html=True)
     img_uploaded = st.file_uploader("📂 Sube la imagen del producto", type=["png", "jpg", "jpeg", "webp"], key="barcode_img_upload")
+    st.markdown('</div>', unsafe_allow_html=True)
 
     if img_uploaded is not None:
         st.success(f"Imagen cargada: {img_uploaded.name}")
@@ -775,8 +758,8 @@ elif modulo == "📸 Extraer Código desde Imagen":
 # MÓDULO 4: VER CÓDIGOS ALMACENADOS
 # ==========================================
 elif modulo == "📋 Ver Códigos Almacenados":
-    st.markdown("<h1>📋 Base de Datos de <span style='color: #38bdf8;'>Códigos Almacenados</span></h1>", unsafe_allow_html=True)
-    st.markdown("<p style='color: #94a3b8;'>Consulta, importa masivamente desde Excel o actualiza tu memoria de códigos con IA.</p>", unsafe_allow_html=True)
+    st.markdown("<h2>📋 Base de Datos de <span style='color: #0284c7;'>Códigos Almacenados</span></h2>", unsafe_allow_html=True)
+    st.markdown("<p style='color: #64748b;'>Consulta, importa masivamente desde Excel o actualiza tu memoria de códigos con IA.</p>", unsafe_allow_html=True)
     st.markdown("---")
 
     tab_view, tab_import_excel, tab_import_image = st.tabs(["📊 Ver Almacenados", "📂 Extraer desde Excel", "📸 Leer desde Imagen"])
@@ -805,7 +788,9 @@ elif modulo == "📋 Ver Códigos Almacenados":
         st.subheader("📂 Importar y Actualizar Códigos desde Excel o CSV")
         st.markdown("Sube tu archivo. Los códigos nuevos se agregarán y los existentes actualizarán su nombre automáticamente.")
         
+        st.markdown('<div class="card-container">', unsafe_allow_html=True)
         excel_import_file = st.file_uploader("📂 Sube tu archivo Excel o CSV", type=["xlsx", "xls", "csv"], key="import_memory_file")
+        st.markdown('</div>', unsafe_allow_html=True)
         
         if excel_import_file is not None:
             try:
@@ -882,7 +867,9 @@ elif modulo == "📋 Ver Códigos Almacenados":
         st.subheader("📸 Extraer Códigos y Nombres desde Imagen (Masivo / Lista / Factura)")
         st.markdown("Sube una foto que contenga productos y códigos. Se actualizarán los existentes y se agregarán los nuevos.")
         
+        st.markdown('<div class="card-container">', unsafe_allow_html=True)
         batch_img = st.file_uploader("📂 Sube la imagen con los códigos", type=["png", "jpg", "jpeg", "webp"], key="batch_img_upload")
+        st.markdown('</div>', unsafe_allow_html=True)
         
         if batch_img is not None:
             st.image(batch_img, caption="Imagen cargada", width=400)
