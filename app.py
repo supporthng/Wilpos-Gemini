@@ -21,7 +21,6 @@ paid_api_key = st.secrets.get("GEMINI_API_KEY_PAID", os.environ.get("GEMINI_API_
 # Archivos persistentes de memoria y reglas
 MEMORY_FILE = "proveedores_memoria.json"
 OVERRIDES_FILE = "mapeo_productos_overrides.json"
-SAVED_MASTER_FILE = "ultimo_maestro_pos.xlsx"
 BARCODE_MEMORY_FILE = "codigos_escaneados_memoria.json"
 
 def load_json_file(filepath):
@@ -78,6 +77,17 @@ modulo = st.sidebar.radio(
 )
 
 st.sidebar.markdown("---")
+st.sidebar.title("⚙️ Configuración de Precios")
+margen_ganancia = st.sidebar.slider(
+    "Porcentaje de Ganancia (%)", 
+    min_value=0.0, 
+    max_value=100.0, 
+    value=25.0, 
+    step=1.0, 
+    help="Margen de ganancia aplicado sobre el costo para calcular el precio de venta antes de impuestos."
+)
+
+st.sidebar.markdown("---")
 st.sidebar.title("🧠 Memoria y Reglas POS")
 with st.sidebar.expander("Ver Códigos Escaneados Guardados"):
     b_mem = st.session_state["barcode_memory"]
@@ -108,78 +118,6 @@ with st.sidebar.expander("Ver Correcciones de Productos"):
             st.rerun()
     else:
         st.info("No hay reglas manuales registradas.")
-
-st.sidebar.markdown("---")
-st.sidebar.title("🗂️ Maestro de Inventario POS")
-
-master_dict = {}
-master_names = []
-master_code_to_details = {}
-
-def parse_master_dataframe(df_m):
-    global master_dict, master_names, master_code_to_details
-    master_dict = {}
-    master_names = []
-    master_code_to_details = {}
-    cols = [str(c).lower() for c in df_m.columns]
-    
-    name_col = next((df_m.columns[i] for i, c in enumerate(cols) if 'nombre' in c or 'descripcion' in c), df_m.columns[0])
-    code_col = next((df_m.columns[i] for i, c in enumerate(cols) if 'codigo' in c or 'barra' in c or 'barcode' in c), df_m.columns[1])
-    price_col = next((df_m.columns[i] for i, c in enumerate(cols) if 'precio' in c), None)
-    cost_col = next((df_m.columns[i] for i, c in enumerate(cols) if 'costo' in c), None)
-    stock_col = next((df_m.columns[i] for i, c in enumerate(cols) if 'stock' in c), None)
-    cat_col = next((df_m.columns[i] for i, c in enumerate(cols) if 'categor' in c), None)
-    
-    for _, row in df_m.iterrows():
-        p_name = str(row[name_col]).strip().upper()
-        raw_code = str(row[code_col]).strip()
-        if raw_code.endswith('.0'):
-            raw_code = raw_code[:-2]
-        p_code = raw_code
-        
-        if p_name and p_name != "NAN" and p_code and p_code != "NAN":
-            master_dict[p_name] = p_code
-            master_names.append(p_name)
-            
-            master_code_to_details[p_code] = {
-                "nombre": p_name,
-                "precio": row[price_col] if price_col else "N/D",
-                "costo": row[cost_col] if cost_col else "N/D",
-                "stock": row[stock_col] if stock_col else "N/D",
-                "categoria": row[cat_col] if cat_col else "General"
-            }
-
-if os.path.exists(SAVED_MASTER_FILE) and "master_loaded_once" not in st.session_state:
-    try:
-        df_saved = pd.read_excel(SAVED_MASTER_FILE, dtype=str)
-        parse_master_dataframe(df_saved)
-        st.sidebar.success(f"📂 Maestro anterior cargado: {len(master_dict)} productos.")
-        st.session_state["master_loaded_once"] = True
-    except Exception as e:
-        print(f"Error cargando maestro previo: {e}")
-
-master_file_uploaded = st.sidebar.file_uploader("Actualizar Maestro (Sube nuevo archivo)", type=["xlsx", "xls", "csv"], key="master_inv_file")
-
-if master_file_uploaded is not None:
-    try:
-        if master_file_uploaded.name.endswith('.csv'):
-            df_master = pd.read_csv(master_file_uploaded, dtype=str)
-            df_master.to_excel(SAVED_MASTER_FILE, index=False)
-        else:
-            df_master = pd.read_excel(master_file_uploaded, dtype=str)
-            with open(SAVED_MASTER_FILE, "wb") as f:
-                f.write(master_file_uploaded.getbuffer())
-        
-        parse_master_dataframe(df_master)
-        st.sidebar.success(f"✅ Nuevo maestro guardado: {len(master_dict)} productos.")
-    except Exception as e:
-        st.sidebar.error(f"Error al procesar el maestro: {e}")
-elif os.path.exists(SAVED_MASTER_FILE) and not master_dict:
-    try:
-        df_saved = pd.read_excel(SAVED_MASTER_FILE, dtype=str)
-        parse_master_dataframe(df_saved)
-    except Exception:
-        pass
 
 # Equivalencias personalizables
 if "custom_equivalences" not in st.session_state:
@@ -213,7 +151,7 @@ with st.sidebar.expander("Ver / Editar Equivalencias"):
             st.rerun()
 
 # ==========================================
-# MOTOR DE INTELIGENCIA Y RANGOS DE EMPAREJAMIENTO SEGURO
+# MOTOR DE INTELIGENCIA Y EMPAREJAMIENTO
 # ==========================================
 SYNONYMS_MAP = {
     "JW ": "JOHNNIE WALKER ",
@@ -244,28 +182,12 @@ def clean_and_normalize(text):
     tokens = [t for t in cleaned.split() if t not in stopwords]
     return tokens, upper_text
 
-def extract_volume_token(text):
-    match = re.search(r'(\d+\s*(?:ML|L|CL))', str(text).upper())
-    if match:
-        v = match.group(1).replace(" ", "")
-        if "L" in v and "ML" not in v:
-            try:
-                num = float(re.sub(r'[^0-9.]', '', v))
-                return f"{int(num * 1000)}ML"
-            except:
-                pass
-        return v
-    return ""
-
 def validate_with_master(item_description, original_code):
     clean_desc_key = str(item_description).strip().upper()
     
     if "CORONA CERO" in clean_desc_key or "CERO 355" in clean_desc_key:
         return "750304423180", "Actualizado (Regla Maestra Inmediata Corona Cero)"
 
-    if not master_dict:
-        return str(original_code).strip(), "Sin Maestro Cargado"
-    
     clean_orig_code = str(original_code).strip()
     if clean_orig_code.endswith('.0'):
         clean_orig_code = clean_orig_code[:-2]
@@ -275,60 +197,14 @@ def validate_with_master(item_description, original_code):
     if clean_desc_key in st.session_state["product_overrides"]:
         return str(st.session_state["product_overrides"][clean_desc_key]).strip(), "Actualizado (Regla Guardada)"
 
-    prov_tokens, norm_prov = clean_and_normalize(item_description)
-    prov_volume = extract_volume_token(item_description)
-    
-    for m_name, m_code in master_dict.items():
-        _, norm_m = clean_and_normalize(m_name)
-        if m_name == norm_prov or m_name == clean_desc_key or norm_m == norm_prov:
-            return str(m_code).strip(), "Actualizado (Exacto)"
-            
-    best_match_code = clean_orig_code
-    max_matched_tiers = 0
-    highest_score = 0.0
-
-    prov_set = {t for t in prov_tokens if len(t) > 2 or t == "CERO"}
-
-    for m_name in master_names:
-        m_tokens, _ = clean_and_normalize(m_name)
-        m_volume = extract_volume_token(m_name)
-        master_set = {t for t in m_tokens if len(t) > 2 or t == "CERO"}
-
-        if not prov_set or not master_set:
-            continue
-
-        matched_tiers = 0
-        common_tokens = prov_set.intersection(master_set)
-        if not common_tokens:
-            continue
-        matched_tiers += 1
-
-        if prov_volume and m_volume:
-            if prov_volume != m_volume:
-                continue
-        matched_tiers += 1
-
-        union_tokens = prov_set.union(master_set)
-        jaccard = len(common_tokens) / len(union_tokens)
-        
-        score = jaccard
-        for t in common_tokens:
-            if len(t) > 3 or t == "CERO":
-                score += 0.25
-
-        if matched_tiers >= 2 and score >= 0.45:
-            if score > highest_score:
-                highest_score = score
-                max_matched_tiers = matched_tiers
-                best_match_code = str(master_dict[m_name]).strip()
-
-    if highest_score >= 0.50 and max_matched_tiers >= 2:
-        return best_match_code, "Actualizado (IA por Rangos)"
+    for b_code, b_name in st.session_state["barcode_memory"].items():
+        if b_name == clean_desc_key or clean_desc_key in b_name or b_name in clean_desc_key:
+            return str(b_code).strip(), "Actualizado (Memoria de Códigos)"
 
     if not clean_orig_code:
         return "S/C (Sin Código)", "⚠️ Sin Código Original en Factura"
 
-    return clean_orig_code, "⚠️ Conserva Código Original (Sin Rango Seguro)"
+    return clean_orig_code, "⚠️ Conserva Código Original"
 
 def audit_and_correct_cost(costo_unit, cantidad, empaque):
     c = safe_float(costo_unit)
@@ -356,11 +232,10 @@ def process_invoice_with_ai(file_obj, file_type):
     prompt_text = (
         f"{memory_context}\n"
         "Analiza esta factura detalladamente. Extrae los datos de cabecera con absoluta precisión: 'emisor_rnc', 'emisor_nombre', 'numero_documento', 'fecha', 'subtotal', 'itbis', 'total'. "
-        "Para cada ítem, extrae: 'codigo', 'descripcion', 'cantidad' (número de unidades o bultos según la factura), 'empaque' (unidades individuales por caja/bulto. Si la factura muestra 'UN' o 'PC' con empaque 1, asigna empaque 1), y 'costo_sin_itbis' (EL COSTO UNITARIO REAL POR CADA PIEZA INDIVIDUAL: si la línea muestra un Impuesto Neto total y la cantidad es N con empaque 1, el costo unitario es Impuesto_Neto / cantidad. Si es por cajas, divide Impuesto_Neto / (cantidad * empaque)). "
-        "REGLA ESTRICTA PARA LA DESCRIPCIÓN: Limpia el texto de cada producto para incluir ÚNICAMENTE el nombre comercial del producto y su presentación o tamaño limpio (ej: 'CORONA CERO 355 ML', 'MAESTRO DOBEL DIAMANTE 700 ML', 'EVIAN 75 CL'), eliminando códigos internos, diagonales de empaque y textos redundantes. "
+        "Para cada ítem, extrae: 'codigo', 'descripcion', 'cantidad', 'empaque', y 'costo_sin_itbis'. "
         "Devuelve la información estrictamente en formato JSON con la siguiente estructura exacta: "
         '{"emisor_rnc": "...", "emisor_nombre": "...", "numero_documento": "...", "fecha": "...", "subtotal": 0.0, "itbis": 0.0, "total": 0.0, "items": [{"codigo": "...", "descripcion": "...", "cantidad": 1, "empaque": 1, "costo_sin_itbis": 0.0}]}. '
-        "REGLA CRÍTICA: Preserva todos los ceros a la izquierda como texto. Respuesta JSON pura sin texto adicional."
+        "Respuesta JSON pura sin texto adicional."
     )
 
     parsed_data = None
@@ -416,7 +291,7 @@ def process_invoice_with_ai(file_obj, file_type):
 # ==========================================
 if modulo == "📄 Factura Individual":
     st.title("📊 Automatizador de Facturas para WilPOS (Individual)")
-    st.markdown("Sube tu factura para extraer sus ítems, validar códigos con tu maestro POS y generar la plantilla actualizada.")
+    st.markdown("Sube tu factura para extraer sus ítems, validar códigos con tu memoria POS y generar la plantilla actualizada.")
 
     uploaded_file = st.file_uploader("Sube tu factura (PDF o Imagen)", type=["pdf", "png", "jpg", "jpeg"], key="single_file")
 
@@ -435,7 +310,7 @@ if modulo == "📄 Factura Individual":
         if st.button("🚀 Procesar Factura"):
             file_type = uploaded_file.type if hasattr(uploaded_file, 'type') else 'image/jpeg'
             
-            with st.spinner("Analizando factura con auditoría de costos y rangos estrictos..."):
+            with st.spinner("Analizando factura con auditoría de costos..."):
                 parsed_data, success_msg = process_invoice_with_ai(uploaded_file, file_type)
 
             if parsed_data:
@@ -452,11 +327,12 @@ if modulo == "📄 Factura Individual":
                 c_t3.metric("Total General", f"RD$ {safe_float(parsed_data.get('total', 0)):,.2f}")
                 
                 st.markdown("---")
-                st.markdown("### 📦 Validación con Maestro y Precios de Venta")
+                st.markdown(f"### 📦 Validación con Memoria y Precios de Venta (Margen de Ganancia: {margen_ganancia}%)")
 
                 data_items = parsed_data.get("items", [])
                 rows_preview = []
                 unmatched_items = []
+                multiplicador_ganancia = 1 + (margen_ganancia / 100.0)
 
                 for idx, item in enumerate(data_items, start=1):
                     desc = str(item.get("descripcion", ""))
@@ -472,7 +348,7 @@ if modulo == "📄 Factura Individual":
                     
                     costo = audit_and_correct_cost(raw_costo, cant_comprada, empaque_val)
 
-                    raw_pv = (costo * 1.25) * 1.18
+                    raw_pv = (costo * multiplicador_ganancia) * 1.18
                     precio_venta = round_to_nearest_5(raw_pv)
                     stock_val = cant_comprada * empaque_val
                     
@@ -484,8 +360,8 @@ if modulo == "📄 Factura Individual":
                         "Empaque": empaque_val,
                         "Stock Total": stock_val,
                         "Costo Unit. Sin ITBIS": costo,
-                        "Precio Venta (M5)": precio_venta,
-                        "Estado Maestro": status_match
+                        "Precio Venta": precio_venta,
+                        "Estado Memoria": status_match
                     })
                 
                 if unmatched_items:
@@ -504,19 +380,10 @@ if modulo == "📄 Factura Individual":
                 df_resultado = pd.DataFrame(rows_preview)
                 st.dataframe(df_resultado, use_container_width=True, hide_index=True)
                 
-                template_path = "Plantilla_Inventario_WilPOS_2.xlsx"
-                if not os.path.exists(template_path):
-                    template_path = "Plantilla_Inventario_WilPOS.xlsx"
-                    
-                if os.path.exists(template_path):
-                    wb = openpyxl.load_workbook(template_path)
-                    ws_prod = wb['Productos']
-                    ws_prod.delete_rows(2, ws_prod.max_row)
-                else:
-                    wb = openpyxl.Workbook()
-                    ws_prod = wb.active
-                    ws_prod.title = "Productos"
-                    ws_prod.append(['Nombre', 'Código Barra', 'Categoría', 'Tipo', 'Precio Venta', 'Costo', 'Stock', 'Stock Mínimo', 'ITBIS', 'Unidad Medida', 'Venta Granel', 'Cantidad Empaque', 'Precio Variable', 'Descuento %', 'Descuento Monto', 'Precio Especial', 'Descuento Activo', 'Descuento Nota'])
+                wb = openpyxl.Workbook()
+                ws_prod = wb.active
+                ws_prod.title = "Productos"
+                ws_prod.append(['Nombre', 'Código Barra', 'Categoría', 'Tipo', 'Precio Venta', 'Costo', 'Stock', 'Stock Mínimo', 'ITBIS', 'Unidad Medida', 'Venta Granel', 'Cantidad Empaque', 'Precio Variable', 'Descuento %', 'Descuento Monto', 'Precio Especial', 'Descuento Activo', 'Descuento Nota'])
                 
                 for item_dict in rows_preview:
                     ws_prod.append([
@@ -524,7 +391,7 @@ if modulo == "📄 Factura Individual":
                         str(item_dict["Código Barra POS"]),
                         "General",
                         "producto",
-                        item_dict["Precio Venta (M5)"],
+                        item_dict["Precio Venta"],
                         item_dict["Costo Unit. Sin ITBIS"],
                         item_dict["Stock Total"],
                         5,
@@ -556,22 +423,15 @@ if modulo == "📄 Factura Individual":
 # MÓDULO 2: MÚLTIPLES FACTURAS (LOTE)
 # ==========================================
 elif modulo == "📂 Múltiples Facturas (Lote)":
-    st.title("📂 Procesador por Lotes (Con Validación de Rangos)")
-    st.markdown("Sube varias facturas. El sistema validará los ítems mediante rangos estrictos para evitar falsos positivos.")
+    st.title("📂 Procesador por Lotes")
+    st.markdown(f"Sube varias facturas. El sistema validará los ítems con tu memoria de códigos aplicando un margen de ganancia del **{margen_ganancia}%**.")
 
     uploaded_files = st.file_uploader("Sube tus facturas (Puedes seleccionar varias)", type=["pdf", "png", "jpg", "jpeg"], accept_multiple_files=True, key="batch_files")
 
     if uploaded_files:
         st.info(f"Se han cargado {len(uploaded_files)} archivos en total.")
 
-        with st.expander("👁️ Vista Previa de los Archivos en Lote"):
-            for f_item in uploaded_files:
-                st.markdown(f"**Archivo:** `{f_item.name}`")
-                if "image" in f_item.type or f_item.name.lower().endswith(('png', 'jpg', 'jpeg', 'webp')):
-                    st.image(Image.open(f_item), caption=f_item.name, width=300)
-                    f_item.seek(0)
-
-        if st.button("🚀 Procesar Lote y Validar con Maestro"):
+        if st.button("🚀 Procesar Lote y Validar"):
             all_consolidated_items = []
             invoice_totals_summary = []
             duplicate_count = 0
@@ -600,10 +460,8 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
                     
                     if doc_signature in batch_signatures:
                         duplicate_count += 1
-                        st.warning(f"⚠️ Archivo omitido por estar duplicado en este lote: **{file.name}** (Doc: {num_doc}, Total: {total_doc_val})")
                     else:
                         batch_signatures.add(doc_signature)
-                        
                         invoice_totals_summary.append({
                             "Proveedor": nombre_emisor if nombre_emisor and nombre_emisor != "None" else f"RNC: {rnc_emisor}",
                             "Archivo": file.name,
@@ -620,38 +478,19 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
                 progress_bar.progress((i + 1) / len(uploaded_files))
 
             status_text.text("¡Procesamiento por lotes completado!")
-            
-            if duplicate_count > 0:
-                st.error(f"🚨 Se detectaron y filtraron **{duplicate_count} archivo(s) duplicado(s)** dentro de la selección actual.")
-
-            if invoice_totals_summary:
-                st.markdown("### 🏢 Proveedores Identificados y Totales por Factura")
-                df_totales = pd.DataFrame(invoice_totals_summary)
-                st.dataframe(df_totales, use_container_width=True, hide_index=True)
-                
-                t_sub = sum(x["Subtotal"] for x in invoice_totals_summary)
-                t_itbis = sum(x["ITBIS"] for x in invoice_totals_summary)
-                t_gen = sum(x["Total General"] for x in invoice_totals_summary)
-                
-                c_l1, c_l2, c_l3 = st.columns(3)
-                c_l1.metric("Subtotal Acumulado Lote", f"RD$ {t_sub:,.2f}")
-                c_l2.metric("ITBIS Acumulado Lote", f"RD$ {t_itbis:,.2f}")
-                c_l3.metric("Total General Acumulado", f"RD$ {t_gen:,.2f}")
 
             if all_consolidated_items:
                 st.markdown("---")
                 st.markdown(f"### 📦 Consolidado de Ítems ({len(all_consolidated_items)} productos totales)")
 
                 rows_preview = []
-                unmatched_batch = []
+                multiplicador_ganancia = 1 + (margen_ganancia / 100.0)
 
                 for idx, item in enumerate(all_consolidated_items, start=1):
                     desc = str(item.get("descripcion", ""))
                     orig_code = str(item.get("codigo", "")).strip()
                     
                     final_code, status_match = validate_with_master(desc, orig_code)
-                    if "No Encontrado" in status_match or "Conserva" in status_match or "Sin Código" in status_match:
-                        unmatched_batch.append((idx, desc, orig_code))
 
                     raw_costo = safe_float(item.get("costo_sin_itbis", 0))
                     cant_comprada = safe_int(item.get("cantidad", 1), 1)
@@ -659,7 +498,7 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
                     
                     costo = audit_and_correct_cost(raw_costo, cant_comprada, empaque_val)
 
-                    raw_pv = (costo * 1.25) * 1.18
+                    raw_pv = (costo * multiplicador_ganancia) * 1.18
                     precio_venta = round_to_nearest_5(raw_pv)
                     stock_val = cant_comprada * empaque_val
                     
@@ -671,31 +510,17 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
                         "Empaque": empaque_val,
                         "Stock Total": stock_val,
                         "Costo Unit. Sin ITBIS": costo,
-                        "Precio Venta (M5)": precio_venta,
-                        "Estado Maestro": status_match
+                        "Precio Venta": precio_venta,
+                        "Estado Memoria": status_match
                     })
-
-                if unmatched_batch:
-                    st.warning(f"⚠️ **Atención en lote:** Hay {len(unmatched_batch)} producto(s) sin match automático:")
-                    for u_idx, u_desc, u_code in unmatched_batch:
-                        st.markdown(f"- *{u_desc}*")
 
                 df_batch = pd.DataFrame(rows_preview)
                 st.dataframe(df_batch, use_container_width=True, hide_index=True)
 
-                template_path = "Plantilla_Inventario_WilPOS_2.xlsx"
-                if not os.path.exists(template_path):
-                    template_path = "Plantilla_Inventario_WilPOS.xlsx"
-                    
-                if os.path.exists(template_path):
-                    wb = openpyxl.load_workbook(template_path)
-                    ws_prod = wb['Productos']
-                    ws_prod.delete_rows(2, ws_prod.max_row)
-                else:
-                    wb = openpyxl.Workbook()
-                    ws_prod = wb.active
-                    ws_prod.title = "Productos"
-                    ws_prod.append(['Nombre', 'Código Barra', 'Categoría', 'Tipo', 'Precio Venta', 'Costo', 'Stock', 'Stock Mínimo', 'ITBIS', 'Unidad Medida', 'Venta Granel', 'Cantidad Empaque', 'Precio Variable', 'Descuento %', 'Descuento Monto', 'Precio Especial', 'Descuento Activo', 'Descuento Nota'])
+                wb = openpyxl.Workbook()
+                ws_prod = wb.active
+                ws_prod.title = "Productos"
+                ws_prod.append(['Nombre', 'Código Barra', 'Categoría', 'Tipo', 'Precio Venta', 'Costo', 'Stock', 'Stock Mínimo', 'ITBIS', 'Unidad Medida', 'Venta Granel', 'Cantidad Empaque', 'Precio Variable', 'Descuento %', 'Descuento Monto', 'Precio Especial', 'Descuento Activo', 'Descuento Nota'])
 
                 for item_dict in rows_preview:
                     ws_prod.append([
@@ -703,7 +528,7 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
                         str(item_dict["Código Barra POS"]),
                         "General",
                         "producto",
-                        item_dict["Precio Venta (M5)"],
+                        item_dict["Precio Venta"],
                         item_dict["Costo Unit. Sin ITBIS"],
                         item_dict["Stock Total"],
                         5,
@@ -730,15 +555,13 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
                     file_name="Inventario_WilPOS_Consolidado_Lote.xlsx",
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                 )
-            else:
-                st.warning("No hay ítems válidos para consolidar.")
 
 # ==========================================
 # MÓDULO 3: EXTRAER CÓDIGO DESDE IMAGEN
 # ==========================================
 elif modulo == "📸 Extraer Código desde Imagen":
-    st.title("📸 Lector de Códigos y Productos (Maestro, Memoria e Internet)")
-    st.markdown("Sube la foto del código de barras o producto. Si no está en tu Maestro, el sistema lo buscará en internet y lo registrará en memoria.")
+    st.title("📸 Lector de Códigos y Productos (Memoria e Internet)")
+    st.markdown("Sube la foto del código de barras o producto. Si no está en tu memoria, el sistema lo buscará en internet y lo registrará.")
 
     img_uploaded = st.file_uploader("Sube la imagen del producto (PNG, JPG, JPEG)", type=["png", "jpg", "jpeg", "webp"], key="barcode_img_upload")
 
@@ -752,7 +575,7 @@ elif modulo == "📸 Extraer Código desde Imagen":
             img_uploaded.seek(0)
             
         with col_prev2:
-            if st.button("🔍 Escanear y Buscar (Maestro e Internet)"):
+            if st.button("🔍 Escanear y Buscar (Memoria e Internet)"):
                 keys_to_try = []
                 if paid_api_key:
                     keys_to_try.append((paid_api_key, "Versión de Pago"))
@@ -769,10 +592,9 @@ elif modulo == "📸 Extraer Código desde Imagen":
                     
                     prompt_scan = (
                         "Analiza esta imagen con código de barras o producto. "
-                        "Extrae con absoluta precisión únicamente el número de código de barras visible (por ejemplo, los números debajo de las barras). "
-                        "Devuelve la respuesta estrictamente en formato JSON con esta estructura exacta: "
+                        "Extrae con absoluta precisión únicamente el número de código de barras visible. "
+                        "Devuelve la respuesta estrictamente en formato JSON: "
                         '{"codigo_barras": "..."}'
-                        "Sin texto adicional, solo el JSON."
                     )
                     
                     with st.spinner("Escaneando código de barras..."):
@@ -800,54 +622,40 @@ elif modulo == "📸 Extraer Código desde Imagen":
                                 success = True
                                 break
                             except Exception as e:
-                                err_str = str(e)
-                                if "429" in err_str or "Quota exceeded" in err_str:
-                                    continue
-                                else:
-                                    st.error(f"Error con {label}: {e}")
-                                    break
+                                continue
                     
                     if success and extracted_code:
                         st.markdown("### 🎯 Resultado del Escaneo")
                         st.info(f"🔢 **Código de Barras Detectado:** `{extracted_code}`")
                         
-                        product_info = master_code_to_details.get(extracted_code, None)
-                        
-                        if product_info:
-                            st.success("✅ ¡Encontrado directamente en tu Excel Maestro!")
-                            st.markdown(f"🏷️ **Nombre Oficial:** **{product_info['nombre']}**")
-                            st.markdown(f"💰 **Precio de Venta:** RD$ {product_info['precio']}")
-                            st.markdown(f"📦 **Costo:** RD$ {product_info['costo']}")
-                            st.markdown(f"📊 **Stock Actual:** {product_info['stock']}")
+                        if extracted_code in st.session_state["barcode_memory"]:
+                            mem_name = st.session_state["barcode_memory"][extracted_code]
+                            st.success("💾 ¡Encontrado en la memoria de códigos registrados!")
+                            st.markdown(f"🏷️ **Nombre Registrado:** **{mem_name}**")
                         else:
-                            if extracted_code in st.session_state["barcode_memory"]:
-                                mem_name = st.session_state["barcode_memory"][extracted_code]
-                                st.success("💾 ¡Encontrado en la memoria de códigos registrados!")
-                                st.markdown(f"🏷️ **Nombre Registrado:** **{mem_name}**")
-                            else:
-                                st.warning("⚠️ Código nuevo. Consultando coincidencias en Internet...")
-                                internet_product_name = "Producto Nuevo Escaneado"
-                                with st.spinner("Buscando información del producto en internet..."):
-                                    try:
-                                        search_model = genai.GenerativeModel('gemini-3.6-flash')
-                                        search_resp = search_model.generate_content(
-                                            f"Identifica y da el nombre comercial exacto, marca y presentación en español del producto cuyo código de barras universal es: {extracted_code}. Responde únicamente con el nombre del producto, sin explicaciones."
-                                        )
-                                        if search_resp and search_resp.text:
-                                            internet_product_name = search_resp.text.strip().upper()
-                                    except Exception as ex:
-                                        print(f"Error en búsqueda web: {ex}")
-                                
-                                st.session_state["barcode_memory"][extracted_code] = internet_product_name
-                                save_json_file(BARCODE_MEMORY_FILE, st.session_state["barcode_memory"])
-                                
-                                st.success("✨ ¡Producto nuevo identificado mediante internet y registrado en tu memoria!")
-                                st.markdown(f"🏷️ **Nombre Identificado:** **{internet_product_name}**")
+                            st.warning("⚠️ Código nuevo. Consultando coincidencias en Internet...")
+                            internet_product_name = "Producto Nuevo Escaneado"
+                            with st.spinner("Buscando información del producto en internet..."):
+                                try:
+                                    search_model = genai.GenerativeModel('gemini-3.6-flash')
+                                    search_resp = search_model.generate_content(
+                                        f"Identifica y da el nombre comercial exacto, marca y presentación en español del producto cuyo código de barras universal es: {extracted_code}. Responde únicamente con el nombre del producto."
+                                    )
+                                    if search_resp and search_resp.text:
+                                        internet_product_name = search_resp.text.strip().upper()
+                                except Exception as ex:
+                                    print(f"Error en búsqueda web: {ex}")
+                            
+                            st.session_state["barcode_memory"][extracted_code] = internet_product_name
+                            save_json_file(BARCODE_MEMORY_FILE, st.session_state["barcode_memory"])
+                            
+                            st.success("✨ ¡Producto nuevo identificado mediante internet y registrado en tu memoria!")
+                            st.markdown(f"🏷️ **Nombre Identificado:** **{internet_product_name}**")
                     else:
                         st.error("No se pudo extraer un código de barras claro de la imagen.")
 
 # ==========================================
-# MÓDULO 4: VER CÓDIGOS ALMACENADOS ( CON DETALLE DE ARTÍCULOS NO PROCESADOS )
+# MÓDULO 4: VER CÓDIGOS ALMACENADOS
 # ==========================================
 elif modulo == "📋 Ver Códigos Almacenados":
     st.title("📋 Listado de Códigos y Nombres Almacenados")
@@ -904,20 +712,17 @@ elif modulo == "📋 Ver Códigos Almacenados":
                         motivos_no_procesados = []
 
                         for row_idx, row in df_imp.iterrows():
-                            fila_num = row_idx + 2  # Fila real de Excel
+                            fila_num = row_idx + 2
                             c_val = str(row[c_code]).strip()
                             n_val = str(row[c_name]).strip().upper()
                             
-                            # Obtener el nombre del artículo para mostrarlo claramente
                             nombre_articulo = n_val if (n_val and n_val.lower() not in ["nan", "none", ""]) else "(Sin Nombre / Artículo Desconocido)"
                             
-                            # Validar si el código está vacío o es inválido
                             if not c_val or c_val.lower() in ["nan", "none", ""]:
                                 no_procesados += 1
                                 motivos_no_procesados.append(f"Fila #{fila_num} ➔ **Artículo:** *{nombre_articulo}* | **Motivo:** Código de barras vacío o nulo.")
                                 continue
                                 
-                            # Validar si el nombre está vacío o es inválido
                             if not n_val or n_val.lower() in ["nan", "none", ""]:
                                 no_procesados += 1
                                 motivos_no_procesados.append(f"Fila #{fila_num} ➔ **Código:** `{c_val}` | **Motivo:** Nombre o descripción vacía.")
@@ -937,7 +742,6 @@ elif modulo == "📋 Ver Códigos Almacenados":
                         
                         save_json_file(BARCODE_MEMORY_FILE, st.session_state["barcode_memory"])
                         
-                        # Notificación del resultado detallado
                         st.success("🎯 **¡Proceso de importación finalizado!**")
                         col_r1, col_r2, col_r3, col_r4, col_r5 = st.columns(5)
                         col_r1.metric("Total Filas", total_filas)
@@ -982,7 +786,6 @@ elif modulo == "📋 Ver Códigos Almacenados":
                         "Analiza esta imagen y extrae todos los productos y códigos de barras visibles. "
                         "Devuelve la información estrictamente en formato JSON con una lista de objetos bajo la clave 'productos', "
                         "donde cada objeto tenga 'codigo_barras' y 'nombre_producto'. "
-                        "Ejemplo: {'productos': [{'codigo_barras': '...', 'nombre_producto': '...'}]}. "
                         "Respuesta JSON pura sin texto adicional."
                     )
                     
@@ -1011,12 +814,7 @@ elif modulo == "📋 Ver Códigos Almacenados":
                                 success_batch = True
                                 break
                             except Exception as e:
-                                err_str = str(e)
-                                if "429" in err_str or "Quota exceeded" in err_str:
-                                    continue
-                                else:
-                                    st.error(f"Error con {label}: {e}")
-                                    break
+                                continue
                     
                     if success_batch and extracted_list:
                         total_detectados = len(extracted_list)
@@ -1030,7 +828,7 @@ elif modulo == "📋 Ver Códigos Almacenados":
                             code_v = str(item.get("codigo_barras", "")).strip()
                             name_v = str(item.get("nombre_producto", "")).strip().upper()
                             
-                            nombre_articulo = name_v if (name_v and name_v.lower() not in ["nan", "none", ""]) else f"Ítem #${idx}"
+                            nombre_articulo = name_v if (name_v and name_v.lower() not in ["nan", "none", ""]) else f"Ítem #{idx}"
                             
                             if not code_v or code_v.lower() in ["nan", "none", ""]:
                                 no_procesados += 1
@@ -1053,7 +851,6 @@ elif modulo == "📋 Ver Códigos Almacenados":
                         
                         save_json_file(BARCODE_MEMORY_FILE, st.session_state["barcode_memory"])
                         
-                        # Notificación del resultado detallado desde imagen
                         st.success("🎯 **¡Procesamiento de imagen finalizado!**")
                         col_i1, col_i2, col_i3, col_i4, col_i5 = st.columns(5)
                         col_i1.metric("Detectados", total_detectados)
