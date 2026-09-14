@@ -371,11 +371,11 @@ if modulo == "📄 Factura Individual":
                 st.download_button("📥 Descargar Excel Plantilla WilPOS Actualizada", output.getvalue(), "Inventario_WilPOS_Actualizado.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
 # ==========================================
-# MÓDULO 2: MÚLTIPLES FACTURAS (LOTE) CON PERSISTENCIA DE ESTADO BLINDADA
+# MÓDULO 2: MÚLTIPLES FACTURAS (LOTE EN BLOQUES DE 25)
 # ==========================================
 elif modulo == "📂 Múltiples Facturas (Lote)":
-    st.markdown("<h2>📂 Procesador por <span style='color: #0284c7;'>Lotes con Dashboard de Auditoría</span></h2>", unsafe_allow_html=True)
-    st.markdown("<p style='color: #64748b;'>Procesa múltiples facturas con control de progreso persistente para lotes grandes.</p>", unsafe_allow_html=True)
+    st.markdown("<h2>📂 Procesador por <span style='color: #0284c7;'>Lotes en Bloques de 25</span></h2>", unsafe_allow_html=True)
+    st.markdown("<p style='color: #64748b;'>Procesa tus facturas en bloques seguros de 25 para evitar interrupciones.</p>", unsafe_allow_html=True)
     st.markdown("---")
 
     st.markdown('<div class="card-container">', unsafe_allow_html=True)
@@ -386,121 +386,121 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
     st.markdown('</div>', unsafe_allow_html=True)
 
     if uploaded_files:
-        st.info(f"📁 Se han cargado **{len(uploaded_files)} archivo(s)** listos para procesar.")
-        
-        # Botones de control de lote
-        b_col1, b_col2 = st.columns(2)
-        iniciar_procesamiento = b_col1.button("🚀 Procesar Lote Completo", type="primary")
-        reiniciar_lote = b_col2.button("🔄 Reiniciar / Limpiar Lote Guardado")
+        total_files = len(uploaded_files)
+        st.info(f"📁 Se han cargado **{total_files} archivo(s)** en total.")
 
-        if reiniciar_lote:
-            if "batch_results_cache" in st.session_state:
-                del st.session_state["batch_results_cache"]
-            st.success("¡Caché de lote limpiada con éxito!")
+        # Inicializar estado en session_state para bloques de lote
+        if "batch_accumulated_items" not in st.session_state:
+            st.session_state["batch_accumulated_items"] = []
+            st.session_state["batch_audit_log"] = []
+            st.session_state["batch_signatures"] = set()
+            st.session_state["batch_processed_count"] = 0
+            st.session_state["batch_ok_count"] = 0
+
+        processed_so_far = st.session_state["batch_processed_count"]
+        
+        b_col1, b_col2 = st.columns(2)
+        
+        # Botón para procesar siguiente bloque de 25
+        if processed_so_far < total_files:
+            block_size = min(25, total_files - processed_so_far)
+            btn_label = f"🚀 Procesar Siguiente Bloque ({block_size} archivos - del {processed_so_far+1} al {processed_so_far + block_size})"
+            if b_col1.button(btn_label, type="primary"):
+                start_idx = processed_so_far
+                end_idx = start_idx + block_size
+                current_block = uploaded_files[start_idx:end_idx]
+
+                progress_bar = st.progress(0)
+                status_placeholder = st.empty()
+
+                for j, file in enumerate(current_block):
+                    abs_idx = start_idx + j + 1
+                    status_placeholder.markdown(f"⏳ **Procesando archivo ({abs_idx} de {total_files}):** `{file.name}`...")
+                    file_type = file.type if hasattr(file, 'type') else 'image/jpeg'
+                    parsed_data, err_msg = process_invoice_with_ai(file, file_type)
+
+                    if parsed_data and isinstance(parsed_data, dict):
+                        rnc_emisor = str(parsed_data.get("emisor_rnc", "")).strip()
+                        nombre_prov = str(parsed_data.get("emisor_nombre", "Desconocido")).strip()
+                        num_doc = str(parsed_data.get("numero_documento", "")).strip()
+                        fecha_doc = str(parsed_data.get("fecha", "")).strip()
+                        total_doc_val = safe_float(parsed_data.get("total", 0))
+                        
+                        signature_string = f"{rnc_emisor}_{num_doc}_{fecha_doc}_{total_doc_val}"
+                        doc_signature = hashlib.md5(signature_string.encode('utf-8')).hexdigest()
+                        
+                        if doc_signature in st.session_state["batch_signatures"]:
+                            st.session_state["batch_audit_log"].append({
+                                "Archivo": file.name,
+                                "Proveedor": nombre_prov,
+                                "Nº Documento": num_doc if num_doc else "N/D",
+                                "Estado": "🔴 Omitido (Duplicado)",
+                                "Motivo": f"Factura ya existente (RNC: {rnc_emisor}, Doc: {num_doc}, Total: RD$ {total_doc_val:,.2f})"
+                            })
+                        else:
+                            st.session_state["batch_signatures"].add(doc_signature)
+                            st.session_state["batch_ok_count"] += 1
+                            st.session_state["batch_audit_log"].append({
+                                "Archivo": file.name,
+                                "Proveedor": nombre_prov,
+                                "Nº Documento": num_doc if num_doc else "N/D",
+                                "Estado": "🟢 Procesado Exitosamente",
+                                "Motivo": f"Extraídos {len(parsed_data.get('items', []))} ítems."
+                            })
+                            items = parsed_data.get("items", [])
+                            if isinstance(items, list):
+                                st.session_state["batch_accumulated_items"].extend(items)
+                    else:
+                        st.session_state["batch_audit_log"].append({
+                            "Archivo": file.name,
+                            "Proveedor": "Desconocido",
+                            "Nº Documento": "N/D",
+                            "Estado": "🔴 Omitido (Error de Lectura/IA)",
+                            "Motivo": "La IA no pudo estructurar correctamente el documento."
+                        })
+
+                    progress_bar.progress((j + 1) / len(current_block))
+
+                st.session_state["batch_processed_count"] = end_idx
+                status_placeholder.success(f"🎉 ¡Bloque completado! ({end_idx} de {total_files} archivos procesados en total).")
+                st.rerun()
+
+        if b_col2.button("🔄 Reiniciar Todo el Lote"):
+            st.session_state["batch_accumulated_items"] = []
+            st.session_state["batch_audit_log"] = []
+            st.session_state["batch_signatures"] = set()
+            st.session_state["batch_processed_count"] = 0
+            st.session_state["batch_ok_count"] = 0
+            st.success("¡Lote reiniciado!")
             st.rerun()
 
-        # Inicializar o recuperar caché en session_state para evitar pérdida por timeouts
-        if "batch_results_cache" not in st.session_state:
-            st.session_state["batch_results_cache"] = None
-
-        if iniciar_procesamiento:
-            all_consolidated_items = []
-            archivos_procesados_ok = 0
-            audit_log = []
-            batch_signatures = set()
-            
-            progress_bar = st.progress(0)
-            status_placeholder = st.empty()
-            total_files = len(uploaded_files)
-
-            for i, file in enumerate(uploaded_files):
-                status_placeholder.markdown(f"⏳ **Procesando archivo ({i+1} de {total_files}):** `{file.name}`...")
-                file_type = file.type if hasattr(file, 'type') else 'image/jpeg'
-                parsed_data, err_msg = process_invoice_with_ai(file, file_type)
-
-                if parsed_data and isinstance(parsed_data, dict):
-                    rnc_emisor = str(parsed_data.get("emisor_rnc", "")).strip()
-                    nombre_prov = str(parsed_data.get("emisor_nombre", "Desconocido")).strip()
-                    num_doc = str(parsed_data.get("numero_documento", "")).strip()
-                    fecha_doc = str(parsed_data.get("fecha", "")).strip()
-                    total_doc_val = safe_float(parsed_data.get("total", 0))
-                    
-                    signature_string = f"{rnc_emisor}_{num_doc}_{fecha_doc}_{total_doc_val}"
-                    doc_signature = hashlib.md5(signature_string.encode('utf-8')).hexdigest()
-                    
-                    if doc_signature in batch_signatures:
-                        audit_log.append({
-                            "Archivo": file.name,
-                            "Proveedor": nombre_prov,
-                            "Nº Documento": num_doc if num_doc else "N/D",
-                            "Estado": "🔴 Omitido (Duplicado)",
-                            "Motivo": f"Factura ya existente en el lote actual (RNC: {rnc_emisor}, Doc: {num_doc}, Total: RD$ {total_doc_val:,.2f})"
-                        })
-                    else:
-                        batch_signatures.add(doc_signature)
-                        archivos_procesados_ok += 1
-                        audit_log.append({
-                            "Archivo": file.name,
-                            "Proveedor": nombre_prov,
-                            "Nº Documento": num_doc if num_doc else "N/D",
-                            "Estado": "🟢 Procesado Exitosamente",
-                            "Motivo": f"Extraídos {len(parsed_data.get('items', []))} ítems correctamente."
-                        })
-                        items = parsed_data.get("items", [])
-                        if isinstance(items, list):
-                            all_consolidated_items.extend(items)
-                else:
-                    audit_log.append({
-                        "Archivo": file.name,
-                        "Proveedor": "Desconocido",
-                        "Nº Documento": "N/D",
-                        "Estado": "🔴 Omitido (Error de Lectura/IA)",
-                        "Motivo": "La IA no pudo estructurar correctamente el documento o se agotó la cuota de la API."
-                    })
-
-                progress_bar.progress((i + 1) / total_files)
-
-            status_placeholder.success("🎉 ¡Procesamiento y auditoría de lote finalizados!")
-
-            # Guardar en caché persistente de session_state
-            st.session_state["batch_results_cache"] = {
-                "all_consolidated_items": all_consolidated_items,
-                "archivos_procesados_ok": archivos_procesados_ok,
-                "audit_log": audit_log,
-                "total_subidos": total_files
-            }
-
-        # Mostrar resultados desde la caché persistente (si existe)
-        if st.session_state["batch_results_cache"]:
-            cache = st.session_state["batch_results_cache"]
-            all_consolidated_items = cache["all_consolidated_items"]
-            archivos_procesados_ok = cache["archivos_procesados_ok"]
-            audit_log = cache["audit_log"]
-            total_subidos = cache["total_subidos"]
-
+        # Mostrar Estado Actual y Dashboard si ya hay avances
+        if st.session_state["batch_processed_count"] > 0:
             st.markdown("---")
-            st.markdown("## 📊 Dashboard de Auditoría y Procesamiento")
+            st.markdown("## 📊 Dashboard de Auditoría y Progreso del Lote")
             
-            total_omitidos = total_subidos - archivos_procesados_ok
+            p_ok = st.session_state["batch_ok_count"]
+            p_total_done = st.session_state["batch_processed_count"]
+            p_omitidos = p_total_done - p_ok
 
             col_m1, col_m2, col_m3, col_m4 = st.columns(4)
-            col_m1.metric("📁 Archivos Subidos", total_subidos)
-            col_m2.metric("🟢 Procesados OK", archivos_procesados_ok)
-            col_m3.metric("🔴 Omitidos / Filtrados", total_omitidos)
-            col_m4.metric("📦 Productos Totales", len(all_consolidated_items))
+            col_m1.metric("📁 Progreso", f"{p_total_done} / {total_files}")
+            col_m2.metric("🟢 Procesados OK", p_ok)
+            col_m3.metric("🔴 Omitidos / Duplicados", p_omitidos)
+            col_m4.metric("📦 Productos Acumulados", len(st.session_state["batch_accumulated_items"]))
 
-            st.markdown("### 📋 Detalle de Archivos Evaluados (Procesados vs Omitidos)")
-            df_audit = pd.DataFrame(audit_log)
+            st.markdown("### 📋 Detalle de Archivos Evaluados hasta el momento")
+            df_audit = pd.DataFrame(st.session_state["batch_audit_log"])
             st.dataframe(df_audit, use_container_width=True, hide_index=True)
 
-            if all_consolidated_items:
+            if p_total_done == total_files and st.session_state["batch_accumulated_items"]:
                 st.markdown("---")
-                st.markdown(f"### 📦 Consolidado de Inventario Resultante")
+                st.markdown(f"### 📦 Consolidado de Inventario Resultante (Lote Completo)")
 
                 rows_preview = []
                 multiplicador_ganancia = 1 + (margen_ganancia_lote / 100.0)
 
-                for idx, item in enumerate(all_consolidated_items, start=1):
+                for idx, item in enumerate(st.session_state["batch_accumulated_items"], start=1):
                     desc = str(item.get("descripcion", ""))
                     orig_code = clean_barcode(item.get("codigo", ""))
                     final_code, status_match = validate_with_master(desc, orig_code)
@@ -559,7 +559,7 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
 
                 output = io.BytesIO()
                 wb.save(output)
-                st.download_button("📥 Descargar Excel Consolidado Sin Duplicados", output.getvalue(), "Inventario_WilPOS_Consolidado_Lote.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+                st.download_button("📥 Descargar Excel Consolidado Final (Lote Completo)", output.getvalue(), "Inventario_WilPOS_Consolidado_Lote.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
 # ==========================================
 # MÓDULO 3: EXTRAER CÓDIGO DESDE IMAGEN
