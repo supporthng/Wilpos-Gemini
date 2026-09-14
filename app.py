@@ -199,7 +199,6 @@ def validate_with_master(item_description, original_code):
 
     # 3. Búsqueda por aproximación (Fuzzy Matching) en la memoria viva
     if b_mem:
-        # Creamos un diccionario inverso de nombres a códigos
         name_to_code = {str(name).upper(): code for code, name in b_mem.items()}
         close_matches = difflib.get_close_matches(clean_desc_key, name_to_code.keys(), n=1, cutoff=0.65)
         if close_matches:
@@ -207,9 +206,8 @@ def validate_with_master(item_description, original_code):
             code_found = name_to_code[matched_name]
             return code_found, f"Actualizado (Memoria Viva por Similitud: '{matched_name}')"
 
-    # 4. Si trae código original válido en la factura
+    # 4. Si trae código original válido, lo aprendemos automáticamente
     if clean_orig_code and clean_orig_code != "S/C":
-        # Lo guardamos automáticamente en memoria para el futuro
         b_mem[clean_orig_code] = clean_desc_key
         save_json_file(BARCODE_MEMORY_FILE, b_mem)
         return clean_orig_code, "✨ Nuevo Código Registrado Automáticamente en Memoria"
@@ -419,11 +417,11 @@ if modulo == "📄 Factura Individual":
                 )
 
 # ==========================================
-# MÓDULO 2: MÚLTIPLES FACTURAS (LOTE)
+# MÓDULO 2: MÚLTIPLES FACTURAS (LOTE) CON DETECCIÓN DE DUPLICADOS
 # ==========================================
 elif modulo == "📂 Múltiples Facturas (Lote)":
-    st.markdown("<h2>📂 Procesador por <span style='color: #0284c7;'>Lotes</span></h2>", unsafe_allow_html=True)
-    st.markdown("<p style='color: #64748b;'>Procesa múltiples facturas. El sistema alimentará su memoria automáticamente con cada nuevo artículo.</p>", unsafe_allow_html=True)
+    st.markdown("<h2>📂 Procesador por <span style='color: #0284c7;'>Lotes con Antiduplicados</span></h2>", unsafe_allow_html=True)
+    st.markdown("<p style='color: #64748b;'>Procesa múltiples facturas. El sistema filtrará automáticamente facturas duplicadas y alimentará tu memoria.</p>", unsafe_allow_html=True)
     st.markdown("---")
 
     st.markdown('<div class="card-container">', unsafe_allow_html=True)
@@ -435,16 +433,63 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
     st.markdown('</div>', unsafe_allow_html=True)
 
     if uploaded_files:
-        if st.button("🚀 Procesar Lote y Alimentar Memoria"):
+        st.info(f"Se han cargado {len(uploaded_files)} archivos en total.")
+
+        if st.button("🚀 Procesar Lote, Filtrar Duplicados y Alimentar Memoria"):
             all_consolidated_items = []
+            invoice_totals_summary = []
+            duplicate_count = 0
+            batch_signatures = set()
+
+            progress_bar = st.progress(0)
+            status_text = st.empty()
+
             for i, file in enumerate(uploaded_files):
-                parsed_data, _ = process_invoice_with_ai(file, file.type if hasattr(file, 'type') else 'image/jpeg')
+                status_text.text(f"Analizando archivo {i+1} de {len(uploaded_files)}: {file.name}...")
+                file_type = file.type if hasattr(file, 'type') else 'image/jpeg'
+                
+                parsed_data, _ = process_invoice_with_ai(file, file_type)
+
                 if parsed_data and isinstance(parsed_data, dict):
-                    items = parsed_data.get("items", [])
-                    if isinstance(items, list):
-                        all_consolidated_items.extend(items)
+                    rnc_emisor = str(parsed_data.get("emisor_rnc", "")).strip()
+                    nombre_emisor = str(parsed_data.get("emisor_nombre", "Desconocido")).strip()
+                    num_doc = str(parsed_data.get("numero_documento", "")).strip()
+                    fecha_doc = str(parsed_data.get("fecha", "")).strip()
+                    total_doc_val = safe_float(parsed_data.get("total", 0))
+                    
+                    # Generar huella digital única para detectar duplicados
+                    signature_string = f"{rnc_emisor}_{num_doc}_{fecha_doc}_{total_doc_val}"
+                    doc_signature = hashlib.md5(signature_string.encode('utf-8')).hexdigest()
+                    
+                    if doc_signature in batch_signatures:
+                        duplicate_count += 1
+                        st.warning(f"⚠️ Factura duplicada detectada y omitida: **{file.name}** (Documento Nº: {num_doc})")
+                    else:
+                        batch_signatures.add(doc_signature)
+                        invoice_totals_summary.append({
+                            "Proveedor": nombre_emisor if nombre_emisor and nombre_emisor != "None" else f"RNC: {rnc_emisor}",
+                            "Archivo": file.name,
+                            "Nº Documento": num_doc if num_doc else "N/D",
+                            "Total General": total_doc_val
+                        })
+
+                        items = parsed_data.get("items", [])
+                        if isinstance(items, list):
+                            all_consolidated_items.extend(items)
+
+                progress_bar.progress((i + 1) / len(uploaded_files))
+
+            status_text.text("¡Procesamiento por lotes y filtro de duplicados completado!")
+
+            if duplicate_count > 0:
+                st.error(f"🚨 Se detectaron y filtraron **{duplicate_count} factura(s) duplicada(s)** en este lote.")
+            else:
+                st.success("✅ No se encontraron facturas duplicadas en el lote.")
 
             if all_consolidated_items:
+                st.markdown("---")
+                st.markdown(f"### 📦 Consolidado de Ítems ({len(all_consolidated_items)} productos totales)")
+
                 rows_preview = []
                 multiplicador_ganancia = 1 + (margen_ganancia_lote / 100.0)
 
@@ -511,7 +556,7 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
 
                 st.markdown("---")
                 st.download_button(
-                    label="📥 Descargar Excel Consolidado",
+                    label="📥 Descargar Excel Consolidado Sin Duplicados",
                     data=output.getvalue(),
                     file_name="Inventario_WilPOS_Consolidado_Lote.xlsx",
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
