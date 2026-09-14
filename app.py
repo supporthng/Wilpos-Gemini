@@ -125,7 +125,6 @@ def round_to_nearest_5(x):
     return round(round(x / 5) * 5, 2)
 
 def clean_barcode(code_val):
-    """Garantiza que el código de barras conserve sus ceros a la izquierda y sea tratado como texto plano."""
     if not code_val:
         return "S/C (Sin Código)"
     s_val = str(code_val).strip()
@@ -365,7 +364,6 @@ if modulo == "📄 Factura Individual":
                         None
                     ]
                     ws_prod.append(row_cells)
-                    # Forzar formato texto explícito en la columna Código Barra (Columna 2) para preservar ceros a la izquierda
                     ws_prod.cell(row=ws_prod.max_row, column=2).number_format = '@'
                 
                 output = io.BytesIO()
@@ -373,11 +371,11 @@ if modulo == "📄 Factura Individual":
                 st.download_button("📥 Descargar Excel Plantilla WilPOS Actualizada", output.getvalue(), "Inventario_WilPOS_Actualizado.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
 # ==========================================
-# MÓDULO 2: MÚLTIPLES FACTURAS (LOTE)
+# MÓDULO 2: MÚLTIPLES FACTURAS (LOTE) CON DASHBOARD DE AUDITORÍA
 # ==========================================
 elif modulo == "📂 Múltiples Facturas (Lote)":
-    st.markdown("<h2>📂 Procesador por <span style='color: #0284c7;'>Lotes con Antiduplicados</span></h2>", unsafe_allow_html=True)
-    st.markdown("<p style='color: #64748b;'>Procesa múltiples facturas preservando íntegramente los códigos con ceros a la izquierda.</p>", unsafe_allow_html=True)
+    st.markdown("<h2>📂 Procesador por <span style='color: #0284c7;'>Lotes con Dashboard de Auditoría</span></h2>", unsafe_allow_html=True)
+    st.markdown("<p style='color: #64748b;'>Procesa múltiples facturas con control detallado de procesados, omitidos y motivos.</p>", unsafe_allow_html=True)
     st.markdown("---")
 
     st.markdown('<div class="card-container">', unsafe_allow_html=True)
@@ -389,10 +387,12 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
 
     if uploaded_files:
         st.info(f"📁 Se han cargado **{len(uploaded_files)} archivo(s)** listos para procesar.")
-        if st.button("🚀 Procesar Lote, Filtrar Duplicados y Alimentar Memoria", type="primary"):
+        if st.button("🚀 Procesar Lote y Mostrar Dashboard", type="primary"):
             all_consolidated_items = []
-            duplicate_count = 0
+            archivos_procesados_ok = 0
+            audit_log = []
             batch_signatures = set()
+            
             progress_bar = st.progress(0)
             status_placeholder = st.empty()
             total_files = len(uploaded_files)
@@ -400,10 +400,11 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
             for i, file in enumerate(uploaded_files):
                 status_placeholder.markdown(f"⏳ **Procesando archivo ({i+1} de {total_files}):** `{file.name}`...")
                 file_type = file.type if hasattr(file, 'type') else 'image/jpeg'
-                parsed_data, _ = process_invoice_with_ai(file, file_type)
+                parsed_data, err_msg = process_invoice_with_ai(file, file_type)
 
                 if parsed_data and isinstance(parsed_data, dict):
                     rnc_emisor = str(parsed_data.get("emisor_rnc", "")).strip()
+                    nombre_prov = str(parsed_data.get("emisor_nombre", "Desconocido")).strip()
                     num_doc = str(parsed_data.get("numero_documento", "")).strip()
                     fecha_doc = str(parsed_data.get("fecha", "")).strip()
                     total_doc_val = safe_float(parsed_data.get("total", 0))
@@ -412,26 +413,61 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
                     doc_signature = hashlib.md5(signature_string.encode('utf-8')).hexdigest()
                     
                     if doc_signature in batch_signatures:
-                        duplicate_count += 1
-                        st.warning(f"⚠️ Factura duplicada detectada y omitida: **{file.name}** (Documento Nº: {num_doc})")
+                        audit_log.append({
+                            "Archivo": file.name,
+                            "Proveedor": nombre_prov,
+                            "Nº Documento": num_doc if num_doc else "N/D",
+                            "Estado": "🔴 Omitido (Duplicado)",
+                            "Motivo": f"Factura ya existente en el lote actual (RNC: {rnc_emisor}, Doc: {num_doc}, Total: RD$ {total_doc_val:,.2f})"
+                        })
                     else:
                         batch_signatures.add(doc_signature)
+                        archivos_procesados_ok += 1
+                        audit_log.append({
+                            "Archivo": file.name,
+                            "Proveedor": nombre_prov,
+                            "Nº Documento": num_doc if num_doc else "N/D",
+                            "Estado": "🟢 Procesado Exitosamente",
+                            "Motivo": f"Extraídos {len(parsed_data.get('items', []))} ítems correctamente."
+                        })
                         items = parsed_data.get("items", [])
                         if isinstance(items, list):
                             all_consolidated_items.extend(items)
+                else:
+                    audit_log.append({
+                        "Archivo": file.name,
+                        "Proveedor": "Desconocido",
+                        "Nº Documento": "N/D",
+                        "Estado": "🔴 Omitido (Error de Lectura/IA)",
+                        "Motivo": "La IA no pudo estructurar correctamente el documento o se agotó la cuota de la API."
+                    })
 
                 progress_bar.progress((i + 1) / total_files)
 
-            status_placeholder.success("🎉 ¡Procesamiento de todo el lote completado con éxito!")
+            status_placeholder.success("🎉 ¡Procesamiento y auditoría de lote finalizados!")
 
-            if duplicate_count > 0:
-                st.error(f"🚨 Se detectaron y filtraron **{duplicate_count} factura(s) duplicada(s)**.")
-            else:
-                st.success("✅ No se encontraron facturas duplicadas.")
+            # ==========================================
+            # DASHBOARD DE RESULTADOS Y MÉTRICAS
+            # ==========================================
+            st.markdown("---")
+            st.markdown("## 📊 Dashboard de Auditoría y Procesamiento")
+            
+            total_subidos = len(uploaded_files)
+            total_omitidos = total_subidos - archivos_procesados_ok
+
+            col_m1, col_m2, col_m3, col_m4 = st.columns(4)
+            col_m1.metric("📁 Archivos Subidos", total_subidos)
+            col_m2.metric("🟢 Procesados OK", archivos_procesados_ok)
+            col_m3.metric("🔴 Omitidos / Filtrados", total_omitidos)
+            col_m4.metric("📦 Productos Totales", len(all_consolidated_items))
+
+            st.markdown("### 📋 Detalle de Archivos Evaluados (Procesados vs Omitidos)")
+            df_audit = pd.DataFrame(audit_log)
+            st.dataframe(df_audit, use_container_width=True, hide_index=True)
 
             if all_consolidated_items:
                 st.markdown("---")
-                st.markdown(f"### 📦 Consolidado de Ítems ({len(all_consolidated_items)} productos totales)")
+                st.markdown(f"### 📦 Consolidado de Inventario Resultante")
 
                 rows_preview = []
                 multiplicador_ganancia = 1 + (margen_ganancia_lote / 100.0)
@@ -532,7 +568,6 @@ elif modulo == "📋 Ver Códigos Almacenados":
             with pd.ExcelWriter(output_db, engine='openpyxl') as writer:
                 df_codes.to_excel(writer, index=False, sheet_name="Codigos_Almacenados")
             
-            # Asegurar formato texto al descargar la memoria
             wb_db = openpyxl.load_workbook(output_db)
             ws_db = wb_db.active
             for r in range(2, ws_db.max_row + 1):
@@ -554,7 +589,6 @@ elif modulo == "📋 Ver Códigos Almacenados":
         
         if excel_import_file is not None:
             try:
-                # dtype=str asegura que pandas lea los códigos de barras preservando los ceros a la izquierda
                 if excel_import_file.name.endswith('.csv'):
                     df_imp = pd.read_csv(excel_import_file, dtype=str)
                 else:
