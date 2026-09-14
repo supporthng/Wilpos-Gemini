@@ -656,7 +656,7 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
 # ==========================================
 elif modulo == "📸 Extraer Código desde Imagen":
     st.markdown("<h2>📸 Lector de Códigos y <span style='color: #0284c7;'>Productos</span></h2>", unsafe_allow_html=True)
-    st.markdown("<p style='color: #64748b;'>Sube una foto del código de barras o producto. Si não está registrado, se buscará automáticamente en internet.</p>", unsafe_allow_html=True)
+    st.markdown("<p style='color: #64748b;'>Sube una foto del código de barras o producto. Si no está registrado, se buscará automáticamente en internet.</p>", unsafe_allow_html=True)
     st.markdown("---")
 
     st.markdown('<div class="card-container">', unsafe_allow_html=True)
@@ -830,7 +830,7 @@ elif modulo == "📋 Ver Códigos Almacenados":
                                 motivos_no_procesados.append(f"Fila #{fila_num} ➔ **Artículo:** *{nombre_articulo}* | **Motivo:** Código de barras vacío o nulo.")
                                 continue
                                 
-                            if not n_val or n_val.lower() in ["nan", "none", ""]:
+                            if not n_val or n_val.lower() not in ["nan", "none", ""]:
                                 no_procesados += 1
                                 motivos_no_procesados.append(f"Fila #{fila_num} ➔ **Código:** `{c_val}` | **Motivo:** Nombre o descripción vacía.")
                                 continue
@@ -868,7 +868,7 @@ elif modulo == "📋 Ver Códigos Almacenados":
 
     with tab_import_image:
         st.subheader("📸 Extraer Códigos y Nombres desde Imagen (Masivo / Lista / Factura)")
-        st.markdown("Sube una foto que contenga productos y códigos. Se actualizarán los existentes y se agregarán los nuevos.")
+        st.markdown("Sube una foto que contenga productos y códigos. Se te mostrará el detalle de cuáles son nuevos y cuáles ya existen.")
         
         st.markdown('<div class="card-container">', unsafe_allow_html=True)
         batch_img = st.file_uploader("📂 Sube la imagen con los códigos", type=["png", "jpg", "jpeg", "webp"], key="batch_img_upload")
@@ -876,7 +876,7 @@ elif modulo == "📋 Ver Códigos Almacenados":
         
         if batch_img is not None:
             st.image(batch_img, caption="Imagen cargada", width=400)
-            if st.button("🚀 Extraer, Actualizar y Agregar desde Imagen"):
+            if st.button("🚀 Extraer y Verificar desde Imagen"):
                 keys_to_try = []
                 if paid_api_key:
                     keys_to_try.append((paid_api_key, "Versión de Pago"))
@@ -927,52 +927,54 @@ elif modulo == "📋 Ver Códigos Almacenados":
                     
                     if success_batch and extracted_list:
                         total_detectados = len(extracted_list)
-                        procesados_ok = 0
                         nuevos_agregados = 0
-                        actualizados = 0
-                        no_procesados = 0
-                        motivos_no_procesados_img = []
+                        ya_existian = 0
+                        detalles_escaneo = []
 
                         for idx, item in enumerate(extracted_list, start=1):
                             code_v = str(item.get("codigo_barras", "")).strip()
                             name_v = str(item.get("nombre_producto", "")).strip().upper()
                             
-                            nombre_articulo = name_v if (name_v and name_v.lower() not in ["nan", "none", ""]) else f"Ítem #{idx}"
-                            
                             if not code_v or code_v.lower() in ["nan", "none", ""]:
-                                no_procesados += 1
-                                motivos_no_procesados_img.append(f"Ítem #{idx} ➔ **Artículo:** *{nombre_articulo}* | **Motivo:** Código de barras faltante o no detectado.")
                                 continue
                                 
-                            if not name_v or name_v.lower() not in ["nan", "none", ""]:
-                                pass
-                            else:
-                                no_procesados += 1
-                                motivos_no_procesados_img.append(f"Ítem #{idx} ➔ **Código:** `{code_v}` | **Motivo:** Nombre de producto faltante.")
-                                continue
+                            if not name_v or name_v.lower() in ["nan", "none", ""]:
+                                name_v = "PRODUCTO DETECTADO EN IMAGEN"
+
+                            if code_v.endswith('.0'):
+                                code_v = code_v[:-2]
                             
-                            procesados_ok += 1
                             if code_v in st.session_state["barcode_memory"]:
-                                if st.session_state["barcode_memory"][code_v] != name_v:
-                                    st.session_state["barcode_memory"][code_v] = name_v
-                                    actualizados += 1
+                                ya_existian += 1
+                                nombre_previo = st.session_state["barcode_memory"][code_v]
+                                detalles_escaneo.append({
+                                    "Código": code_v,
+                                    "Nombre Detectado": name_v,
+                                    "Estado": "💾 Ya existe en memoria",
+                                    "Detalle": f"Registrado previamente como: {nombre_previo}"
+                                })
                             else:
-                                st.session_state["barcode_memory"][code_v] = name_v
                                 nuevos_agregados += 1
+                                st.session_state["barcode_memory"][code_v] = name_v
+                                detalles_escaneo.append({
+                                    "Código": code_v,
+                                    "Nombre Detectado": name_v,
+                                    "Estado": "✨ Nuevo agregado",
+                                    "Detalle": "Guardado exitosamente en memoria."
+                                })
                         
                         save_json_file(BARCODE_MEMORY_FILE, st.session_state["barcode_memory"])
                         
-                        st.success("🎯 **¡Procesamiento de imagen finalizado!**")
-                        col_i1, col_i2, col_i3, col_i4, col_i5 = st.columns(5)
-                        col_i1.metric("Detectados", total_detectados)
-                        col_i2.metric("Procesados", procesados_ok)
-                        col_i3.metric("Nuevos Agregados", nuevos_agregados)
-                        col_i4.metric("Actualizados", actualizados)
-                        col_i5.metric("No Procesados", no_procesados)
+                        st.success("🎯 **¡Análisis de imagen finalizado!**")
+                        
+                        col_i1, col_i2, col_i3 = st.columns(3)
+                        col_i1.metric("Detectados en Imagen", total_detectados)
+                        col_i2.metric("Nuevos Agregados", nuevos_agregados)
+                        col_i3.metric("Ya Existían en Memoria", ya_existian)
 
-                        if motivos_no_procesados_img:
-                            with st.expander(f"⚠️ Ver detalle de los {len(motivos_no_procesados_img)} elementos no procesados"):
-                                for motivo in motivos_no_procesados_img:
-                                    st.markdown(f"- {motivo}")
+                        if detalles_escaneo:
+                            st.markdown("### 📋 Detalle de Códigos Extraídos")
+                            df_detalles = pd.DataFrame(detalles_escaneo)
+                            st.dataframe(df_detalles, use_container_width=True, hide_index=True)
                     else:
                         st.error("No se pudieron extraer códigos estructurados de la imagen.")
