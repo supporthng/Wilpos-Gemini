@@ -74,7 +74,7 @@ if "quota_exceeded" not in st.session_state:
 st.sidebar.title("Menú de Navegación")
 modulo = st.sidebar.radio(
     "Selecciona el Módulo",
-    ["📄 Factura Individual", "📂 Múltiples Facturas (Lote)", "📸 Extraer Código desde Imagen"]
+    ["📄 Factura Individual", "📂 Múltiples Facturas (Lote)", "📸 Extraer Código desde Imagen", "📋 Ver Códigos Almacenados"]
 )
 
 st.sidebar.markdown("---")
@@ -734,7 +734,7 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
                 st.warning("No hay ítems válidos para consolidar.")
 
 # ==========================================
-# MÓDULO 3: EXTRAER CÓDIGO DESDE IMAGEN (MAESTRO + MEMORIA + INTERNET)
+# MÓDULO 3: EXTRAER CÓDIGO DESDE IMAGEN
 # ==========================================
 elif modulo == "📸 Extraer Código desde Imagen":
     st.title("📸 Lector de Códigos y Productos (Maestro, Memoria e Internet)")
@@ -851,3 +851,33 @@ elif modulo == "📸 Extraer Código desde Imagen":
                                 st.markdown(f"📌 *El código `{extracted_code}` ha sido guardado automáticamente en tu archivo de memoria.*")
                     else:
                         st.error("No se pudo extraer un código de barras claro de la imagen.")
+
+# ==========================================
+# MÓDULO 4: VER CÓDIGOS ALMACENADOS
+# ==========================================
+elif modulo == "📋 Ver Códigos Almacenados":
+    st.title("📋 Listado de Códigos y Nombres Almacenados")
+    st.markdown("Aquí puedes consultar todos los códigos de barras y nombres de productos que la memoria del sistema ha registrado.")
+
+    b_mem = st.session_state["barcode_memory"]
+
+    if b_mem:
+        st.info(f"📊 Total de códigos registrados en memoria: **{len(b_mem)}**")
+
+        # Convertir a DataFrame para visualización limpia en tabla
+        list_data = [{"Código de Barras": code, "Nombre del Producto": name} for code, name in b_mem.items()]
+        df_codes = pd.DataFrame(list_data)
+
+        # Mostrar tabla interactiva
+        st.dataframe(df_codes, use_container_width=True, hide_index=True)
+
+        # Botón para descargar en CSV o Excel si se desea
+        csv_data = df_codes.to_csv(index=False).encode('utf-8')
+        st.download_button(
+            label="📥 Descargar Lista de Códigos (CSV)",
+            data=csv_data,
+            file_name="codigos_barras_almacenados.csv",
+            mime="text/csv"
+        )
+    else:
+        st.warning("⚠️ Aún no hay códigos de barras almacenados en la memoria. Escanea algunos productos en la pestaña '📸 Extraer Código desde Imagen' para comenzar.")
