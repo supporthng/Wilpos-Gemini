@@ -446,9 +446,6 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
 
             status_placeholder.success("🎉 ¡Procesamiento y auditoría de lote finalizados!")
 
-            # ==========================================
-            # DASHBOARD DE RESULTADOS Y MÉTRICAS
-            # ==========================================
             st.markdown("---")
             st.markdown("## 📊 Dashboard de Auditoría y Procesamiento")
             
@@ -544,7 +541,7 @@ elif modulo == "📸 Extraer Código desde Imagen":
     if img_uploaded is not None:
         st.image(img_uploaded, caption="Imagen analizada", width=400)
         if st.button("🔍 Escanear y Registrar"):
-            st.info("Escaneo rápido disponible en la versión completa.")
+            st.info("Esc rápido disponible en la versión completa.")
 
 # ==========================================
 # MÓDULO 4: VER CÓDIGOS ALMACENADOS E IMPORTAR EXCEL
@@ -592,7 +589,7 @@ elif modulo == "📋 Ver Códigos Almacenados":
                 if excel_import_file.name.endswith('.csv'):
                     df_imp = pd.read_csv(excel_import_file, dtype=str)
                 else:
-                    df_imp = pd.read_excel(excel_import_file, dtype=str)
+                    df_imp = pd.read_excel(excel_import_file, sheet_name=0, dtype=str)
                 
                 st.markdown(f"**Vista previa del archivo cargado ({len(df_imp)} filas):**")
                 st.dataframe(df_imp.head(10), use_container_width=True, hide_index=True)
@@ -621,8 +618,13 @@ elif modulo == "📋 Ver Códigos Almacenados":
                                 nuevos += 1
                                 
                         save_json_file(BARCODE_MEMORY_FILE, st.session_state["barcode_memory"])
-                        st.success(f"🎯 ¡Sincronización completa con ceros protegidos! Nuevos: **{nuevos}**, Actualizados: **{actualizados}**.")
-                        st.rerun()
+                        
+                        # 🟢 MENSAJE DE ÉXITO VISIBLE Y CLARO EN PANTALLA
+                        st.success(f"🎯 ¡Sincronización completada con éxito! Se cargaron y protegieron los ceros de {nuevos + actualizados} productos en memoria.")
+                        
+                        col_r1, col_r2 = st.columns(2)
+                        col_r1.metric("✨ Productos Nuevos Agregados", nuevos)
+                        col_r2.metric("🔄 Productos Actualizados", actualizados)
                 else:
                     st.error("❌ No se pudieron detectar automáticamente las columnas 'Código Barra' y 'Nombre' en el archivo.")
             except Exception as ex:
