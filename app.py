@@ -371,11 +371,11 @@ if modulo == "📄 Factura Individual":
                 st.download_button("📥 Descargar Excel Plantilla WilPOS Actualizada", output.getvalue(), "Inventario_WilPOS_Actualizado.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
 # ==========================================
-# MÓDULO 2: MÚLTIPLES FACTURAS (LOTE AUTOMÁTICO EN CADENA DE 25)
+# MÓDULO 2: MÚLTIPLES FACTURAS (LOTE EN CADENA AUTOMÁTICA - BLOQUES DE 15)
 # ==========================================
 elif modulo == "📂 Múltiples Facturas (Lote)":
-    st.markdown("<h2>📂 Procesador por <span style='color: #0284c7;'>Lotes 100% Automáticos (Bloques de 25)</span></h2>", unsafe_allow_html=True)
-    st.markdown("<p style='color: #64748b;'>Procesa todas tus facturas en cadena automática hasta finalizar por completo.</p>", unsafe_allow_html=True)
+    st.markdown("<h2>📂 Procesador por <span style='color: #0284c7;'>Lotes Automáticos (Bloques de 15)</span></h2>", unsafe_allow_html=True)
+    st.markdown("<p style='color: #64748b;'>Procesa tus facturas en bloques seguros de 15 con avance automático fluido.</p>", unsafe_allow_html=True)
     st.markdown("---")
 
     st.markdown('<div class="card-container">', unsafe_allow_html=True)
@@ -387,20 +387,19 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
 
     if uploaded_files:
         total_files = len(uploaded_files)
-        st.info(f"📁 Se han cargado **{total_files} archivo(s)** en total listos para automatizar.")
 
-        # Inicializar estado en session_state para bloques de lote
         if "batch_accumulated_items" not in st.session_state:
             st.session_state["batch_accumulated_items"] = []
             st.session_state["batch_audit_log"] = []
             st.session_state["batch_signatures"] = set()
             st.session_state["batch_processed_count"] = 0
             st.session_state["batch_ok_count"] = 0
+            st.session_state["is_auto_processing"] = False
 
         processed_so_far = st.session_state["batch_processed_count"]
-        
+
         b_col1, b_col2 = st.columns(2)
-        iniciar_auto = b_col1.button("🚀 Iniciar Procesamiento Automático en Cadena", type="primary")
+        iniciar_btn = b_col1.button("🚀 Iniciar Procesamiento Automático (Bloques de 15)", type="primary")
         reiniciar_lote = b_col2.button("🔄 Reiniciar / Limpiar Lote")
 
         if reiniciar_lote:
@@ -409,27 +408,27 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
             st.session_state["batch_signatures"] = set()
             st.session_state["batch_processed_count"] = 0
             st.session_state["batch_ok_count"] = 0
+            st.session_state["is_auto_processing"] = False
             st.success("¡Lote reiniciado!")
             st.rerun()
 
-        # 🟢 BUCLE AUTOMÁTICO EN CADENA: Corre bloque tras bloque hasta terminar todos los archivos
-        if iniciar_auto or processed_so_far > 0:
-            if processed_so_far == 0 and iniciar_auto:
-                processed_so_far = 0
+        if iniciar_btn:
+            st.session_state["is_auto_processing"] = True
+            st.rerun()
 
-            status_placeholder = st.empty()
-            progress_bar = st.progress(processed_so_far / total_files if total_files > 0 else 0)
+        # 🟢 PROCESAMIENTO AUTOMÁTICO EN BLOQUES DE 15 CON RE-RUN EN CADENA
+        is_running = st.session_state.get("is_auto_processing", False)
+        if is_running:
+            if processed_so_far < total_files:
+                block_size = 15
+                end_target = min(processed_so_far + block_size, total_files)
+                
+                st.info(f"⏳ **Procesando bloque automático:** Archivos del **{processed_so_far + 1}** al **{end_target}** de **{total_files}**...")
+                
+                progress_bar = st.progress((processed_so_far) / total_files)
 
-            while st.session_state["batch_processed_count"] < total_files:
-                start_idx = st.session_state["batch_processed_count"]
-                block_size = min(25, total_files - start_idx)
-                end_idx = start_idx + block_size
-                current_block = uploaded_files[start_idx:end_idx]
-
-                status_placeholder.markdown(f"⏳ **Procesando bloque automático:** Archivos del **{start_idx + 1}** al **{end_idx}** de **{total_files}**...")
-
-                for j, file in enumerate(current_block):
-                    abs_idx = start_idx + j + 1
+                for idx_file in range(processed_so_far, end_target):
+                    file = uploaded_files[idx_file]
                     file_type = file.type if hasattr(file, 'type') else 'image/jpeg'
                     parsed_data, err_msg = process_invoice_with_ai(file, file_type)
 
@@ -473,12 +472,16 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
                             "Motivo": "La IA no pudo estructurar correctamente el documento."
                         })
 
-                st.session_state["batch_processed_count"] = end_idx
-                progress_bar.progress(end_idx / total_files)
+                st.session_state["batch_processed_count"] = end_target
+                
+                if st.session_state["batch_processed_count"] < total_files:
+                    st.rerun() # Salta automáticamente al siguiente bloque
+                else:
+                    st.session_state["is_auto_processing"] = False
+                    st.success("🎉 ¡Procesamiento automático de todo el lote completado con éxito!")
+                    st.rerun()
 
-            status_placeholder.success("🎉 ¡Procesamiento automático de todo el lote completado con éxito!")
-
-        # Mostrar Dashboard y Resultados Finales
+        # Mostrar Dashboard y Resultados Actuales
         if st.session_state["batch_processed_count"] > 0:
             st.markdown("---")
             st.markdown("## 📊 Dashboard de Auditoría y Progreso del Lote")
@@ -488,7 +491,7 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
             p_omitidos = p_total_done - p_ok
 
             col_m1, col_m2, col_m3, col_m4 = st.columns(4)
-            col_m1.metric("📁 Archivos Totales", total_files)
+            col_m1.metric("📁 Archivos Procesados", f"{p_total_done} / {total_files}")
             col_m2.metric("🟢 Procesados OK", p_ok)
             col_m3.metric("🔴 Omitidos / Duplicados", p_omitidos)
             col_m4.metric("📦 Productos Totales", len(st.session_state["batch_accumulated_items"]))
