@@ -371,11 +371,11 @@ if modulo == "📄 Factura Individual":
                 st.download_button("📥 Descargar Excel Plantilla WilPOS Actualizada", output.getvalue(), "Inventario_WilPOS_Actualizado.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
 # ==========================================
-# MÓDULO 2: MÚLTIPLES FACTURAS (LOTE EN CADENA AUTOMÁTICA - BLOQUES DE 15)
+# MÓDULO 2: MÚLTIPLES FACTURAS (LOTE CON PERSISTENCIA DE BYTES)
 # ==========================================
 elif modulo == "📂 Múltiples Facturas (Lote)":
     st.markdown("<h2>📂 Procesador por <span style='color: #0284c7;'>Lotes Automáticos (Bloques de 15)</span></h2>", unsafe_allow_html=True)
-    st.markdown("<p style='color: #64748b;'>Procesa tus facturas en bloques seguros de 15 con avance automático fluido.</p>", unsafe_allow_html=True)
+    st.markdown("<p style='color: #64748b;'>Procesa tus facturas en bloques seguros de 15 con persistencia de archivos en memoria.</p>", unsafe_allow_html=True)
     st.markdown("---")
 
     st.markdown('<div class="card-container">', unsafe_allow_html=True)
@@ -385,8 +385,17 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
     uploaded_files = st.file_uploader("📂 Sube tus facturas (Selección múltiple)", type=["pdf", "png", "jpg", "jpeg"], accept_multiple_files=True, key="batch_files")
     st.markdown('</div>', unsafe_allow_html=True)
 
+    # 💾 Guardar bytes de archivos en session_state para evitar que se pierdan durante los st.rerun()
     if uploaded_files:
-        total_files = len(uploaded_files)
+        if "cached_uploaded_files" not in st.session_state or len(st.session_state["cached_uploaded_files"]) != len(uploaded_files):
+            st.session_state["cached_uploaded_files"] = [
+                {"name": f.name, "type": getattr(f, "type", "image/jpeg"), "bytes": f.read()}
+                for f in uploaded_files
+            ]
+
+    if "cached_uploaded_files" in st.session_state and st.session_state["cached_uploaded_files"]:
+        cached_files = st.session_state["cached_uploaded_files"]
+        total_files = len(cached_files)
 
         if "batch_accumulated_items" not in st.session_state:
             st.session_state["batch_accumulated_items"] = []
@@ -409,6 +418,8 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
             st.session_state["batch_processed_count"] = 0
             st.session_state["batch_ok_count"] = 0
             st.session_state["is_auto_processing"] = False
+            if "cached_uploaded_files" in st.session_state:
+                del st.session_state["cached_uploaded_files"]
             st.success("¡Lote reiniciado!")
             st.rerun()
 
@@ -416,7 +427,7 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
             st.session_state["is_auto_processing"] = True
             st.rerun()
 
-        # 🟢 PROCESAMIENTO AUTOMÁTICO EN BLOQUES DE 15 CON RE-RUN EN CADENA
+        # 🟢 PROCESAMIENTO AUTOMÁTICO EN BLOQUES DE 15 CON ARCHIVOS EN MEMORIA
         is_running = st.session_state.get("is_auto_processing", False)
         if is_running:
             if processed_so_far < total_files:
@@ -425,12 +436,13 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
                 
                 st.info(f"⏳ **Procesando bloque automático:** Archivos del **{processed_so_far + 1}** al **{end_target}** de **{total_files}**...")
                 
-                progress_bar = st.progress((processed_so_far) / total_files)
-
                 for idx_file in range(processed_so_far, end_target):
-                    file = uploaded_files[idx_file]
-                    file_type = file.type if hasattr(file, 'type') else 'image/jpeg'
-                    parsed_data, err_msg = process_invoice_with_ai(file, file_type)
+                    file_info = cached_files[idx_file]
+                    file_bytes_io = io.BytesIO(file_info["bytes"])
+                    file_name = file_info["name"]
+                    file_type = file_info["type"]
+
+                    parsed_data, err_msg = process_invoice_with_ai(file_bytes_io, file_type)
 
                     if parsed_data and isinstance(parsed_data, dict):
                         rnc_emisor = str(parsed_data.get("emisor_rnc", "")).strip()
@@ -444,7 +456,7 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
                         
                         if doc_signature in st.session_state["batch_signatures"]:
                             st.session_state["batch_audit_log"].append({
-                                "Archivo": file.name,
+                                "Archivo": file_name,
                                 "Proveedor": nombre_prov,
                                 "Nº Documento": num_doc if num_doc else "N/D",
                                 "Estado": "🔴 Omitido (Duplicado)",
@@ -454,7 +466,7 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
                             st.session_state["batch_signatures"].add(doc_signature)
                             st.session_state["batch_ok_count"] += 1
                             st.session_state["batch_audit_log"].append({
-                                "Archivo": file.name,
+                                "Archivo": file_name,
                                 "Proveedor": nombre_prov,
                                 "Nº Documento": num_doc if num_doc else "N/D",
                                 "Estado": "🟢 Procesado Exitosamente",
@@ -465,7 +477,7 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
                                 st.session_state["batch_accumulated_items"].extend(items)
                     else:
                         st.session_state["batch_audit_log"].append({
-                            "Archivo": file.name,
+                            "Archivo": file_name,
                             "Proveedor": "Desconocido",
                             "Nº Documento": "N/D",
                             "Estado": "🔴 Omitido (Error de Lectura/IA)",
