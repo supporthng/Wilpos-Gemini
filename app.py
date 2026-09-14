@@ -22,6 +22,7 @@ paid_api_key = st.secrets.get("GEMINI_API_KEY_PAID", os.environ.get("GEMINI_API_
 MEMORY_FILE = "proveedores_memoria.json"
 OVERRIDES_FILE = "mapeo_productos_overrides.json"
 SAVED_MASTER_FILE = "ultimo_maestro_pos.xlsx"
+BARCODE_MEMORY_FILE = "codigos_escaneados_memoria.json"
 
 def load_json_file(filepath):
     if os.path.exists(filepath):
@@ -44,6 +45,9 @@ if "provider_memory" not in st.session_state:
 
 if "product_overrides" not in st.session_state:
     st.session_state["product_overrides"] = load_json_file(OVERRIDES_FILE)
+
+if "barcode_memory" not in st.session_state:
+    st.session_state["barcode_memory"] = load_json_file(BARCODE_MEMORY_FILE)
 
 # Funciones auxiliares de cálculo y formato
 def safe_float(val, default=0.0):
@@ -75,6 +79,21 @@ modulo = st.sidebar.radio(
 
 st.sidebar.markdown("---")
 st.sidebar.title("🧠 Memoria y Reglas POS")
+with st.sidebar.expander("Ver Códigos Escaneados Guardados"):
+    b_mem = st.session_state["barcode_memory"]
+    if b_mem:
+        st.write(f"Total códigos en memoria: {len(b_mem)}")
+        for b_code, b_name in b_mem.items():
+            st.markdown(f"- `{b_code}` ➔ **{b_name}**")
+        if st.button("🗑️ Limpiar Memoria de Códigos"):
+            st.session_state["barcode_memory"] = {}
+            if os.path.exists(BARCODE_MEMORY_FILE):
+                os.remove(BARCODE_MEMORY_FILE)
+            st.success("¡Memoria de códigos reseteada!")
+            st.rerun()
+    else:
+        st.info("No hay códigos guardados en memoria aún.")
+
 with st.sidebar.expander("Ver Correcciones de Productos"):
     overrides = st.session_state["product_overrides"]
     if overrides:
@@ -95,16 +114,21 @@ st.sidebar.title("🗂️ Maestro de Inventario POS")
 
 master_dict = {}
 master_names = []
-master_code_to_name = {}
+master_code_to_details = {}
 
 def parse_master_dataframe(df_m):
-    global master_dict, master_names, master_code_to_name
+    global master_dict, master_names, master_code_to_details
     master_dict = {}
     master_names = []
-    master_code_to_name = {}
+    master_code_to_details = {}
     cols = [str(c).lower() for c in df_m.columns]
+    
     name_col = next((df_m.columns[i] for i, c in enumerate(cols) if 'nombre' in c or 'descripcion' in c), df_m.columns[0])
     code_col = next((df_m.columns[i] for i, c in enumerate(cols) if 'codigo' in c or 'barra' in c or 'barcode' in c), df_m.columns[1])
+    price_col = next((df_m.columns[i] for i, c in enumerate(cols) if 'precio' in c), None)
+    cost_col = next((df_m.columns[i] for i, c in enumerate(cols) if 'costo' in c), None)
+    stock_col = next((df_m.columns[i] for i, c in enumerate(cols) if 'stock' in c), None)
+    cat_col = next((df_m.columns[i] for i, c in enumerate(cols) if 'categor' in c), None)
     
     for _, row in df_m.iterrows():
         p_name = str(row[name_col]).strip().upper()
@@ -112,10 +136,18 @@ def parse_master_dataframe(df_m):
         if raw_code.endswith('.0'):
             raw_code = raw_code[:-2]
         p_code = raw_code
+        
         if p_name and p_name != "NAN" and p_code and p_code != "NAN":
             master_dict[p_name] = p_code
             master_names.append(p_name)
-            master_code_to_name[p_code] = p_name
+            
+            master_code_to_details[p_code] = {
+                "nombre": p_name,
+                "precio": row[price_col] if price_col else "N/D",
+                "costo": row[cost_col] if cost_col else "N/D",
+                "stock": row[stock_col] if stock_col else "N/D",
+                "categoria": row[cat_col] if cat_col else "General"
+            }
 
 if os.path.exists(SAVED_MASTER_FILE) and "master_loaded_once" not in st.session_state:
     try:
@@ -702,11 +734,11 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
                 st.warning("No hay ítems válidos para consolidar.")
 
 # ==========================================
-# MÓDULO 3: EXTRAER CÓDIGO DESDE IMAGEN
+# MÓDULO 3: EXTRAER CÓDIGO DESDE IMAGEN (MAESTRO + MEMORIA + INTERNET)
 # ==========================================
 elif modulo == "📸 Extraer Código desde Imagen":
-    st.title("📸 Lector Inteligente de Códigos y Productos por Imagen")
-    st.markdown("Sube la foto de una botella, etiqueta o código de barras. Gemini leerá el código y buscará automáticamente su coincidencia en tu maestro POS.")
+    st.title("📸 Lector de Códigos y Productos (Maestro, Memoria e Internet)")
+    st.markdown("Sube la foto del código de barras o producto. Si no está en tu Maestro, el sistema lo buscará en internet y lo registrará en memoria.")
 
     img_uploaded = st.file_uploader("Sube la imagen del producto (PNG, JPG, JPEG)", type=["png", "jpg", "jpeg", "webp"], key="barcode_img_upload")
 
@@ -720,7 +752,7 @@ elif modulo == "📸 Extraer Código desde Imagen":
             img_uploaded.seek(0)
             
         with col_prev2:
-            if st.button("🔍 Extraer Código y Buscar en Maestro"):
+            if st.button("🔍 Escanear y Buscar (Maestro e Internet)"):
                 keys_to_try = []
                 if paid_api_key:
                     keys_to_try.append((paid_api_key, "Versión de Pago"))
@@ -733,18 +765,17 @@ elif modulo == "📸 Extraer Código desde Imagen":
                     st.error("❌ No hay claves de API configuradas.")
                 else:
                     extracted_code = ""
-                    extracted_desc = ""
                     success = False
                     
                     prompt_scan = (
                         "Analiza esta imagen con código de barras o producto. "
-                        "Extrae con absoluta precisión el número de código de barras visible (por ejemplo, los números debajo de las barras) y el nombre descriptivo o marca del producto. "
+                        "Extrae con absoluta precisión únicamente el número de código de barras visible (por ejemplo, los números debajo de las barras). "
                         "Devuelve la respuesta estrictamente en formato JSON con esta estructura exacta: "
-                        '{"codigo_barras": "...", "nombre_producto": "..."}'
+                        '{"codigo_barras": "..."}'
                         "Sin texto adicional, solo el JSON."
                     )
                     
-                    with st.spinner("Escaneando código de barras con Inteligencia Artificial..."):
+                    with st.spinner("Escaneando código de barras..."):
                         for api_k, label in keys_to_try:
                             try:
                                 genai.configure(api_key=api_k)
@@ -766,7 +797,6 @@ elif modulo == "📸 Extraer Código desde Imagen":
                                     
                                 data_res = json.loads(raw_t.strip())
                                 extracted_code = str(data_res.get("codigo_barras", "")).strip()
-                                extracted_desc = str(data_res.get("nombre_producto", "")).strip()
                                 success = True
                                 break
                             except Exception as e:
@@ -778,20 +808,46 @@ elif modulo == "📸 Extraer Código desde Imagen":
                                     break
                     
                     if success and extracted_code:
-                        st.markdown("### 🎯 Resultados del Escaneo")
-                        st.info(f"🔢 **Código detectado:** `{extracted_code}`\n\n🏷️ **Descripción sugerida:** `{extracted_desc}`")
+                        st.markdown("### 🎯 Resultado del Escaneo")
+                        st.info(f"🔢 **Código de Barras Detectado:** `{extracted_code}`")
                         
-                        # Buscar en el maestro por código exacto
-                        matched_name_by_code = master_code_to_name.get(extracted_code, None)
+                        # 1. Buscar en el Excel Maestro
+                        product_info = master_code_to_details.get(extracted_code, None)
                         
-                        if matched_name_by_code:
-                            st.success(f"✅ ¡Encontrado en tu Maestro POS por Código de Barras!")
-                            st.markdown(f"**Nombre en Maestro:** `{matched_name_by_code}`")
-                            st.markdown(f"**Código POS:** `{extracted_code}`")
+                        if product_info:
+                            st.success("✅ ¡Encontrado directamente en tu Excel Maestro!")
+                            st.markdown(f"🏷️ **Nombre Oficial:** **{product_info['nombre']}**")
+                            st.markdown(f"💰 **Precio de Venta:** RD$ {product_info['precio']}")
+                            st.markdown(f"📦 **Costo:** RD$ {product_info['costo']}")
+                            st.markdown(f"📊 **Stock Actual:** {product_info['stock']}")
                         else:
-                            st.warning("⚠️ El código detectado no existe exactamente en el maestro. Realizando búsqueda difusa...")
-                            final_c, status_m = validate_with_master(extracted_desc, extracted_code)
-                            st.markdown(f"**Código POS Asignado por IA / Rangos:** `{final_c}`")
-                            st.markdown(f"**Estado del match:** `{status_m}`")
+                            # 2. Buscar en la memoria previa de códigos escaneados
+                            if extracted_code in st.session_state["barcode_memory"]:
+                                mem_name = st.session_state["barcode_memory"][extracted_code]
+                                st.success("💾 ¡Encontrado en la memoria de códigos registrados!")
+                                st.markdown(f"🏷️ **Nombre Registrado:** **{mem_name}**")
+                            else:
+                                # 3. Si no está en el maestro ni memoria, consultar en internet usando Gemini
+                                st.warning("⚠️ Código nuevo (No está en tu maestro POS). Consultando coincidencias en Internet...")
+                                
+                                internet_product_name = "Producto Nuevo Escaneado"
+                                with st.spinner("Buscando información del producto en internet..."):
+                                    try:
+                                        search_model = genai.GenerativeModel('gemini-3.6-flash')
+                                        search_resp = search_model.generate_content(
+                                            f"Identifica y da el nombre comercial exacto, marca y presentación en español del producto cuyo código de barras universal es: {extracted_code}. Responde únicamente con el nombre del producto, sin explicaciones."
+                                        )
+                                        if search_resp and search_resp.text:
+                                            internet_product_name = search_resp.text.strip().upper()
+                                    except Exception as ex:
+                                        print(f"Error en búsqueda web: {ex}")
+                                
+                                # Registrar automáticamente en la memoria persistente
+                                st.session_state["barcode_memory"][extracted_code] = internet_product_name
+                                save_json_file(BARCODE_MEMORY_FILE, st.session_state["barcode_memory"])
+                                
+                                st.success("✨ ¡Producto nuevo identificado mediante internet y registrado en tu memoria!")
+                                st.markdown(f"🏷️ **Nombre Identificado:** **{internet_product_name}**")
+                                st.markdown(f"📌 *El código `{extracted_code}` ha sido guardado automáticamente en tu archivo de memoria.*")
                     else:
-                        st.error("No se pudo extraer un código de barras claro de la imagen. Intenta con una foto más cercana al código.")
+                        st.error("No se pudo extraer un código de barras claro de la imagen.")
