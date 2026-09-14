@@ -70,7 +70,7 @@ if "quota_exceeded" not in st.session_state:
 st.sidebar.title("Menú de Navegación")
 modulo = st.sidebar.radio(
     "Selecciona el Módulo",
-    ["📄 Factura Individual", "📂 Múltiples Facturas (Lote)"]
+    ["📄 Factura Individual", "📂 Múltiples Facturas (Lote)", "📸 Extraer Código desde Imagen"]
 )
 
 st.sidebar.markdown("---")
@@ -95,11 +95,13 @@ st.sidebar.title("🗂️ Maestro de Inventario POS")
 
 master_dict = {}
 master_names = []
+master_code_to_name = {}
 
 def parse_master_dataframe(df_m):
-    global master_dict, master_names
+    global master_dict, master_names, master_code_to_name
     master_dict = {}
     master_names = []
+    master_code_to_name = {}
     cols = [str(c).lower() for c in df_m.columns]
     name_col = next((df_m.columns[i] for i, c in enumerate(cols) if 'nombre' in c or 'descripcion' in c), df_m.columns[0])
     code_col = next((df_m.columns[i] for i, c in enumerate(cols) if 'codigo' in c or 'barra' in c or 'barcode' in c), df_m.columns[1])
@@ -113,6 +115,7 @@ def parse_master_dataframe(df_m):
         if p_name and p_name != "NAN" and p_code and p_code != "NAN":
             master_dict[p_name] = p_code
             master_names.append(p_name)
+            master_code_to_name[p_code] = p_name
 
 if os.path.exists(SAVED_MASTER_FILE) and "master_loaded_once" not in st.session_state:
     try:
@@ -295,18 +298,14 @@ def validate_with_master(item_description, original_code):
 
     return clean_orig_code, "⚠️ Conserva Código Original (Sin Rango Seguro)"
 
-# Auditoría matemática de costos unitarios adaptada a la factura de AD ROYAL
 def audit_and_correct_cost(costo_unit, cantidad, empaque):
     c = safe_float(costo_unit)
     cant = safe_int(cantidad, 1)
     emp = safe_int(empaque, 1)
     
-    # Si empaque es 1 y el costo unitario coincide exactamente con el neto impreso dividido por cantidad (ej: Aloe o Clamato)
     if emp == 1 and cant > 1:
-        # El costo unitario real es el valor neto total de la línea dividido entre la cantidad de piezas
         return c
     
-    # Si por error el costo unitario viene inflado como el total de la línea para empaques múltiples
     if c > 5000 and (cant * emp) > 1:
         corrected = c / (cant * emp)
         if corrected > 0:
@@ -314,7 +313,6 @@ def audit_and_correct_cost(costo_unit, cantidad, empaque):
             
     return c
 
-# Función centralizada con conmutación automática a la Clave de Pago ante error 429
 def process_invoice_with_ai(file_obj, file_type):
     memory_context = ""
     known_mem = st.session_state["provider_memory"]
@@ -369,19 +367,7 @@ def process_invoice_with_ai(file_obj, file_type):
             
             parsed_data = json.loads(raw_text.strip())
             success_msg = f"✅ ¡Factura procesada con éxito usando {label}!"
-            
-            rnc_key = str(parsed_data.get("emisor_rnc", "")).strip()
-            nombre_prov = str(parsed_data.get("emisor_nombre", "Proveedor Desconocido")).strip()
-            
-            if rnc_key and rnc_key not in st.session_state["provider_memory"]:
-                st.session_state["provider_memory"][rnc_key] = {
-                    "nombre": nombre_prov if nombre_prov and nombre_prov != "None" else f"Proveedor RNC {rnc_key}",
-                    "nota_formato": "Formato de cajas con empaques y costos unitarios procesados exitosamente."
-                }
-                save_json_file(MEMORY_FILE, st.session_state["provider_memory"])
-            
             return parsed_data, success_msg
-
         except Exception as e:
             err_str = str(e)
             if "429" in err_str or "Quota exceeded" in err_str:
@@ -390,7 +376,7 @@ def process_invoice_with_ai(file_obj, file_type):
                 st.error(f"Error al procesar con {label}: {e}")
                 break
 
-    st.error("🚨 Se ha agotado la cuota de todas las claves configuradas. Por favor verifica tu plan y facturación.")
+    st.error("🚨 Se ha agotado la cuota de todas las claves configuradas.")
     return None, ""
 
 # ==========================================
@@ -714,3 +700,98 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
                 )
             else:
                 st.warning("No hay ítems válidos para consolidar.")
+
+# ==========================================
+# MÓDULO 3: EXTRAER CÓDIGO DESDE IMAGEN
+# ==========================================
+elif modulo == "📸 Extraer Código desde Imagen":
+    st.title("📸 Lector Inteligente de Códigos y Productos por Imagen")
+    st.markdown("Sube la foto de una botella, etiqueta o código de barras. Gemini leerá el código y buscará automáticamente su coincidencia en tu maestro POS.")
+
+    img_uploaded = st.file_uploader("Sube la imagen del producto (PNG, JPG, JPEG)", type=["png", "jpg", "jpeg", "webp"], key="barcode_img_upload")
+
+    if img_uploaded is not None:
+        st.success(f"Imagen cargada: {img_uploaded.name}")
+        
+        col_prev1, col_prev2 = st.columns([1, 1])
+        with col_prev1:
+            image_obj = Image.open(img_uploaded)
+            st.image(image_obj, caption="Imagen analizada", use_container_width=True)
+            img_uploaded.seek(0)
+            
+        with col_prev2:
+            if st.button("🔍 Extraer Código y Buscar en Maestro"):
+                keys_to_try = []
+                if paid_api_key:
+                    keys_to_try.append((paid_api_key, "Versión de Pago"))
+                if free_key_1:
+                    keys_to_try.append((free_key_1, "Respaldo #1"))
+                if free_key_2:
+                    keys_to_try.append((free_key_2, "Respaldo #2"))
+                
+                if not keys_to_try:
+                    st.error("❌ No hay claves de API configuradas.")
+                else:
+                    extracted_code = ""
+                    extracted_desc = ""
+                    success = False
+                    
+                    prompt_scan = (
+                        "Analiza esta imagen con código de barras o producto. "
+                        "Extrae con absoluta precisión el número de código de barras visible (por ejemplo, los números debajo de las barras) y el nombre descriptivo o marca del producto. "
+                        "Devuelve la respuesta estrictamente en formato JSON con esta estructura exacta: "
+                        '{"codigo_barras": "...", "nombre_producto": "..."}'
+                        "Sin texto adicional, solo el JSON."
+                    )
+                    
+                    with st.spinner("Escaneando código de barras con Inteligencia Artificial..."):
+                        for api_k, label in keys_to_try:
+                            try:
+                                genai.configure(api_key=api_k)
+                                model = genai.GenerativeModel('gemini-3.6-flash')
+                                
+                                img_uploaded.seek(0)
+                                img_bytes = img_uploaded.read()
+                                
+                                resp = model.generate_content([
+                                    {'mime_type': img_uploaded.type, 'data': img_bytes},
+                                    prompt_scan
+                                ])
+                                
+                                raw_t = resp.text.strip()
+                                if raw_t.startswith("```json"):
+                                    raw_t = raw_t[7:]
+                                if raw_t.endswith("```"):
+                                    raw_t = raw_t[:-3]
+                                    
+                                data_res = json.loads(raw_t.strip())
+                                extracted_code = str(data_res.get("codigo_barras", "")).strip()
+                                extracted_desc = str(data_res.get("nombre_producto", "")).strip()
+                                success = True
+                                break
+                            except Exception as e:
+                                err_str = str(e)
+                                if "429" in err_str or "Quota exceeded" in err_str:
+                                    continue
+                                else:
+                                    st.error(f"Error con {label}: {e}")
+                                    break
+                    
+                    if success and extracted_code:
+                        st.markdown("### 🎯 Resultados del Escaneo")
+                        st.info(f"🔢 **Código detectado:** `{extracted_code}`\n\n🏷️ **Descripción sugerida:** `{extracted_desc}`")
+                        
+                        # Buscar en el maestro por código exacto
+                        matched_name_by_code = master_code_to_name.get(extracted_code, None)
+                        
+                        if matched_name_by_code:
+                            st.success(f"✅ ¡Encontrado en tu Maestro POS por Código de Barras!")
+                            st.markdown(f"**Nombre en Maestro:** `{matched_name_by_code}`")
+                            st.markdown(f"**Código POS:** `{extracted_code}`")
+                        else:
+                            st.warning("⚠️ El código detectado no existe exactamente en el maestro. Realizando búsqueda difusa...")
+                            final_c, status_m = validate_with_master(extracted_desc, extracted_code)
+                            st.markdown(f"**Código POS Asignado por IA / Rangos:** `{final_c}`")
+                            st.markdown(f"**Estado del match:** `{status_m}`")
+                    else:
+                        st.error("No se pudo extraer un código de barras claro de la imagen. Intenta con una foto más cercana al código.")
