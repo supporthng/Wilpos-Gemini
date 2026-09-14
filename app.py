@@ -371,23 +371,39 @@ if modulo == "📄 Factura Individual":
                 st.download_button("📥 Descargar Excel Plantilla WilPOS Actualizada", output.getvalue(), "Inventario_WilPOS_Actualizado.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
 # ==========================================
-# MÓDULO 2: MÚLTIPLES FACTURAS (LOTE)
+# MÓDULO 2: MÚLTIPLES FACTURAS (LOTE) CON PERSISTENCIA DE ESTADO BLINDADA
 # ==========================================
 elif modulo == "📂 Múltiples Facturas (Lote)":
     st.markdown("<h2>📂 Procesador por <span style='color: #0284c7;'>Lotes con Dashboard de Auditoría</span></h2>", unsafe_allow_html=True)
-    st.markdown("<p style='color: #64748b;'>Procesa múltiples facturas con control detallado de procesados, omitidos y motivos.</p>", unsafe_allow_html=True)
+    st.markdown("<p style='color: #64748b;'>Procesa múltiples facturas con control de progreso persistente para lotes grandes.</p>", unsafe_allow_html=True)
     st.markdown("---")
 
     st.markdown('<div class="card-container">', unsafe_allow_html=True)
     l_col1, l_col2 = st.columns([1, 3])
     with l_col1:
         margen_ganancia_lote = st.number_input("⚙️ Ganancia (%) Lote", min_value=0.0, max_value=500.0, value=25.0, step=1.0)
-    uploaded_files = st.file_uploader("📂 Sube tu factura (Selección múltiple)", type=["pdf", "png", "jpg", "jpeg"], accept_multiple_files=True, key="batch_files")
+    uploaded_files = st.file_uploader("📂 Sube tus facturas (Selección múltiple)", type=["pdf", "png", "jpg", "jpeg"], accept_multiple_files=True, key="batch_files")
     st.markdown('</div>', unsafe_allow_html=True)
 
     if uploaded_files:
         st.info(f"📁 Se han cargado **{len(uploaded_files)} archivo(s)** listos para procesar.")
-        if st.button("🚀 Procesar Lote y Mostrar Dashboard", type="primary"):
+        
+        # Botones de control de lote
+        b_col1, b_col2 = st.columns(2)
+        iniciar_procesamiento = b_col1.button("🚀 Procesar Lote Completo", type="primary")
+        reiniciar_lote = b_col2.button("🔄 Reiniciar / Limpiar Lote Guardado")
+
+        if reiniciar_lote:
+            if "batch_results_cache" in st.session_state:
+                del st.session_state["batch_results_cache"]
+            st.success("¡Caché de lote limpiada con éxito!")
+            st.rerun()
+
+        # Inicializar o recuperar caché en session_state para evitar pérdida por timeouts
+        if "batch_results_cache" not in st.session_state:
+            st.session_state["batch_results_cache"] = None
+
+        if iniciar_procesamiento:
             all_consolidated_items = []
             archivos_procesados_ok = 0
             audit_log = []
@@ -446,10 +462,25 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
 
             status_placeholder.success("🎉 ¡Procesamiento y auditoría de lote finalizados!")
 
+            # Guardar en caché persistente de session_state
+            st.session_state["batch_results_cache"] = {
+                "all_consolidated_items": all_consolidated_items,
+                "archivos_procesados_ok": archivos_procesados_ok,
+                "audit_log": audit_log,
+                "total_subidos": total_files
+            }
+
+        # Mostrar resultados desde la caché persistente (si existe)
+        if st.session_state["batch_results_cache"]:
+            cache = st.session_state["batch_results_cache"]
+            all_consolidated_items = cache["all_consolidated_items"]
+            archivos_procesados_ok = cache["archivos_procesados_ok"]
+            audit_log = cache["audit_log"]
+            total_subidos = cache["total_subidos"]
+
             st.markdown("---")
             st.markdown("## 📊 Dashboard de Auditoría y Procesamiento")
             
-            total_subidos = len(uploaded_files)
             total_omitidos = total_subidos - archivos_procesados_ok
 
             col_m1, col_m2, col_m3, col_m4 = st.columns(4)
@@ -580,7 +611,6 @@ elif modulo == "📋 Ver Códigos Almacenados":
         st.subheader("📂 Importación Masiva desde Excel Maestro")
         st.markdown("Al importar, los códigos de barras se leen explícitamente como texto para conservar todos los ceros a la izquierda.")
         
-        # 🔄 BOTÓN DE REINICIO RÁPIDO PARA PRUEBAS
         if st.button("🔄 Reiniciar Memoria (Borrar Todo) y Subir Nuevo Excel"):
             st.session_state["barcode_memory"] = {}
             if os.path.exists(BARCODE_MEMORY_FILE):
