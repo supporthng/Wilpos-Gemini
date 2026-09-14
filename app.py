@@ -541,7 +541,7 @@ elif modulo == "📸 Extraer Código desde Imagen":
     if img_uploaded is not None:
         st.image(img_uploaded, caption="Imagen analizada", width=400)
         if st.button("🔍 Escanear y Registrar"):
-            st.info("Escaneo rápido disponible en la versión completa.")
+            st.info("Esc rápido disponible en la versión completa.")
 
 # ==========================================
 # MÓDULO 4: VER CÓDIGOS ALMACENADOS E IMPORTAR EXCEL
@@ -586,7 +586,6 @@ elif modulo == "📋 Ver Códigos Almacenados":
         
         if excel_import_file is not None:
             try:
-                # 🛡️ Guardamos el archivo en session_state para evitar que se pierda al hacer clic en el botón
                 if "last_uploaded_excel_name" not in st.session_state or st.session_state["last_uploaded_excel_name"] != excel_import_file.name:
                     st.session_state["last_uploaded_excel_name"] = excel_import_file.name
                     if excel_import_file.name.endswith('.csv'):
@@ -596,7 +595,7 @@ elif modulo == "📋 Ver Códigos Almacenados":
 
                 df_imp = st.session_state["df_imported"]
                 
-                st.markdown(f"**Vista previa del archivo cargado ({len(df_imp)} filas):**")
+                st.markdown(f"**Vista previa del archivo cargado ({len(df_imp)} filas totales):**")
                 st.dataframe(df_imp.head(10), use_container_width=True, hide_index=True)
                 
                 cols_lower = [str(c).lower() for c in df_imp.columns]
@@ -607,11 +606,21 @@ elif modulo == "📋 Ver Códigos Almacenados":
                     if st.button("📥 Sincronizar y Guardar en Memoria", type="primary"):
                         nuevos = 0
                         actualizados = 0
-                        for _, row in df_imp.iterrows():
+                        omitidos = 0
+                        log_omitidos = []
+
+                        for idx, row in df_imp.iterrows():
                             c_val = clean_barcode(row[c_code])
                             n_val = str(row[c_name]).strip().upper()
                             
-                            if c_val == "S/C (Sin Código)" or not n_val or n_val in ["NAN", "NONE"]:
+                            # Validaciones de omisión
+                            if c_val == "S/C (Sin Código)" or not c_val:
+                                omitidos += 1
+                                log_omitidos.append({"Fila": idx + 2, "Nombre": n_val if n_val else "N/A", "Motivo": "Código de barras ausente o inválido"})
+                                continue
+                            if not n_val or n_val in ["NAN", "NONE", ""]:
+                                omitidos += 1
+                                log_omitidos.append({"Fila": idx + 2, "Código Barra": c_val, "Motivo": "Nombre de producto vacío o inválido"})
                                 continue
                                 
                             if c_val in st.session_state["barcode_memory"]:
@@ -624,11 +633,20 @@ elif modulo == "📋 Ver Códigos Almacenados":
                                 
                         save_json_file(BARCODE_MEMORY_FILE, st.session_state["barcode_memory"])
                         
-                        st.success(f"🎯 ¡Sincronización completada con éxito! Se procesaron {len(df_imp)} filas protegiendo los ceros a la izquierda.")
+                        st.success(f"🎯 ¡Sincronización completada con éxito protegiendo los ceros a la izquierda!")
                         
-                        col_r1, col_r2 = st.columns(2)
-                        col_r1.metric("✨ Productos Nuevos Agregados", nuevos)
-                        col_r2.metric("🔄 Productos Actualizados", actualizados)
+                        # 📊 DASHBOARD DE RESULTADOS DE IMPORTACIÓN EXCEL
+                        col_r1, col_r2, col_r3 = st.columns(3)
+                        col_r1.metric("✨ Nuevos Agregados", nuevos)
+                        col_r2.metric("🔄 Actualizados", actualizados)
+                        col_r3.metric("⚠️ Omitidos / Descartados", omitidos)
+
+                        if log_omitidos:
+                            st.markdown("### 📋 Detalle de Productos Omitidos y Motivo")
+                            df_omit = pd.DataFrame(log_omitidos)
+                            st.dataframe(df_omit, use_container_width=True, hide_index=True)
+                        else:
+                            st.info("✅ Excelente: No hubo ningún producto omitido; todas las filas del Excel fueron procesadas con éxito.")
                 else:
                     st.error("❌ No se pudieron detectar automáticamente las columnas 'Código Barra' y 'Nombre' en el archivo.")
             except Exception as ex:
