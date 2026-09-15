@@ -131,23 +131,13 @@ def safe_int(val, default=1):
 def round_to_nearest_5(x):
     return round(round(x / 5) * 5, 2)
 
-def is_valid_standard_barcode(code_val):
-    if not code_val:
-        return False
-    s = str(code_val).strip()
-    if s.endswith('.0'):
-        s = s[:-2]
-    if s.lower() in ["nan", "none", "", "s/c", "sin codigo", "n/a", "0"]:
-        return False
-    return s.isdigit() and 8 <= len(s) <= 14
-
 def clean_barcode(code_val):
     if not code_val:
         return "S/C (Sin Código)"
     s_val = str(code_val).strip()
     if s_val.endswith('.0'):
         s_val = s_val[:-2]
-    if s_val.lower() in ["nan", "none", "", "s/c"]:
+    if s_val.lower() in ["nan", "none", "", "s/c", "sin codigo"]:
         return "S/C (Sin Código)"
     return s_val
 
@@ -164,7 +154,7 @@ modulo = st.sidebar.radio(
 )
 
 # ==========================================
-# MOTOR INTELIGENTE DE EMPAREJAMIENTO SEGURO
+# MOTOR MAESTRO INTELIGENTE (INDEPENDIENTE DEL ORDEN)
 # ==========================================
 def match_official_barcode(item_description):
     raw_name = str(item_description).strip().upper()
@@ -184,7 +174,7 @@ def match_official_barcode(item_description):
     best_code = "S/C (Sin Código)"
     best_name = raw_name
 
-    # 2. Búsqueda por tokens (sin importar orden de palabras)
+    # 2. Búsqueda por solapamiento de palabras clave (tokens), sin importar el orden
     for master_name, code in b_mem.items():
         norm_master = normalize_text(master_name)
         master_tokens = set(norm_master.split())
@@ -203,7 +193,8 @@ def match_official_barcode(item_description):
             best_code = code
             best_name = master_name
 
-    if best_score >= 0.45:
+    # Umbral flexible para garantizar cruce de nombres con distintas estructuras
+    if best_score >= 0.40:
         return clean_barcode(best_code), best_name, f"Smart Match ({best_score:.2f})"
 
     return "S/C (Sin Código)", raw_name, "⚠️ Sin Coincidencia en Maestro"
@@ -225,9 +216,9 @@ def audit_and_correct_cost(costo_unit, cantidad, empaque):
 def process_invoice_with_ai(file_obj, file_type):
     prompt_text = (
         "Analiza esta factura detalladamente. Extrae los datos de cabecera: 'emisor_rnc', 'emisor_nombre', 'numero_documento', 'fecha', 'subtotal', 'itbis', 'total'. "
-        "Para cada ítem, extrae unícamente: 'codigo_barra_factura', 'descripcion', 'cantidad', 'empaque', y 'costo_sin_itbis'. "
+        "Para cada ítem, extrae unícamente: 'descripcion', 'cantidad', 'empaque', y 'costo_sin_itbis'. "
         "Devuelve la información estrictamente en formato JSON con la siguiente estructura exacta: "
-        '{"emisor_rnc": "...", "emisor_nombre": "...", "numero_documento": "...", "fecha": "...", "subtotal": 0.0, "itbis": 0.0, "total": 0.0, "items": [{"codigo_barra_factura": "...", "descripcion": "...", "cantidad": 1, "empaque": 1, "costo_sin_itbis": 0.0}]}. '
+        '{"emisor_rnc": "...", "emisor_nombre": "...", "numero_documento": "...", "fecha": "...", "subtotal": 0.0, "itbis": 0.0, "total": 0.0, "items": [{"descripcion": "...", "cantidad": 1, "empaque": 1, "costo_sin_itbis": 0.0}]}. '
         "Respuesta JSON pura sin texto adicional."
     )
 
@@ -576,7 +567,7 @@ elif modulo == "📋 Ver Códigos Almacenados":
                 df_master = pd.read_excel(master_upload, sheet_name=0, dtype=str)
                 new_memory = {}
                 
-                # DETECCIÓN AUTOMÁTICA DE COLUMNAS (Código vs Nombre) sin importar el orden en el Excel
+                # Detección automática inteligente de columnas (Código vs Nombre)
                 col_code = None
                 col_name = None
                 for c in df_master.columns:
@@ -586,7 +577,6 @@ elif modulo == "📋 Ver Códigos Almacenados":
                     elif 'nombre' in c_low or 'descripcion' in c_low or 'producto' in c_low:
                         col_name = c
                 
-                # Fallback por índice si no encuentra nombres de columna exactos
                 if not col_code or not col_name:
                     col_code = df_master.columns[0]
                     col_name = df_master.columns[1]
@@ -595,7 +585,7 @@ elif modulo == "📋 Ver Códigos Almacenados":
                     val_a = str(r[col_code]).strip()
                     val_b = str(r[col_name]).strip()
                     
-                    # Detectar automáticamente cuál es el código (suele ser numérico o más corto) y cuál es el nombre
+                    # Asignación segura sin importar el orden de las columnas en el Excel
                     if val_a.isdigit() or len(val_a) <= 15:
                         c_val, n_val = val_a, val_b.upper()
                     else:
@@ -609,7 +599,7 @@ elif modulo == "📋 Ver Códigos Almacenados":
                 if new_memory:
                     st.session_state["barcode_memory"] = new_memory
                     save_json_file(BARCODE_MEMORY_FILE, new_memory)
-                    st.success(f"¡Se almacenaron {len(new_memory)} productos con éxito en el sistema de forma correcta!")
+                    st.success(f"¡Se almacenaron {len(new_memory)} productos con éxito en el sistema!")
                     st.rerun()
                 else:
                     st.error("No se encontraron registros válidos en el archivo.")
