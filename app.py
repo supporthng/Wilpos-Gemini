@@ -96,7 +96,6 @@ def save_json_file(filepath, data_dict):
     except Exception as e:
         print(f"Error guardando {filepath}: {e}")
 
-# Inicialización segura de la memoria en session_state
 if "barcode_memory" not in st.session_state:
     st.session_state["barcode_memory"] = load_json_file(BARCODE_MEMORY_FILE)
 
@@ -162,12 +161,15 @@ modulo = st.sidebar.radio(
 )
 
 # ==========================================
-# MOTOR DE EMPAREJAMIENTO ESTRICTO
+# MOTOR DE EMPAREJAMIENTO FLEXIBLE Y ROBUSTO
 # ==========================================
 def match_official_barcode(item_description):
     raw_name = str(item_description).strip().upper()
     b_mem = st.session_state["barcode_memory"]
     
+    if not b_mem:
+        return None, raw_name, "❌ Memoria Vacía"
+
     # 1. Coincidencia Exacta
     if raw_name in b_mem:
         code = clean_barcode(b_mem[raw_name])
@@ -184,7 +186,7 @@ def match_official_barcode(item_description):
         if code:
             return code, orig_name, "Normalizado Avanzado"
 
-    # 3. Coincidencia Fuzzy (Similitud alta >= 0.85)
+    # 3. Coincidencia Fuzzy (Umbral flexible >= 0.70)
     best_ratio = 0.0
     best_code = None
     best_name = raw_name
@@ -196,11 +198,10 @@ def match_official_barcode(item_description):
             best_code = clean_barcode(code_raw)
             best_name = orig_name
 
-    if best_ratio >= 0.85 and best_code:
+    if best_ratio >= 0.70 and best_code:
         return best_code, best_name, f"Fuzzy ({best_ratio:.2f})"
 
-    # Si no está validado en el maestro, se rechaza
-    return None, raw_name, "❌ Rechazado (No Validado)"
+    return None, raw_name, f"❌ No encontrado (Mejor sim: {best_ratio:.2f})"
 
 def audit_and_correct_cost(costo_unit, cantidad, empaque):
     c = safe_float(costo_unit)
@@ -286,6 +287,7 @@ if modulo == "📄 Factura Individual":
                 st.success(success_msg)
                 data_items = parsed_data.get("items", [])
                 rows_preview = []
+                debug_rejected = []
                 multiplicador_ganancia = 1 + (margen_ganancia / 100.0)
 
                 for idx, item in enumerate(data_items, start=1):
@@ -293,6 +295,7 @@ if modulo == "📄 Factura Individual":
                     
                     official_code, matched_name, status_match = match_official_barcode(desc)
                     if not official_code:
+                        debug_rejected.append({"Descripción Leída": desc, "Motivo": status_match})
                         continue
 
                     raw_costo = safe_float(item.get("costo_sin_itbis", 0))
@@ -319,7 +322,7 @@ if modulo == "📄 Factura Individual":
                 if rows_preview:
                     df_resultado = pd.DataFrame(rows_preview)
                     df_resultado["Código Oficial POS"] = df_resultado["Código Oficial POS"].astype(str)
-                    st.success(f"✅ Se validaron e incluyeron **{len(rows_preview)} productos** (los no encontrados en el maestro fueron omitidos automáticamente).")
+                    st.success(f"✅ Se validaron e incluyeron **{len(rows_preview)} productos**.")
                     st.dataframe(df_resultado, use_container_width=True, hide_index=True)
                     
                     wb = openpyxl.Workbook()
@@ -354,8 +357,10 @@ if modulo == "📄 Factura Individual":
                     output = io.BytesIO()
                     wb.save(output)
                     st.download_button("📥 Descargar Excel WilPOS Oficial", output.getvalue(), "Inventario_WilPOS_Actualizado.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-                else:
-                    st.warning("⚠️ Ningún ítem de la factura coincidió con los productos validados de tu memoria maestra.")
+                
+                if debug_rejected:
+                    with st.expander(f"🔍 Ver ítems rechazados u omitidos ({len(debug_rejected)})"):
+                        st.dataframe(pd.DataFrame(debug_rejected), use_container_width=True)
 
 # ==========================================
 # MÓDULO 2: MÚLTIPLES FACTURAS (LOTE)
@@ -389,6 +394,7 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
         if "batch_accumulated_items" not in st.session_state:
             st.session_state["batch_accumulated_items"] = []
             st.session_state["batch_audit_log"] = []
+            st.session_state["batch_rejected_log"] = []
             st.session_state["batch_signatures"] = set()
             st.session_state["batch_processed_count"] = 0
             st.session_state["batch_ok_count"] = 0
@@ -403,6 +409,7 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
         if reiniciar_lote:
             st.session_state["batch_accumulated_items"] = []
             st.session_state["batch_audit_log"] = []
+            st.session_state["batch_rejected_log"] = []
             st.session_state["batch_signatures"] = set()
             st.session_state["batch_processed_count"] = 0
             st.session_state["batch_ok_count"] = 0
@@ -450,7 +457,17 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
                         })
                         items = parsed_data.get("items", [])
                         if isinstance(items, list):
-                            st.session_state["batch_accumulated_items"].extend(items)
+                            for it in items:
+                                desc = str(it.get("descripcion", ""))
+                                code, matched_name, status = match_official_barcode(desc)
+                                if code:
+                                    st.session_state["batch_accumulated_items"].append(it)
+                                else:
+                                    st.session_state["batch_rejected_log"].append({
+                                        "Archivo": file_info["name"],
+                                        "Descripción Leída": desc,
+                                        "Motivo": status
+                                    })
                 else:
                     st.session_state["batch_audit_log"].append({
                         "Archivo": file_info["name"], "Estado": "🔴 Error IA"
@@ -570,6 +587,10 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
             else:
                 st.warning("⚠️ No se encontraron productos validados en las facturas del lote.")
 
+            if "batch_rejected_log" in st.session_state and st.session_state["batch_rejected_log"]:
+                with st.expander(f"🔍 Ver ítems rechazados en el lote ({len(st.session_state['batch_rejected_log'])})"):
+                    st.dataframe(pd.DataFrame(st.session_state["batch_rejected_log"]), use_container_width=True)
+
 # ==========================================
 # MÓDULO 3: VER CÓDIGOS ALMACENADOS & CARGAR MAESTRO
 # ==========================================
@@ -578,7 +599,6 @@ elif modulo == "📋 Ver Códigos Almacenados":
     st.markdown("<p style='color: #64748b;'>Sube tu archivo Excel maestro y gestiona el diccionario oficial de productos validados.</p>", unsafe_allow_html=True)
     st.markdown("---")
 
-    # Tarjeta de Carga del Archivo Maestro
     st.markdown('<div class="card-container">', unsafe_allow_html=True)
     st.markdown("### 📥 Cargar Archivo Maestro")
     st.markdown("Sube tu Excel Maestro (`.xlsx` o `.xls`) con columnas de códigos y nombres de productos.")
@@ -615,7 +635,7 @@ elif modulo == "📋 Ver Códigos Almacenados":
         df_codes["Código de Barras Oficial"] = df_codes["Código de Barras Oficial"].astype(str)
         st.dataframe(df_codes, use_container_width=True, hide_index=True, height=450)
         
-        if st.button("🗑️ Borrar Memoria Almacenada"):
+        if st.button("🗑️ Memoria Almacenada"):
             st.session_state["barcode_memory"] = {}
             if os.path.exists(BARCODE_MEMORY_FILE):
                 os.remove(BARCODE_MEMORY_FILE)
