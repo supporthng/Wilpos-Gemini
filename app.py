@@ -198,20 +198,17 @@ with st.sidebar.expander("🛠️ Correcciones Manuales"):
         st.info("Sin reglas manuales.")
 
 # ==========================================
-# MOTOR DE EMPAREJAMIENTO ESTRICTO CON MAESTRO
+# MOTOR DE EMPAREJAMIENTO Y COSTOS INTELIGENTE
 # ==========================================
 def validate_with_master(item_description, original_code):
     clean_desc_key = str(item_description).strip().upper()
     
-    # 1. Reglas inmediatas
     if "CORONA CERO" in clean_desc_key or "CERO 355" in clean_desc_key:
         return "750304423180", "Actualizado (Regla Maestra Inmediata Corona Cero)"
 
-    # 2. Coincidencia Exacta en el Maestro
     if master_code_dict and clean_desc_key in master_code_dict:
         return clean_barcode(master_code_dict[clean_desc_key]), "Actualizado (Maestro Exacto)"
 
-    # 3. Memoria viva o Correcciones manuales
     if clean_desc_key in st.session_state["product_overrides"]:
         return clean_barcode(st.session_state["product_overrides"][clean_desc_key]), "Actualizado (Regla Guardada)"
 
@@ -220,7 +217,6 @@ def validate_with_master(item_description, original_code):
         if b_name == clean_desc_key:
             return clean_barcode(b_code), "Actualizado (Memoria Viva)"
 
-    # 4. Código original de factura
     clean_orig_code = clean_barcode(original_code)
     if clean_orig_code != "S/C (Sin Código)":
         b_mem[clean_orig_code] = clean_desc_key
@@ -229,16 +225,31 @@ def validate_with_master(item_description, original_code):
 
     return "S/C (Sin Código)", "⚠️ Sin Código Detectado"
 
-def audit_and_correct_cost(costo_unit, cantidad, empaque):
+def audit_and_correct_cost(costo_unit, cantidad, empaque, master_row=None):
     c = safe_float(costo_unit)
     cant = safe_int(cantidad, 1)
     emp = safe_int(empaque, 1)
-    if emp == 1 and cant > 1:
+    
+    if emp <= 1:
         return c
-    if c > 5000 and (cant * emp) > 1:
-        corrected = c / (cant * emp)
-        if corrected > 0:
-            return corrected
+        
+    # Verificar contra el maestro si está disponible
+    if master_row and 'Costo' in master_row:
+        try:
+            m_cost = float(master_row['Costo'])
+            if m_cost > 0:
+                if abs(c - (m_cost * emp)) / (m_cost * emp) < 0.25:
+                    return c / emp
+                if abs(c - m_cost) / m_cost < 0.25:
+                    return c
+        except Exception:
+            pass
+            
+    # Heurística inteligente: si el costo es de bulto/caja (> 800) y al dividirlo entre el empaque da un costo unitario válido
+    if c > 800 and (c / emp) < c:
+        if (c / emp) >= 5:
+            return c / emp
+            
     return c
 
 def process_invoice_with_ai(file_obj, file_type):
@@ -298,7 +309,7 @@ def process_invoice_with_ai(file_obj, file_type):
 # ==========================================
 if modulo == "📄 Factura Individual":
     st.markdown("<h2>📊 Automatizador de Facturas <span style='color: #0284c7;'>(Individual)</span></h2>", unsafe_allow_html=True)
-    st.markdown("<p style='color: #64748b;'>Sube tu factura individual con validación exacta contra el maestro.</p>", unsafe_allow_html=True)
+    st.markdown("<p style='color: #64748b;'>Sube tu factura individual con validación exacta y auditoría de costos.</p>", unsafe_allow_html=True)
     st.markdown("---")
 
     st.markdown('<div class="card-container">', unsafe_allow_html=True)
@@ -329,7 +340,10 @@ if modulo == "📄 Factura Individual":
                     raw_costo = safe_float(item.get("costo_sin_itbis", 0))
                     cant_comprada = safe_int(item.get("cantidad", 1), 1)
                     empaque_val = safe_int(item.get("empaque", 1), 1)
-                    costo = audit_and_correct_cost(raw_costo, cant_comprada, empaque_val)
+                    
+                    master_row_data = master_row_dict.get(desc.strip().upper(), {})
+                    costo = audit_and_correct_cost(raw_costo, cant_comprada, empaque_val, master_row_data)
+
                     raw_pv = (costo * multiplicador_ganancia) * 1.18
                     precio_venta = round_to_nearest_5(raw_pv)
                     stock_val = cant_comprada * empaque_val
@@ -384,11 +398,11 @@ if modulo == "📄 Factura Individual":
                 st.download_button("📥 Descargar Excel Plantilla WilPOS Actualizada", output.getvalue(), "Inventario_WilPOS_Actualizado.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
 # ==========================================
-# MÓDULO 2: MÚLTIPLES FACTURAS (LOTE CON CONSOLIDACIÓN MAESTRA)
+# MÓDULO 2: MÚLTIPLES FACTURAS (LOTE CON COSTOS INTELIGENTES Y CONSOLIDACIÓN)
 # ==========================================
 elif modulo == "📂 Múltiples Facturas (Lote)":
-    st.markdown("<h2>📂 Procesador por <span style='color: #0284c7;'>Lotes con Consolidación Maestra</span></h2>", unsafe_allow_html=True)
-    st.markdown("<p style='color: #64748b;'>Procesa tus facturas en vivo, validando estrictamente con el maestro y consolidando duplicados.</p>", unsafe_allow_html=True)
+    st.markdown("<h2>📂 Procesador por <span style='color: #0284c7;'>Lotes con Auditoría de Costos y Consolidación</span></h2>", unsafe_allow_html=True)
+    st.markdown("<p style='color: #64748b;'>Procesa tus facturas en vivo con cálculo correcto de costos unitarios y sin duplicados.</p>", unsafe_allow_html=True)
     st.markdown("---")
 
     st.markdown('<div class="card-container">', unsafe_allow_html=True)
@@ -420,7 +434,7 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
         processed_so_far = st.session_state["batch_processed_count"]
 
         b_col1, b_col2 = st.columns(2)
-        iniciar_btn = b_col1.button("🚀 Iniciar Procesamiento y Consolidación Maestro", type="primary")
+        iniciar_btn = b_col1.button("🚀 Iniciar Procesamiento y Consolidación", type="primary")
         reiniciar_lote = b_col2.button("🔄 Reiniciar / Limpiar Lote")
 
         if reiniciar_lote:
@@ -533,10 +547,6 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
                     raw_costo = safe_float(item.get("costo_sin_itbis", 0))
                     cant_comprada = safe_int(item.get("cantidad", 1), 1)
                     empaque_val = safe_int(item.get("empaque", 1), 1)
-                    costo = audit_and_correct_cost(raw_costo, cant_comprada, empaque_val)
-                    raw_pv = (costo * multiplicador_ganancia) * 1.18
-                    precio_venta = round_to_nearest_5(raw_pv)
-                    stock_val = cant_comprada * empaque_val
                     
                     clean_desc_key = desc.strip().upper()
                     master_matched_name = clean_desc_key
@@ -544,6 +554,11 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
                         master_matched_name = clean_desc_key
 
                     m_row = master_row_dict.get(master_matched_name, {})
+                    costo = audit_and_correct_cost(raw_costo, cant_comprada, empaque_val, m_row)
+
+                    raw_pv = (costo * multiplicador_ganancia) * 1.18
+                    precio_venta = round_to_nearest_5(raw_pv)
+                    stock_val = cant_comprada * empaque_val
 
                     processed_rows.append({
                         "Nombre": master_matched_name if final_code != "S/C (Sin Código)" else desc,
@@ -624,7 +639,7 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
 
                 output = io.BytesIO()
                 wb.save(output)
-                st.download_button("📥 Descargar Excel Consolidado Final (Sin Duplicados y Códigos Maestros)", output.getvalue(), "Inventario_WilPOS_Consolidado_Corregido.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+                st.download_button("📥 Descargar Excel Consolidado Final (Sin Duplicados y Costos Correctos)", output.getvalue(), "Inventario_WilPOS_Consolidado_Corregido.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
 # ==========================================
 # MÓDULO 3: EXTRAER CÓDIGO DESDE IMAGEN
