@@ -109,7 +109,7 @@ if "product_overrides" not in st.session_state:
 if "barcode_memory" not in st.session_state:
     st.session_state["barcode_memory"] = load_json_file(BARCODE_MEMORY_FILE)
 
-# Cargar inventario maestro para validación estricta
+# Cargar inventario maestro y preparar índices normalizados para búsqueda flexible
 @st.cache_data
 def load_master_inventory():
     if os.path.exists(MASTER_INVENTORY_FILE):
@@ -117,19 +117,41 @@ def load_master_inventory():
             df_m = pd.read_excel(MASTER_INVENTORY_FILE, sheet_name=0, dtype=str)
             code_dict = {}
             row_dict = {}
+            normalized_master = {}
+            
             for _, row in df_m.iterrows():
-                name_clean = str(row['Nombre']).strip().upper()
+                name_raw = str(row['Nombre']).strip()
+                name_clean = name_raw.upper()
                 code_val = str(row['Código Barra']).strip()
                 if code_val.endswith('.0'):
                     code_val = code_val[:-2]
+                
                 code_dict[name_clean] = code_val
                 row_dict[name_clean] = row.to_dict()
-            return code_dict, row_dict
+                
+                # Crear clave normalizada (palabras clave + volumen)
+                norm_key = normalize_text(name_clean)
+                words_set = set(w for w in norm_key.split() if len(w) > 2 or w in {'500ML', '330ML', '750ML', '1L', '1.0LT', '221ML', '75CL'})
+                normalized_master[name_clean] = {
+                    'code': code_val,
+                    'words': words_set
+                }
+                
+            return code_dict, row_dict, normalized_master
         except Exception as e:
             print(f"Error cargando inventario maestro: {e}")
-    return {}, {}
+    return {}, {}, {}
 
-master_code_dict, master_row_dict = load_master_inventory()
+master_code_dict, master_row_dict, master_normalized_dict = load_master_inventory()
+
+def normalize_text(text):
+    t = str(text).upper()
+    # Normalizar volúmenes y presentaciones comunes
+    t = t.replace('50 CL', '500ML').replace('500 CL', '500ML').replace('33 CL', '330ML').replace('330 CL', '330ML')
+    t = t.replace('CERVEZA', '').replace('VINO', '').replace('RON', '').replace('TEQUILA', '').replace('WHISKY', '')
+    for ch in ['/', '-', ',', '.', '(', ')', '%', '+']:
+        t = t.replace(ch, ' ')
+    return " ".join(t.split())
 
 # Funciones auxiliares
 def safe_float(val, default=0.0):
@@ -198,42 +220,70 @@ with st.sidebar.expander("🛠️ Correcciones Manuales"):
         st.info("Sin reglas manuales.")
 
 # ==========================================
-# MOTOR DE INTELIGENCIA Y EMPAREJAMIENTO CON MAESTRO
+# MOTOR DE EMPAREJAMIENTO FLEXIBLE Y ROBUSTO
 # ==========================================
 def validate_with_master(item_description, original_code):
     clean_desc_key = str(item_description).strip().upper()
     
+    # 1. Reglas inmediatas
     if "CORONA CERO" in clean_desc_key or "CERO 355" in clean_desc_key:
         return "750304423180", "Actualizado (Regla Maestra Inmediata Corona Cero)"
 
-    # 1. Buscar coincidencia exacta en el inventario maestro
-    if master_code_dict and clean_desc_key in master_code_dict:
-        return clean_barcode(master_code_dict[clean_desc_key]), "Actualizado (Maestro Exacto)"
-
-    # 2. Buscar similitud difusa en el inventario maestro
-    if master_code_dict:
-        master_names = list(master_code_dict.keys())
-        close_matches = difflib.get_close_matches(clean_desc_key, master_names, n=1, cutoff=0.60)
-        if close_matches:
-            matched_name = close_matches[0]
-            code_found = master_code_dict[matched_name]
-            return clean_barcode(code_found), f"Actualizado (Maestro por Similitud: '{matched_name}')"
-
-    # 3. Correcciones manuales uverrides
-    if clean_desc_key in st.session_state["product_overrides"]:
-        return clean_barcode(st.session_state["product_overrides"][clean_desc_key]), "Actualizado (Regla Guardada)"
-
-    # 4. Memoria viva de códigos
+    # 2. Memoria Viva de Códigos Almacenados (Exacto)
     b_mem = st.session_state["barcode_memory"]
     for b_code, b_name in b_mem.items():
         if b_name == clean_desc_key:
-            return clean_barcode(b_code), "Actualizado (Memoria Viva Exacta)"
+            return clean_barcode(b_code), "Actualizado (Memoria Viva Almacenada)"
 
+    # 3. Correcciones manuales (Overrides)
+    if clean_desc_key in st.session_state["product_overrides"]:
+        return clean_barcode(st.session_state["product_overrides"][clean_desc_key]), "Actualizado (Regla Guardada)"
+
+    # 4. Coincidencia Exacta en el Maestro
+    if master_code_dict and clean_desc_key in master_code_dict:
+        return clean_barcode(master_code_dict[clean_desc_key]), "Actualizado (Maestro Exacto)"
+
+    # 5. Búsqueda Inteligente por Palabras Clave (Orden flexible y presentación)
+    norm_inv = normalize_text(clean_desc_key)
+    inv_words = [w for w in norm_inv.split() if len(w) > 2 or w in {'500ML', '330ML', '750ML', '1L', '1.0LT', '221ML', '75CL'}]
+    inv_set = set(inv_words)
+
+    best_code = None
+    best_matched_name = clean_desc_key
+    max_score = 0.0
+
+    vol_tokens = {'500ML', '330ML', '750ML', '1L', '1.0LT', '221ML', '75CL'}
+    inv_vol = inv_set.intersection(vol_tokens)
+
+    for m_name, info in master_normalized_dict.items():
+        m_set = info['words']
+        if not inv_set or not m_set:
+            continue
+            
+        common = inv_set.intersection(m_set)
+        score = len(common) / max(len(inv_set), len(m_set))
+        
+        m_vol = m_set.intersection(vol_tokens)
+        if inv_vol and m_vol:
+            if inv_vol == m_vol:
+                score += 0.3 # Bonificación por volumen correcto
+            else:
+                score -= 0.4 # Penalización si el volumen no coincide
+                
+        if score > max_score:
+            max_score = score
+            best_code = info['code']
+            best_matched_name = m_name
+
+    if max_score >= 0.42 and best_code:
+        return clean_barcode(best_code), f"Actualizado (Maestro Flexible por Palabras: '{best_matched_name}')"
+
+    # 6. Si la factura trae código original válido
     clean_orig_code = clean_barcode(original_code)
     if clean_orig_code != "S/C (Sin Código)":
         b_mem[clean_orig_code] = clean_desc_key
         save_json_file(BARCODE_MEMORY_FILE, b_mem)
-        return clean_orig_code, "✨ Nuevo Código Registrado en Memoria"
+        return clean_orig_code, "✨ Código Original Registrado en Memoria"
 
     return "S/C (Sin Código)", "⚠️ Sin Código Detectado"
 
@@ -306,7 +356,7 @@ def process_invoice_with_ai(file_obj, file_type):
 # ==========================================
 if modulo == "📄 Factura Individual":
     st.markdown("<h2>📊 Automatizador de Facturas <span style='color: #0284c7;'>(Individual)</span></h2>", unsafe_allow_html=True)
-    st.markdown("<p style='color: #64748b;'>Sube tu factura individual con validación estricta contra el maestro.</p>", unsafe_allow_html=True)
+    st.markdown("<p style='color: #64748b;'>Sube tu factura individual con búsqueda flexible por palabras clave.</p>", unsafe_allow_html=True)
     st.markdown("---")
 
     st.markdown('<div class="card-container">', unsafe_allow_html=True)
@@ -392,11 +442,11 @@ if modulo == "📄 Factura Individual":
                 st.download_button("📥 Descargar Excel Plantilla WilPOS Actualizada", output.getvalue(), "Inventario_WilPOS_Actualizado.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
 # ==========================================
-# MÓDULO 2: MÚLTIPLES FACTURAS (LOTE CON CONSOLIDACIÓN AUTOMÁTICA)
+# MÓDULO 2: MÚLTIPLES FACTURAS (LOTE CON CONSOLIDACIÓN Y BÚSQUEDA FLEXIBLE)
 # ==========================================
 elif modulo == "📂 Múltiples Facturas (Lote)":
-    st.markdown("<h2>📂 Procesador por <span style='color: #0284c7;'>Lotes con Consolidación Inteligente</span></h2>", unsafe_allow_html=True)
-    st.markdown("<p style='color: #64748b;'>Procesa tus facturas en vivo, validando con el maestro y consolidando duplicados automáticamente.</p>", unsafe_allow_html=True)
+    st.markdown("<h2>📂 Procesador por <span style='color: #0284c7;'>Lotes con Coincidencia Flexible y Consolidación</span></h2>", unsafe_allow_html=True)
+    st.markdown("<p style='color: #64748b;'>Procesa tus facturas reconociendo palabras clave sin importar orden ni presentación exacta.</p>", unsafe_allow_html=True)
     st.markdown("---")
 
     st.markdown('<div class="card-container">', unsafe_allow_html=True)
@@ -428,7 +478,7 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
         processed_so_far = st.session_state["batch_processed_count"]
 
         b_col1, b_col2 = st.columns(2)
-        iniciar_btn = b_col1.button("🚀 Iniciar Procesamiento y Consolidación en Vivo", type="primary")
+        iniciar_btn = b_col1.button("🚀 Iniciar Procesamiento y Consolidación Inteligente", type="primary")
         reiniciar_lote = b_col2.button("🔄 Reiniciar / Limpiar Lote")
 
         if reiniciar_lote:
@@ -546,20 +596,26 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
                     precio_venta = round_to_nearest_5(raw_pv)
                     stock_val = cant_comprada * empaque_val
                     
-                    # Usar nombre maestro si hay coincidencia exacta o cercana
+                    # Determinar nombre maestro estandarizado si aplica
                     clean_desc_key = desc.strip().upper()
                     master_matched_name = clean_desc_key
                     if master_code_dict:
                         if clean_desc_key in master_code_dict:
-                            # Encontrar la llave exacta del maestro
-                            for mk in master_code_dict.keys():
-                                if mk == clean_desc_key:
-                                    master_matched_name = mk
-                                    break
+                            master_matched_name = clean_desc_key
                         else:
-                            close_m = difflib.get_close_matches(clean_desc_key, list(master_code_dict.keys()), n=1, cutoff=0.60)
-                            if close_m:
-                                master_matched_name = close_m[0]
+                            # Encontrar coincidencia por palabras clave
+                            norm_inv = normalize_text(clean_desc_key)
+                            inv_words = [w for w in norm_inv.split() if len(w) > 2 or w in {'500ML', '330ML', '750ML', '1L', '1.0LT', '221ML', '75CL'}]
+                            inv_set = set(inv_words)
+                            best_s = 0.0
+                            for m_n, info in master_normalized_dict.items():
+                                m_set = info['words']
+                                if not inv_set or not m_set: continue
+                                comm = inv_set.intersection(m_set)
+                                sc = len(comm) / max(len(inv_set), len(m_set))
+                                if sc > best_s:
+                                    best_s = sc
+                                    master_matched_name = m_n
 
                     m_row = master_row_dict.get(master_matched_name, {})
 
@@ -642,7 +698,7 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
 
                 output = io.BytesIO()
                 wb.save(output)
-                st.download_button("📥 Descargar Excel Consolidado Final (Sin Duplicados y Códigos del Maestro)", output.getvalue(), "Inventario_WilPOS_Consolidado_Corregido.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+                st.download_button("📥 Descargar Excel Consolidado Final (Sin Duplicados y Códigos Flexibles)", output.getvalue(), "Inventario_WilPOS_Consolidado_Corregido.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
 # ==========================================
 # MÓDULO 3: EXTRAER CÓDIGO DESDE IMAGEN
