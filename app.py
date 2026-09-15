@@ -109,7 +109,27 @@ if "product_overrides" not in st.session_state:
 if "barcode_memory" not in st.session_state:
     st.session_state["barcode_memory"] = load_json_file(BARCODE_MEMORY_FILE)
 
-# Cargar inventario maestro exacto
+# Normalizador Avanzado de Textos y Volúmenes
+def normalize_text(text):
+    if not isinstance(text, str):
+        return ""
+    t = text.upper()
+    # Normalizar volúmenes y abreviaturas
+    t = t.replace(' 5CL', ' 50 ML').replace(' 5 CL', ' 50 ML').replace('5CL', '50 ML')
+    t = t.replace(' 75CL', ' 750 ML').replace(' 75 CL', ' 750 ML').replace('75CL', '750 ML')
+    t = t.replace(' 1L', ' 1000 ML').replace(' 1 LT', ' 1000 ML').replace('1L', '1000 ML')
+    t = t.replace(' 33CL', ' 330 ML').replace('33CL', '330 ML').replace(' 50CL', ' 500 ML').replace('50CL', '500 ML')
+    
+    # Remover palabras de ruido comercial
+    clutter = ['MIN.', 'MINI', 'UN.', 'UNIDAD', 'BOT.', 'BOTELLA', 'LATA', 'HU', 'PTE.', 'CJ']
+    for w in clutter:
+        t = t.replace(w, '')
+        
+    for ch in ['/', '-', ',', '.', '(', ')', '%', '+', '"', "'"]:
+        t = t.replace(ch, ' ')
+    return " ".join(t.split())
+
+# Cargar inventario maestro con índice normalizado avanzado
 @st.cache_data
 def load_master_inventory():
     if os.path.exists(MASTER_INVENTORY_FILE):
@@ -117,19 +137,26 @@ def load_master_inventory():
             df_m = pd.read_excel(MASTER_INVENTORY_FILE, sheet_name=0, dtype=str)
             code_dict = {}
             row_dict = {}
+            norm_dict = {}
             for _, row in df_m.iterrows():
-                name_clean = str(row['Nombre']).strip().upper()
+                orig_name = str(row['Nombre']).strip()
                 code_val = str(row['Código Barra']).strip()
                 if code_val.endswith('.0'):
                     code_val = code_val[:-2]
-                code_dict[name_clean] = code_val
-                row_dict[name_clean] = row.to_dict()
-            return code_dict, row_dict
+                
+                up_orig = orig_name.upper()
+                norm_key = normalize_text(up_orig)
+                
+                code_dict[up_orig] = code_val
+                row_dict[up_orig] = row.to_dict()
+                if norm_key:
+                    norm_dict[norm_key] = (code_val, orig_name, row.to_dict())
+            return code_dict, row_dict, norm_dict
         except Exception as e:
             print(f"Error cargando inventario maestro: {e}")
-    return {}, {}
+    return {}, {}, {}
 
-master_code_dict, master_row_dict = load_master_inventory()
+master_code_dict, master_row_dict, master_norm_dict = load_master_inventory()
 
 # Funciones auxiliares
 def safe_float(val, default=0.0):
@@ -201,25 +228,49 @@ with st.sidebar.expander("🛠️ Correcciones Manuales"):
 # MOTOR DE EMPAREJAMIENTO Y COSTOS INTELIGENTE
 # ==========================================
 def validate_with_master(item_description, original_code):
-    clean_desc_key = str(item_description).strip().upper()
+    raw_name = str(item_description).strip()
+    up_name = raw_name.upper()
     
-    if "CORONA CERO" in clean_desc_key or "CERO 355" in clean_desc_key:
+    # Regla inmediata
+    if "CORONA CERO" in up_name or "CERO 355" in up_name:
         return "750304423180", "Actualizado (Regla Maestra Inmediata Corona Cero)"
 
-    if master_code_dict and clean_desc_key in master_code_dict:
-        return clean_barcode(master_code_dict[clean_desc_key]), "Actualizado (Maestro Exacto)"
+    # 1. Coincidencia exacta cruda
+    if master_code_dict and up_name in master_code_dict:
+        return clean_barcode(master_code_dict[up_name]), "Actualizado (Maestro Exacto)"
 
-    if clean_desc_key in st.session_state["product_overrides"]:
-        return clean_barcode(st.session_state["product_overrides"][clean_desc_key]), "Actualizado (Regla Guardada)"
+    # 2. Coincidencia normalizada avanzada (Maneja 5CL -> 50ML, MIN., etc.)
+    norm_key = normalize_text(up_name)
+    if master_norm_dict and norm_key in master_norm_dict:
+        code, orig_name, _ = master_norm_dict[norm_key]
+        return clean_barcode(code), "Actualizado (Normalizado Avanzado)"
+
+    # 3. Reglas guardadas o Memoria viva
+    if up_name in st.session_state["product_overrides"]:
+        return clean_barcode(st.session_state["product_overrides"][up_name]), "Actualizado (Regla Guardada)"
 
     b_mem = st.session_state["barcode_memory"]
     for b_code, b_name in b_mem.items():
-        if b_name == clean_desc_key:
+        if b_name == up_name:
             return clean_barcode(b_code), "Actualizado (Memoria Viva)"
 
+    # 4. Fuzzy Matching (Similitud alta >= 0.78)
+    best_ratio = 0.0
+    best_code = "S/C (Sin Código)"
+    if master_norm_dict:
+        for n_key, (code, orig_name, _) in master_norm_dict.items():
+            ratio = difflib.SequenceMatcher(None, norm_key, n_key).ratio()
+            if ratio > best_ratio:
+                best_ratio = ratio
+                best_code = code
+
+        if best_ratio >= 0.78:
+            return clean_barcode(best_code), f"Actualizado (Fuzzy {best_ratio:.2f})"
+
+    # 5. Código original de factura
     clean_orig_code = clean_barcode(original_code)
     if clean_orig_code != "S/C (Sin Código)":
-        b_mem[clean_orig_code] = clean_desc_key
+        b_mem[clean_orig_code] = up_name
         save_json_file(BARCODE_MEMORY_FILE, b_mem)
         return clean_orig_code, "✨ Código Original Registrado"
 
@@ -233,7 +284,6 @@ def audit_and_correct_cost(costo_unit, cantidad, empaque, master_row=None):
     if emp <= 1:
         return c
         
-    # Verificar contra el maestro si está disponible
     if master_row and 'Costo' in master_row:
         try:
             m_cost = float(master_row['Costo'])
@@ -245,7 +295,6 @@ def audit_and_correct_cost(costo_unit, cantidad, empaque, master_row=None):
         except Exception:
             pass
             
-    # Heurística inteligente: si el costo es de bulto/caja (> 800) y al dividirlo entre el empaque da un costo unitario válido
     if c > 800 and (c / emp) < c:
         if (c / emp) >= 5:
             return c / emp
@@ -309,7 +358,7 @@ def process_invoice_with_ai(file_obj, file_type):
 # ==========================================
 if modulo == "📄 Factura Individual":
     st.markdown("<h2>📊 Automatizador de Facturas <span style='color: #0284c7;'>(Individual)</span></h2>", unsafe_allow_html=True)
-    st.markdown("<p style='color: #64748b;'>Sube tu factura individual con validación exacta y auditoría de costos.</p>", unsafe_allow_html=True)
+    st.markdown("<p style='color: #64748b;'>Sube tu factura individual con normalización avanzada y auditoría de costos.</p>", unsafe_allow_html=True)
     st.markdown("---")
 
     st.markdown('<div class="card-container">', unsafe_allow_html=True)
@@ -398,11 +447,11 @@ if modulo == "📄 Factura Individual":
                 st.download_button("📥 Descargar Excel Plantilla WilPOS Actualizada", output.getvalue(), "Inventario_WilPOS_Actualizado.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
 # ==========================================
-# MÓDULO 2: MÚLTIPLES FACTURAS (LOTE CON COSTOS INTELIGENTES Y CONSOLIDACIÓN)
+# MÓDULO 2: MÚLTIPLES FACTURAS (LOTE)
 # ==========================================
 elif modulo == "📂 Múltiples Facturas (Lote)":
-    st.markdown("<h2>📂 Procesador por <span style='color: #0284c7;'>Lotes con Auditoría de Costos y Consolidación</span></h2>", unsafe_allow_html=True)
-    st.markdown("<p style='color: #64748b;'>Procesa tus facturas en vivo con cálculo correcto de costos unitarios y sin duplicados.</p>", unsafe_allow_html=True)
+    st.markdown("<h2>📂 Procesador por <span style='color: #0284c7;'>Lotes con Normalización Avanzada</span></h2>", unsafe_allow_html=True)
+    st.markdown("<p style='color: #64748b;'>Procesa tus facturas en vivo con emparejamiento inteligente de volúmenes y sin duplicados.</p>", unsafe_allow_html=True)
     st.markdown("---")
 
     st.markdown('<div class="card-container">', unsafe_allow_html=True)
@@ -639,7 +688,7 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
 
                 output = io.BytesIO()
                 wb.save(output)
-                st.download_button("📥 Descargar Excel Consolidado Final (Sin Duplicados y Costos Correctos)", output.getvalue(), "Inventario_WilPOS_Consolidado_Corregido.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+                st.download_button("📥 Descargar Excel Consolidado Final (Sin Duplicados y Códigos Maestros)", output.getvalue(), "Inventario_WilPOS_Consolidado_Corregido.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
 # ==========================================
 # MÓDULO 3: EXTRAER CÓDIGO DESDE IMAGEN
