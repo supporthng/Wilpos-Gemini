@@ -161,33 +161,6 @@ modulo = st.sidebar.radio(
     ["📄 Factura Individual", "📂 Múltiples Facturas (Lote)", "📋 Ver Códigos Almacenados"]
 )
 
-st.sidebar.markdown("---")
-st.sidebar.markdown("### 📥 Cargar Archivo Maestro")
-master_upload = st.sidebar.file_uploader("Sube tu Excel Maestro (`.xlsx`)", type=["xlsx", "xls"], key="master_file_uploader")
-
-if master_upload is not None:
-    if st.sidebar.button("💾 Procesar y Almacenar Maestro"):
-        try:
-            df_master = pd.read_excel(master_upload, sheet_name=0, dtype=str)
-            new_memory = {}
-            for _, r in df_master.iterrows():
-                c_val = str(r.get('Código de Barras', r.iloc[0])).strip()
-                n_val = str(r.get('Nombre del Producto', r.iloc[1])).strip().upper()
-                if c_val and n_val and c_val.lower() not in ["nan", "none", ""]:
-                    if c_val.endswith('.0'):
-                        c_val = c_val[:-2]
-                    new_memory[n_val] = c_val
-            
-            if new_memory:
-                st.session_state["barcode_memory"] = new_memory
-                save_json_file(BARCODE_MEMORY_FILE, new_memory)
-                st.sidebar.success(f"¡Se almacenaron {len(new_memory)} productos con éxito!")
-                st.rerun()
-            else:
-                st.sidebar.error("No se encontraron registros válidos en el archivo.")
-        except Exception as e:
-            st.sidebar.error(f"Error al leer el archivo: {e}")
-
 # ==========================================
 # MOTOR DE EMPAREJAMIENTO ESTRICTO
 # ==========================================
@@ -293,7 +266,7 @@ if modulo == "📄 Factura Individual":
     st.markdown("---")
 
     if not st.session_state["barcode_memory"]:
-        st.warning("⚠️ **Memoria vacía:** Por favor, sube tu archivo Excel maestro usando el panel lateral izquierdo antes de procesar facturas.")
+        st.warning("⚠️ **Memoria vacía:** Por favor, ve a la pestaña **📋 Ver Códigos Almacenados** para subir tu archivo Excel maestro.")
 
     st.markdown('<div class="card-container">', unsafe_allow_html=True)
     c_col1, c_col2 = st.columns([1, 3])
@@ -393,7 +366,7 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
     st.markdown("---")
 
     if not st.session_state["barcode_memory"]:
-        st.warning("⚠️ **Memoria vacía:** Por favor, sube tu archivo Excel maestro usando el panel lateral izquierdo antes de procesar lotes.")
+        st.warning("⚠️ **Memoria vacía:** Por favor, ve a la pestaña **📋 Ver Códigos Almacenados** para subir tu archivo Excel maestro.")
 
     st.markdown('<div class="card-container">', unsafe_allow_html=True)
     l_col1, l_col2 = st.columns([1, 3])
@@ -598,12 +571,42 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
                 st.warning("⚠️ No se encontraron productos validados en las facturas del lote.")
 
 # ==========================================
-# MÓDULO 3: VER CÓDIGOS ALMACENADOS
+# MÓDULO 3: VER CÓDIGOS ALMACENADOS & CARGAR MAESTRO
 # ==========================================
 elif modulo == "📋 Ver Códigos Almacenados":
     st.markdown("<h2>📋 Memoria de <span style='color: #0284c7;'>Códigos Almacenados</span></h2>", unsafe_allow_html=True)
-    st.markdown("<p style='color: #64748b;'>Diccionario oficial de nombres y códigos de barras almacenados en el sistema.</p>", unsafe_allow_html=True)
+    st.markdown("<p style='color: #64748b;'>Sube tu archivo Excel maestro y gestiona el diccionario oficial de productos validados.</p>", unsafe_allow_html=True)
     st.markdown("---")
+
+    # Tarjeta de Carga del Archivo Maestro
+    st.markdown('<div class="card-container">', unsafe_allow_html=True)
+    st.markdown("### 📥 Cargar Archivo Maestro")
+    st.markdown("Sube tu Excel Maestro (`.xlsx` o `.xls`) con columnas de códigos y nombres de productos.")
+    
+    master_upload = st.file_uploader("Sube tu Excel Maestro", type=["xlsx", "xls"], key="master_tab_uploader")
+    if master_upload is not None:
+        if st.button("💾 Procesar y Almacenar Maestro"):
+            try:
+                df_master = pd.read_excel(master_upload, sheet_name=0, dtype=str)
+                new_memory = {}
+                for _, r in df_master.iterrows():
+                    c_val = str(r.get('Código de Barras', r.iloc[0])).strip()
+                    n_val = str(r.get('Nombre del Producto', r.iloc[1])).strip().upper()
+                    if c_val and n_val and c_val.lower() not in ["nan", "none", ""]:
+                        if c_val.endswith('.0'):
+                            c_val = c_val[:-2]
+                        new_memory[n_val] = c_val
+                
+                if new_memory:
+                    st.session_state["barcode_memory"] = new_memory
+                    save_json_file(BARCODE_MEMORY_FILE, new_memory)
+                    st.success(f"¡Se almacenaron {len(new_memory)} productos con éxito en el sistema!")
+                    st.rerun()
+                else:
+                    st.error("No se encontraron registros válidos en el archivo.")
+            except Exception as e:
+                st.error(f"Error al leer el archivo: {e}")
+    st.markdown('</div>', unsafe_allow_html=True)
 
     b_mem = st.session_state["barcode_memory"]
     if b_mem:
@@ -619,4 +622,4 @@ elif modulo == "📋 Ver Códigos Almacenados":
             st.success("¡Memoria borrada con éxito!")
             st.rerun()
     else:
-        st.warning("⚠️ La memoria está vacía. Utiliza el cargador en la barra lateral izquierda para subir tu archivo Excel maestro y almacenarlo en el sistema.")
+        st.warning("⚠️ La memoria está vacía. Utiliza el botón de carga superior para subir tu archivo Excel maestro y almacenarlo en el sistema.")
