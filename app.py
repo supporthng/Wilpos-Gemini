@@ -97,25 +97,28 @@ def save_json_file(filepath, data_dict):
     except Exception as e:
         print(f"Error guardando {filepath}: {e}")
 
-# Inicialización segura de sesión y carga automática del archivo maestro
-if "barcode_memory" not in st.session_state:
-    st.session_state["barcode_memory"] = load_json_file(BARCODE_MEMORY_FILE)
-    if not st.session_state["barcode_memory"] and os.path.exists(MASTER_CODES_FILE):
+# ==========================================
+# CARGA BLINDADA DEL ARCHIVO MAESTRO EXCEL
+# ==========================================
+def load_master_inventory():
+    memory = {}
+    if os.path.exists(MASTER_CODES_FILE):
         try:
             df_init = pd.read_excel(MASTER_CODES_FILE, sheet_name=0, dtype=str)
-            cols_lower = [str(c).lower() for c in df_init.columns]
-            c_code = next((df_init.columns[i] for i, c in enumerate(cols_lower) if 'codigo' in c or 'barra' in c or 'barcode' in c), df_init.columns[0])
-            c_name = next((df_init.columns[i] for i, c in enumerate(cols_lower) if 'nombre' in c or 'descripcion' in c), df_init.columns[1])
-            
+            # Tus columnas exactas: 'Código de Barras' y 'Nombre del Producto'
             for _, r in df_init.iterrows():
-                c_val = str(r[c_code]).strip()
-                n_val = str(r[c_name]).strip().upper()
+                c_val = str(r.get('Código de Barras', r.iloc[0])).strip()
+                n_val = str(r.get('Nombre del Producto', r.iloc[1])).strip().upper()
                 if c_val and n_val and c_val.lower() not in ["nan", "none", ""]:
                     if c_val.endswith('.0'):
                         c_val = c_val[:-2]
-                    st.session_state["barcode_memory"][n_val] = c_val
+                    memory[n_val] = c_val
         except Exception as e:
-            print(f"Error cargando excel maestro: {e}")
+            print(f"Error leyendo maestro excel: {e}")
+    return memory
+
+if "barcode_memory" not in st.session_state or not st.session_state["barcode_memory"]:
+    st.session_state["barcode_memory"] = load_master_inventory()
 
 def normalize_text(text):
     if not isinstance(text, str):
@@ -158,12 +161,12 @@ def round_to_nearest_5(x):
 
 def clean_barcode(code_val):
     if not code_val:
-        return "S/C (Sin Código)"
+        return None
     s_val = str(code_val).strip()
     if s_val.endswith('.0'):
         s_val = s_val[:-2]
-    if s_val.lower() in ["nan", "none", "", "s/c"]:
-        return "S/C (Sin Código)"
+    if s_val.lower() in ["nan", "none", "", "s/c", "sin codigo"]:
+        return None
     return s_val
 
 # ==========================================
@@ -179,22 +182,15 @@ modulo = st.sidebar.radio(
 )
 
 st.sidebar.markdown("---")
-st.sidebar.markdown("### 🧠 Sistema de Memoria")
+st.sidebar.markdown("### 🧠 Sistema de Memoria / Maestro")
 with st.sidebar.expander(f"📦 Códigos Oficiales ({len(st.session_state['barcode_memory'])} ítems)"):
-    b_mem = st.session_state["barcode_memory"]
-    if b_mem:
-        st.write(f"Total en memoria: {len(b_mem)}")
-        if st.button("🗑️ Limpiar Memoria"):
-            st.session_state["barcode_memory"] = {}
-            if os.path.exists(BARCODE_MEMORY_FILE):
-                os.remove(BARCODE_MEMORY_FILE)
-            st.success("¡Reseteado!")
-            st.rerun()
-    else:
-        st.info("Sin códigos guardados.")
+    if st.button("🔄 Recargar desde Maestro Excel"):
+        st.session_state["barcode_memory"] = load_master_inventory()
+        st.success("¡Maestro recargado con éxito!")
+        st.rerun()
 
 # ==========================================
-# MOTOR DE ASIGNACIÓN AUTÓNOMA POR NOMBRE
+# MOTOR DE EMPAREJAMIENTO ESTRICTO (SOLO VALIDADOS)
 # ==========================================
 def match_official_barcode(item_description):
     raw_name = str(item_description).strip().upper()
@@ -202,32 +198,37 @@ def match_official_barcode(item_description):
     
     # 1. Coincidencia Exacta
     if raw_name in b_mem:
-        return clean_barcode(b_mem[raw_name]), raw_name, "Maestro Exacto"
+        code = clean_barcode(b_mem[raw_name])
+        if code:
+            return code, raw_name, "Maestro Exacto"
 
-    # 2. Coincidencia Normalizada Avanzada (Maneja abreviaturas de proveedores)
+    # 2. Coincidencia Normalizada Avanzada
     norm_memory = get_normalized_memory_dict()
     norm_input = normalize_text(raw_name)
     
     if norm_input in norm_memory:
-        code, orig_name = norm_memory[norm_input]
-        return clean_barcode(code), orig_name, "Normalizado Avanzado"
+        code_raw, orig_name = norm_memory[norm_input]
+        code = clean_barcode(code_raw)
+        if code:
+            return code, orig_name, "Normalizado Avanzado"
 
-    # 3. Coincidencia Fuzzy (Similitud alta >= 0.80)
+    # 3. Coincidencia Fuzzy (Similitud alta >= 0.85 para evitar falsos positivos)
     best_ratio = 0.0
-    best_code = "S/C (Sin Código)"
+    best_code = None
     best_name = raw_name
     
-    for n_key, (code, orig_name) in norm_memory.items():
+    for n_key, (code_raw, orig_name) in norm_memory.items():
         ratio = difflib.SequenceMatcher(None, norm_input, n_key).ratio()
         if ratio > best_ratio:
             best_ratio = ratio
-            best_code = code
+            best_code = clean_barcode(code_raw)
             best_name = orig_name
 
-    if best_ratio >= 0.80:
-        return clean_barcode(best_code), best_name, f"Fuzzy ({best_ratio:.2f})"
+    if best_ratio >= 0.85 and best_code:
+        return best_code, best_name, f"Fuzzy ({best_ratio:.2f})"
 
-    return "S/C (Sin Código)", raw_name, "⚠️ Sin Coincidencia en Maestro"
+    # SI NO ESTÁ EN EL MAESTRO O NO TIENE CÓDIGO VÁLIDO, SE RECHAZA (RETORNA NONE)
+    return None, raw_name, "❌ Rechazado (No Validado en Maestro)"
 
 def audit_and_correct_cost(costo_unit, cantidad, empaque):
     c = safe_float(costo_unit)
@@ -289,7 +290,7 @@ def process_invoice_with_ai(file_obj, file_type):
 # ==========================================
 if modulo == "📄 Factura Individual":
     st.markdown("<h2>📊 Automatizador de Facturas <span style='color: #0284c7;'>(Individual)</span></h2>", unsafe_allow_html=True)
-    st.markdown("<p style='color: #64748b;'>Sube tu factura. Los códigos oficiales de tu maestro se asignarán automáticamente por nombre.</p>", unsafe_allow_html=True)
+    st.markdown("<p style='color: #64748b;'>Sube tu factura. Solo se procesarán y agregarán productos validados con su código oficial del maestro.</p>", unsafe_allow_html=True)
     st.markdown("---")
 
     st.markdown('<div class="card-container">', unsafe_allow_html=True)
@@ -301,9 +302,9 @@ if modulo == "📄 Factura Individual":
 
     if uploaded_file is not None:
         st.success(f"¡Archivo cargado: {uploaded_file.name}!")
-        if st.button("🚀 Procesar Factura"):
+        if st.button("🚀 Procesar Factura (Solo Validados)"):
             file_type = uploaded_file.type if hasattr(uploaded_file, 'type') else 'image/jpeg'
-            with st.spinner("Analizando factura y asignando códigos oficiales del maestro..."):
+            with st.spinner("Analizando factura y filtrando contra el maestro oficial..."):
                 parsed_data, success_msg = process_invoice_with_ai(uploaded_file, file_type)
 
             if parsed_data:
@@ -316,6 +317,10 @@ if modulo == "📄 Factura Individual":
                     desc = str(item.get("descripcion", ""))
                     
                     official_code, matched_name, status_match = match_official_barcode(desc)
+                    
+                    # FILTRO ESTRICTO: Si no tiene código oficial en el maestro, SE DESCARTA
+                    if not official_code:
+                        continue
 
                     raw_costo = safe_float(item.get("costo_sin_itbis", 0))
                     cant_comprada = safe_int(item.get("cantidad", 1), 1)
@@ -327,7 +332,7 @@ if modulo == "📄 Factura Individual":
                     stock_val = cant_comprada * empaque_val
                     
                     rows_preview.append({
-                        "No.": idx,
+                        "No.": len(rows_preview) + 1,
                         "Código Oficial POS": str(official_code),
                         "Nombre Maestro / Artículo": matched_name,
                         "Cant. Compra": cant_comprada,
@@ -335,59 +340,63 @@ if modulo == "📄 Factura Individual":
                         "Stock Total": stock_val,
                         "Costo Unitario": costo,
                         "Precio Venta": precio_venta,
-                        "Estado Emparejamiento": status_match
+                        "Estado": status_match
                     })
 
-                df_resultado = pd.DataFrame(rows_preview)
-                df_resultado["Código Oficial POS"] = df_resultado["Código Oficial POS"].astype(str)
-                st.dataframe(df_resultado, use_container_width=True, hide_index=True)
-                
-                wb = openpyxl.Workbook()
-                ws_prod = wb.active
-                ws_prod.title = "Productos"
-                ws_prod.append(['Nombre', 'Código Barra', 'Categoría', 'Tipo', 'Precio Venta', 'Costo', 'Stock', 'Stock Mínimo', 'ITBIS', 'Unidad Medida', 'Venta Granel', 'Cantidad Empaque', 'Precio Variable', 'Descuento %', 'Descuento Monto', 'Precio Especial', 'Descuento Activo', 'Descuento Nota'])
-                
-                for item_dict in rows_preview:
-                    row_cells = [
-                        item_dict["Nombre Maestro / Artículo"],
-                        str(item_dict["Código Oficial POS"]),
-                        "General",
-                        "producto",
-                        item_dict["Precio Venta"],
-                        item_dict["Costo Unitario"],
-                        item_dict["Stock Total"],
-                        5,
-                        0.18,
-                        "unidad",
-                        "No",
-                        item_dict["Empaque"],
-                        "No",
-                        0,
-                        0,
-                        None,
-                        "No",
-                        None
-                    ]
-                    ws_prod.append(row_cells)
-                    ws_prod.cell(row=ws_prod.max_row, column=2).number_format = '@'
-                
-                output = io.BytesIO()
-                wb.save(output)
-                st.download_button("📥 Descargar Excel WilPOS Oficial", output.getvalue(), "Inventario_WilPOS_Actualizado.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+                if rows_preview:
+                    df_resultado = pd.DataFrame(rows_preview)
+                    df_resultado["Código Oficial POS"] = df_resultado["Código Oficial POS"].astype(str)
+                    st.success(f"✅ Se validaron e incluyeron **{len(rows_preview)} productos** (los no encontrados en el maestro fueron omitidos automáticamente).")
+                    st.dataframe(df_resultado, use_container_width=True, hide_index=True)
+                    
+                    wb = openpyxl.Workbook()
+                    ws_prod = wb.active
+                    ws_prod.title = "Productos"
+                    ws_prod.append(['Nombre', 'Código Barra', 'Categoría', 'Tipo', 'Precio Venta', 'Costo', 'Stock', 'Stock Mínimo', 'ITBIS', 'Unidad Medida', 'Venta Granel', 'Cantidad Empaque', 'Precio Variable', 'Descuento %', 'Descuento Monto', 'Precio Especial', 'Descuento Activo', 'Descuento Nota'])
+                    
+                    for item_dict in rows_preview:
+                        row_cells = [
+                            item_dict["Nombre Maestro / Artículo"],
+                            str(item_dict["Código Oficial POS"]),
+                            "General",
+                            "producto",
+                            item_dict["Precio Venta"],
+                            item_dict["Costo Unitario"],
+                            item_dict["Stock Total"],
+                            5,
+                            0.18,
+                            "unidad",
+                            "No",
+                            item_dict["Empaque"],
+                            "No",
+                            0,
+                            0,
+                            None,
+                            "No",
+                            None
+                        ]
+                        ws_prod.append(row_cells)
+                        ws_prod.cell(row=ws_prod.max_row, column=2).number_format = '@'
+                    
+                    output = io.BytesIO()
+                    wb.save(output)
+                    st.download_button("📥 Descargar Excel WilPOS Oficial", output.getvalue(), "Inventario_WilPOS_Actualizado.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+                else:
+                    st.warning("⚠️ Ningún ítem de la factura coincidió con los productos validados de tu maestro oficial.")
 
 # ==========================================
 # MÓDULO 2: MÚLTIPLES FACTURAS (LOTE)
 # ==========================================
 elif modulo == "📂 Múltiples Facturas (Lote)":
     st.markdown("<h2>📂 Procesador por <span style='color: #0284c7;'>Lotes y Consolidación Oficial</span></h2>", unsafe_allow_html=True)
-    st.markdown("<p style='color: #64748b;'>Procesa múltiples facturas asignando los códigos correctos del maestro y consolidando sin duplicados.</p>", unsafe_allow_html=True)
+    st.markdown("<p style='color: #64748b;'>Procesa múltiples facturas filtrando y consolidando estrictamente productos con código maestro.</p>", unsafe_allow_html=True)
     st.markdown("---")
 
     st.markdown('<div class="card-container">', unsafe_allow_html=True)
     l_col1, l_col2 = st.columns([1, 3])
     with l_col1:
         margen_ganancia_lote = st.number_input("⚙️ Ganancia (%) Lote", min_value=0.0, max_value=500.0, value=25.0, step=1.0)
-    uploaded_files = st.file_uploader("📂 Sube tu factura (Selección múltiple)", type=["pdf", "png", "jpg", "jpeg"], accept_multiple_files=True, key="batch_files")
+    uploaded_files = st.file_uploader("📂 Sube tus facturas (Selección múltiple)", type=["pdf", "png", "jpg", "jpeg"], accept_multiple_files=True, key="batch_files")
     st.markdown('</div>', unsafe_allow_html=True)
 
     if uploaded_files:
@@ -490,6 +499,8 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
                 desc = str(item.get("descripcion", ""))
                 
                 official_code, matched_name, _ = match_official_barcode(desc)
+                if not official_code:
+                    continue
 
                 raw_costo = safe_float(item.get("costo_sin_itbis", 0))
                 cant_comprada = safe_int(item.get("cantidad", 1), 1)
@@ -521,71 +532,74 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
                     "Descuento Nota": None
                 })
 
-            df_temp = pd.DataFrame(processed_rows)
+            if processed_rows:
+                df_temp = pd.DataFrame(processed_rows)
 
-            df_grouped = df_temp.groupby(['Código Barra', 'Nombre'], as_index=False).agg({
-                'Stock': 'sum',
-                'Costo': 'mean',
-                'Precio Venta': 'mean',
-                'Categoría': 'first',
-                'Tipo': 'first',
-                'Stock Mínimo': 'first',
-                'ITBIS': 'first',
-                'Unidad Medida': 'first',
-                'Venta Granel': 'first',
-                'Cantidad Empaque': 'first',
-                'Precio Variable': 'first',
-                'Descuento %': 'first',
-                'Descuento Monto': 'first',
-                'Precio Especial': 'first',
-                'Descuento Activo': 'first',
-                'Descuento Nota': 'first'
-            })
+                df_grouped = df_temp.groupby(['Código Barra', 'Nombre'], as_index=False).agg({
+                    'Stock': 'sum',
+                    'Costo': 'mean',
+                    'Precio Venta': 'mean',
+                    'Categoría': 'first',
+                    'Tipo': 'first',
+                    'Stock Mínimo': 'first',
+                    'ITBIS': 'first',
+                    'Unidad Medida': 'first',
+                    'Venta Granel': 'first',
+                    'Cantidad Empaque': 'first',
+                    'Precio Variable': 'first',
+                    'Descuento %': 'first',
+                    'Descuento Monto': 'first',
+                    'Precio Especial': 'first',
+                    'Descuento Activo': 'first',
+                    'Descuento Nota': 'first'
+                })
 
-            df_final_preview = df_grouped.sort_values(by="Stock", ascending=False).reset_index(drop=True)
-            df_final_preview["Código Barra"] = df_final_preview["Código Barra"].astype(str)
+                df_final_preview = df_grouped.sort_values(by="Stock", ascending=False).reset_index(drop=True)
+                df_final_preview["Código Barra"] = df_final_preview["Código Barra"].astype(str)
 
-            st.success(f"✨ Se consolidaron **{len(df_final_preview)} productos únicos** con sus códigos oficiales asignados.")
-            st.dataframe(df_final_preview, use_container_width=True, hide_index=True)
+                st.success(f"✨ Se consolidaron **{len(df_final_preview)} productos únicos validados**.")
+                st.dataframe(df_final_preview, use_container_width=True, hide_index=True)
 
-            wb = openpyxl.Workbook()
-            ws_prod = wb.active
-            ws_prod.title = "Productos"
-            ws_prod.append(['Nombre', 'Código Barra', 'Categoría', 'Tipo', 'Precio Venta', 'Costo', 'Stock', 'Stock Mínimo', 'ITBIS', 'Unidad Medida', 'Venta Granel', 'Cantidad Empaque', 'Precio Variable', 'Descuento %', 'Descuento Monto', 'Precio Especial', 'Descuento Activo', 'Descuento Nota'])
+                wb = openpyxl.Workbook()
+                ws_prod = wb.active
+                ws_prod.title = "Productos"
+                ws_prod.append(['Nombre', 'Código Barra', 'Categoría', 'Tipo', 'Precio Venta', 'Costo', 'Stock', 'Stock Mínimo', 'ITBIS', 'Unidad Medida', 'Venta Granel', 'Cantidad Empaque', 'Precio Variable', 'Descuento %', 'Descuento Monto', 'Precio Especial', 'Descuento Activo', 'Descuento Nota'])
 
-            for _, row in df_final_preview.iterrows():
-                ws_prod.append([
-                    row["Nombre"],
-                    str(row["Código Barra"]),
-                    row["Categoría"],
-                    row["Tipo"],
-                    row["Precio Venta"],
-                    row["Costo"],
-                    row["Stock"],
-                    row["Stock Mínimo"],
-                    row["ITBIS"],
-                    row["Unidad Medida"],
-                    row["Venta Granel"],
-                    row["Cantidad Empaque"],
-                    row["Precio Variable"],
-                    row["Descuento %"],
-                    row["Descuento Monto"],
-                    row["Precio Especial"],
-                    row["Descuento Activo"],
-                    row["Descuento Nota"]
-                ])
-                ws_prod.cell(row=ws_prod.max_row, column=2).number_format = '@'
+                for _, row in df_final_preview.iterrows():
+                    ws_prod.append([
+                        row["Nombre"],
+                        str(row["Código Barra"]),
+                        row["Categoría"],
+                        row["Tipo"],
+                        row["Precio Venta"],
+                        row["Costo"],
+                        row["Stock"],
+                        row["Stock Mínimo"],
+                        row["ITBIS"],
+                        row["Unidad Medida"],
+                        row["Venta Granel"],
+                        row["Cantidad Empaque"],
+                        row["Precio Variable"],
+                        row["Descuento %"],
+                        row["Descuento Monto"],
+                        row["Precio Especial"],
+                        row["Descuento Activo"],
+                        row["Descuento Nota"]
+                    ])
+                    ws_prod.cell(row=ws_prod.max_row, column=2).number_format = '@'
 
-            output = io.BytesIO()
-            wb.save(output)
-            st.download_button("📥 Descargar Excel Consolidado Final", output.getvalue(), "Inventario_WilPOS_Consolidado_Corregido.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+                output = io.BytesIO()
+                wb.save(output)
+                st.download_button("📥 Descargar Excel Consolidado Final", output.getvalue(), "Inventario_WilPOS_Consolidado_Corregido.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+            else:
+                st.warning("⚠️ No se encontraron productos validados en las facturas del lote.")
 
 # ==========================================
 # MÓDULO 3: VER CÓDIGOS ALMACENADOS
 # ==========================================
 elif modulo == "📋 Ver Códigos Almacenados":
     st.markdown("<h2>📋 Memoria de <span style='color: #0284c7;'>Códigos Almacenados</span></h2>", unsafe_allow_html=True)
-    st.markdown("<p style='color: #64748b;'>Diccionario oficial de nombres y códigos de barras.</p>", unsafe_allow_html=True)
+    st.markdown("<p style='color: #64748b;'>Diccionario oficial de nombres y códigos de barras cargado desde tu maestro.</p>", unsafe_allow_html=True)
     st.markdown("---")
 
     b_mem = st.session_state["barcode_memory"]
@@ -595,4 +609,4 @@ elif modulo == "📋 Ver Códigos Almacenados":
         df_codes["Código de Barras Oficial"] = df_codes["Código de Barras Oficial"].astype(str)
         st.dataframe(df_codes, use_container_width=True, hide_index=True, height=450)
     else:
-        st.warning("⚠️ La memoria está vacía.")
+        st.warning("⚠️ La memoria está vacía. Asegúrate de que el archivo `codigos_barras_almacenados.xlsx` esté en la misma carpeta o usa el botón de recarga en la barra lateral.")
