@@ -132,7 +132,6 @@ def round_to_nearest_5(x):
     return round(round(x / 5) * 5, 2)
 
 def is_valid_standard_barcode(code_val):
-    """Valida si el código de barras cumple con el estándar comercial (EAN/UPC de 8 a 14 dígitos numéricos)"""
     if not code_val:
         return False
     s = str(code_val).strip()
@@ -140,7 +139,6 @@ def is_valid_standard_barcode(code_val):
         s = s[:-2]
     if s.lower() in ["nan", "none", "", "s/c", "sin codigo", "n/a", "0"]:
         return False
-    # Los códigos estándar de consumo masivo en RD (EAN-8, UPC-A, EAN-13, ITF-14) son estrictamente numéricos de 8 a 14 dígitos.
     return s.isdigit() and 8 <= len(s) <= 14
 
 def clean_barcode(code_val):
@@ -166,7 +164,7 @@ modulo = st.sidebar.radio(
 )
 
 # ==========================================
-# MOTOR INTELIGENTE DE EMPAREJAMIENTO (INDEPENDIENTE DEL ORDEN DE PALABRAS)
+# MOTOR INTELIGENTE DE EMPAREJAMIENTO SEGURO
 # ==========================================
 def match_official_barcode(item_description):
     raw_name = str(item_description).strip().upper()
@@ -186,7 +184,7 @@ def match_official_barcode(item_description):
     best_code = "S/C (Sin Código)"
     best_name = raw_name
 
-    # 2. Búsqueda por solapamiento de tokens (sin importar el orden de las palabras)
+    # 2. Búsqueda por tokens (sin importar orden de palabras)
     for master_name, code in b_mem.items():
         norm_master = normalize_text(master_name)
         master_tokens = set(norm_master.split())
@@ -194,7 +192,6 @@ def match_official_barcode(item_description):
         if not master_tokens:
             continue
 
-        # Intersección de palabras clave (tokens)
         common_tokens = input_tokens.intersection(master_tokens)
         token_score = len(common_tokens) / max(len(input_tokens), len(master_tokens))
         seq_ratio = difflib.SequenceMatcher(None, norm_input, norm_master).ratio()
@@ -206,7 +203,6 @@ def match_official_barcode(item_description):
             best_code = code
             best_name = master_name
 
-    # Umbral flexible optimizado para cruzar descripciones sin importar orden ni sufijos
     if best_score >= 0.45:
         return clean_barcode(best_code), best_name, f"Smart Match ({best_score:.2f})"
 
@@ -227,11 +223,9 @@ def audit_and_correct_cost(costo_unit, cantidad, empaque):
     return c
 
 def process_invoice_with_ai(file_obj, file_type):
-    # La IA extrae los datos puros; el sistema descarta cualquier código de factura inválido y usa el maestro por nombre.
     prompt_text = (
         "Analiza esta factura detalladamente. Extrae los datos de cabecera: 'emisor_rnc', 'emisor_nombre', 'numero_documento', 'fecha', 'subtotal', 'itbis', 'total'. "
         "Para cada ítem, extrae unícamente: 'codigo_barra_factura', 'descripcion', 'cantidad', 'empaque', y 'costo_sin_itbis'. "
-        "Si la factura muestra un código de barras en su columna, extráelo en 'codigo_barra_factura' (si no tiene o no es estándar, déjalo vacío). "
         "Devuelve la información estrictamente en formato JSON con la siguiente estructura exacta: "
         '{"emisor_rnc": "...", "emisor_nombre": "...", "numero_documento": "...", "fecha": "...", "subtotal": 0.0, "itbis": 0.0, "total": 0.0, "items": [{"codigo_barra_factura": "...", "descripcion": "...", "cantidad": 1, "empaque": 1, "costo_sin_itbis": 0.0}]}. '
         "Respuesta JSON pura sin texto adicional."
@@ -288,7 +282,7 @@ if modulo == "📄 Factura Individual":
         st.success(f"¡Archivo cargado: {uploaded_file.name}!")
         if st.button("🚀 Procesar Factura"):
             file_type = uploaded_file.type if hasattr(uploaded_file, 'type') else 'image/jpeg'
-            with st.spinner("Analizando factura, validando códigos y cruzando con el maestro..."):
+            with st.spinner("Analizando factura y asignando códigos oficiales del maestro..."):
                 parsed_data, success_msg = process_invoice_with_ai(uploaded_file, file_type)
 
             if parsed_data:
@@ -299,12 +293,6 @@ if modulo == "📄 Factura Individual":
 
                 for idx, item in enumerate(data_items, start=1):
                     desc = str(item.get("descripcion", ""))
-                    raw_inv_code = item.get("codigo_barra_factura", "")
-                    
-                    # Validar si el código de la factura es estándar (ej. EAN/UPC válido)
-                    is_valid_inv = is_valid_standard_barcode(raw_inv_code)
-                    
-                    # ASIGNACIÓN MAESTRA: Buscamos siempre por nombre en el maestro oficial
                     official_code, matched_name, status_match = match_official_barcode(desc)
 
                     raw_costo = safe_float(item.get("costo_sin_itbis", 0))
@@ -325,7 +313,7 @@ if modulo == "📄 Factura Individual":
                         "Stock Total": stock_val,
                         "Costo Unitario": costo,
                         "Precio Venta": precio_venta,
-                        "Estado": f"{status_match} {'(Código Factura Válido Omitido)' if is_valid_inv else '(Código Factura No Estándar)'}"
+                        "Estado": status_match
                     })
 
                 df_resultado = pd.DataFrame(rows_preview)
@@ -478,8 +466,6 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
             processed_rows = []
             for item in raw_items:
                 desc = str(item.get("descripcion", ""))
-                
-                # Asignación maestra por nombre (ignorando código de factura y usando el maestro)
                 official_code, matched_name, _ = match_official_barcode(desc)
 
                 raw_costo = safe_float(item.get("costo_sin_itbis", 0))
@@ -589,9 +575,32 @@ elif modulo == "📋 Ver Códigos Almacenados":
             try:
                 df_master = pd.read_excel(master_upload, sheet_name=0, dtype=str)
                 new_memory = {}
+                
+                # DETECCIÓN AUTOMÁTICA DE COLUMNAS (Código vs Nombre) sin importar el orden en el Excel
+                col_code = None
+                col_name = None
+                for c in df_master.columns:
+                    c_low = str(c).lower()
+                    if 'codigo' in c_low or 'barra' in c_low or 'barcode' in c_low:
+                        col_code = c
+                    elif 'nombre' in c_low or 'descripcion' in c_low or 'producto' in c_low:
+                        col_name = c
+                
+                # Fallback por índice si no encuentra nombres de columna exactos
+                if not col_code or not col_name:
+                    col_code = df_master.columns[0]
+                    col_name = df_master.columns[1]
+
                 for _, r in df_master.iterrows():
-                    c_val = str(r.get('Código de Barras', r.iloc[0])).strip()
-                    n_val = str(r.get('Nombre del Producto', r.iloc[1])).strip().upper()
+                    val_a = str(r[col_code]).strip()
+                    val_b = str(r[col_name]).strip()
+                    
+                    # Detectar automáticamente cuál es el código (suele ser numérico o más corto) y cuál es el nombre
+                    if val_a.isdigit() or len(val_a) <= 15:
+                        c_val, n_val = val_a, val_b.upper()
+                    else:
+                        c_val, n_val = val_b, val_a.upper()
+
                     if c_val and n_val and c_val.lower() not in ["nan", "none", ""]:
                         if c_val.endswith('.0'):
                             c_val = c_val[:-2]
@@ -600,7 +609,7 @@ elif modulo == "📋 Ver Códigos Almacenados":
                 if new_memory:
                     st.session_state["barcode_memory"] = new_memory
                     save_json_file(BARCODE_MEMORY_FILE, new_memory)
-                    st.success(f"¡Se almacenaron {len(new_memory)} productos con éxito en el sistema!")
+                    st.success(f"¡Se almacenaron {len(new_memory)} productos con éxito en el sistema de forma correcta!")
                     st.rerun()
                 else:
                     st.error("No se encontraron registros válidos en el archivo.")
