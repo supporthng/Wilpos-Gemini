@@ -2,6 +2,7 @@ import io
 import json
 import os
 import hashlib
+import difflib
 import google.generativeai as genai
 from PIL import Image
 import streamlit as st
@@ -77,8 +78,8 @@ free_key_2 = st.secrets.get("GEMINI_API_KEY_2", os.environ.get("GEMINI_API_KEY_2
 paid_api_key = st.secrets.get("GEMINI_API_KEY_PAID", os.environ.get("GEMINI_API_KEY_PAID", ""))
 
 # Archivos persistentes
-MEMORY_FILE = "proveedores_memoria.json"
 BARCODE_MEMORY_FILE = "codigos_escaneados_memoria.json"
+MASTER_CODES_FILE = "codigos_barras_almacenados.xlsx"
 
 def load_json_file(filepath):
     if os.path.exists(filepath):
@@ -96,15 +97,12 @@ def save_json_file(filepath, data_dict):
     except Exception as e:
         print(f"Error guardando {filepath}: {e}")
 
-if "provider_memory" not in st.session_state:
-    st.session_state["provider_memory"] = load_json_file(MEMORY_FILE)
-
 if "barcode_memory" not in st.session_state:
     st.session_state["barcode_memory"] = load_json_file(BARCODE_MEMORY_FILE)
-    # Cargar automáticamente desde codigos_barras_almacenados.xlsx si la memoria está vacía
-    if not st.session_state["barcode_memory"] and os.path.exists("codigos_barras_almacenados.xlsx"):
+    # Cargar automáticamente desde codigos_barras_almacenados.xlsx si la memoria viva está vacía
+    if not st.session_state["barcode_memory"] and os.path.exists(MASTER_CODES_FILE):
         try:
-            df_init = pd.read_excel("codigos_barras_almacenados.xlsx", sheet_name=0, dtype=str)
+            df_init = pd.read_excel(MASTER_CODES_FILE, sheet_name=0, dtype=str)
             for _, r in df_init.iterrows():
                 c_val = str(r.iloc[0]).strip()
                 n_val = str(r.iloc[1]).strip().upper()
@@ -114,6 +112,34 @@ if "barcode_memory" not in st.session_state:
                     st.session_state["barcode_memory"][n_val] = c_val
         except Exception:
             pass
+
+# Normalizador Avanzado de Textos para emparejar abreviaturas de proveedores
+def normalize_text(text):
+    if not isinstance(text, str):
+        return ""
+    t = text.upper()
+    # Normalizaciones comunes de volumen y empaque
+    t = t.replace(' 5CL', ' 50 ML').replace(' 5 CL', ' 50 ML').replace('5CL', '50 ML')
+    t = t.replace(' 75CL', ' 750 ML').replace(' 75 CL', ' 750 ML').replace('75CL', '750 ML')
+    t = t.replace(' 1L', ' 1000 ML').replace(' 1 LT', ' 1000 ML').replace('1L', '1000 ML')
+    t = t.replace(' 33CL', ' 330 ML').replace('33CL', '330 ML').replace(' 50CL', ' 500 ML').replace('50CL', '500 ML')
+    
+    # Abreviaturas típicas de facturas dominicanas
+    t = t.replace('PTE.', 'PRESIDENTE').replace('HU', '').replace('CJ', '').replace('BOT.', '').replace('LATA', 'LATA')
+    t = t.replace(' 120Z', ' 12 OZ').replace(' 120Z', ' 12 OZ')
+    
+    for ch in ['/', '-', ',', '.', '(', ')', '%', '+', '"', "'"]:
+        t = t.replace(ch, ' ')
+    return " ".join(t.split())
+
+# Construir índice normalizado de la memoria para búsqueda robusta
+def get_normalized_memory_dict():
+    norm_dict = {}
+    for name, code in st.session_state["barcode_memory"].items():
+        norm_key = normalize_text(name)
+        if norm_key:
+            norm_dict[norm_key] = (code, name)
+    return norm_dict
 
 # Funciones auxiliares
 def safe_float(val, default=0.0):
@@ -155,7 +181,7 @@ modulo = st.sidebar.radio(
 
 st.sidebar.markdown("---")
 st.sidebar.markdown("### 🧠 Sistema de Memoria")
-with st.sidebar.expander(f"📦 Códigos Registrados ({len(st.session_state['barcode_memory'])} ítems)"):
+with st.sidebar.expander(f"📦 Códigos Oficiales ({len(st.session_state['barcode_memory'])} ítems)"):
     b_mem = st.session_state["barcode_memory"]
     if b_mem:
         st.write(f"Total en memoria: {len(b_mem)}")
@@ -171,33 +197,60 @@ with st.sidebar.expander(f"📦 Códigos Registrados ({len(st.session_state['bar
 # ==========================================
 # MOTOR DE ASIGNACIÓN OFICIAL POR NOMBRE
 # ==========================================
-def get_official_barcode(item_description, invoice_code):
-    clean_desc = str(item_description).strip().upper()
+def match_official_barcode(item_description):
+    raw_name = str(item_description).strip().upper()
     b_mem = st.session_state["barcode_memory"]
     
-    # 1. REGLA DE ORO: Si el nombre del artículo ya existe en nuestra memoria/maestro,
-    # SE LE IMPONE EL CÓDIGO OFICIAL GUARDADO (ignorando cualquier código erróneo de la factura).
-    if clean_desc in b_mem:
-        official_code = clean_barcode(b_mem[clean_desc])
-        if official_code != "S/C (Sin Código)":
-            return official_code, "✅ Código Asignado desde Maestro/Memoria"
+    # 1. Coincidencia Exacta
+    if raw_name in b_mem:
+        return clean_barcode(b_mem[raw_name]), raw_name, "Maestro Exacto"
 
-    # 2. Si el artículo NO está en la memoria, revisamos si la factura trae un código válido
-    clean_inv_code = clean_barcode(invoice_code)
-    if clean_inv_code != "S/C (Sin Código)":
-        # Lo guardamos en memoria para futuras facturas
-        b_mem[clean_desc] = clean_inv_code
-        save_json_file(BARCODE_MEMORY_FILE, b_mem)
-        return clean_inv_code, "✨ Nuevo (Aprendido de Factura)"
+    # 2. Coincidencia Normalizada Avanzada (Maneja abreviaturas de proveedores)
+    norm_memory = get_normalized_memory_dict()
+    norm_input = normalize_text(raw_name)
+    
+    if norm_input in norm_memory:
+        code, orig_name = norm_memory[norm_input]
+        return clean_barcode(code), orig_name, "Normalizado Avanzado"
 
-    return "S/C (Sin Código)", "⚠️ Sin Código"
+    # 3. Coincidencia Fuzzy (Similitud alta >= 0.80)
+    best_ratio = 0.0
+    best_code = "S/C (Sin Código)"
+    best_name = raw_name
+    
+    for n_key, (code, orig_name) in norm_memory.items():
+        ratio = difflib.SequenceMatcher(None, norm_input, n_key).ratio()
+        if ratio > best_ratio:
+            best_ratio = ratio
+            best_code = code
+            best_name = orig_name
+
+    if best_ratio >= 0.80:
+        return clean_barcode(best_code), best_name, f"Fuzzy ({best_ratio:.2f})"
+
+    return "S/C (Sin Código)", raw_name, "⚠️ Sin Coincidencia en Maestro"
+
+def audit_and_correct_cost(costo_unit, cantidad, empaque):
+    c = safe_float(costo_unit)
+    cant = safe_int(cantidad, 1)
+    emp = safe_int(empaque, 1)
+    
+    if emp <= 1:
+        return c
+        
+    # Si el costo es de bulto/caja (> 800) y al dividirlo entre empaque da un costo unitario válido
+    if c > 800 and (c / emp) < c:
+        if (c / emp) >= 5:
+            return c / emp
+            
+    return c
 
 def process_invoice_with_ai(file_obj, file_type):
     prompt_text = (
         "Analiza esta factura detalladamente. Extrae los datos de cabecera: 'emisor_rnc', 'emisor_nombre', 'numero_documento', 'fecha', 'subtotal', 'itbis', 'total'. "
-        "Para cada ítem, extrae: 'codigo' (el código que trae la factura, aunque no sea el de barra oficial, y DEVUÉLVELO EXACTAMENTE COMO TEXTO), 'descripcion', 'cantidad', 'empaque', y 'costo_sin_itbis'. "
+        "Para cada ítem, extrae: 'descripcion', 'cantidad', 'empaque', y 'costo_sin_itbis'. "
         "Devuelve la información estrictamente en formato JSON con la siguiente estructura exacta: "
-        '{"emisor_rnc": "...", "emisor_nombre": "...", "numero_documento": "...", "fecha": "...", "subtotal": 0.0, "itbis": 0.0, "total": 0.0, "items": [{"codigo": "...", "descripcion": "...", "cantidad": 1, "empaque": 1, "costo_sin_itbis": 0.0}]}. '
+        '{"emisor_rnc": "...", "emisor_nombre": "...", "numero_documento": "...", "fecha": "...", "subtotal": 0.0, "itbis": 0.0, "total": 0.0, "items": [{"descripcion": "...", "cantidad": 1, "empaque": 1, "costo_sin_itbis": 0.0}]}. '
         "Respuesta JSON pura sin texto adicional."
     )
 
@@ -252,7 +305,7 @@ if modulo == "📄 Factura Individual":
         st.success(f"¡Archivo cargado: {uploaded_file.name}!")
         if st.button("🚀 Procesar Factura"):
             file_type = uploaded_file.type if hasattr(uploaded_file, 'type') else 'image/jpeg'
-            with st.spinner("Analizando factura y emparejando códigos oficiales..."):
+            with st.spinner("Analizando factura y asignando códigos oficiales del maestro..."):
                 parsed_data, success_msg = process_invoice_with_ai(uploaded_file, file_type)
 
             if parsed_data:
@@ -263,15 +316,15 @@ if modulo == "📄 Factura Individual":
 
                 for idx, item in enumerate(data_items, start=1):
                     desc = str(item.get("descripcion", ""))
-                    invoice_code = str(item.get("codigo", ""))
                     
-                    # Asignación automática del código oficial de la memoria/maestro por nombre
-                    official_code, status_match = get_official_barcode(desc, invoice_code)
+                    # Asignación automática del código oficial maestro por nombre
+                    official_code, matched_name, status_match = match_official_barcode(desc)
 
-                    costo = safe_float(item.get("costo_sin_itbis", 0))
+                    raw_costo = safe_float(item.get("costo_sin_itbis", 0))
                     cant_comprada = safe_int(item.get("cantidad", 1), 1)
                     empaque_val = safe_int(item.get("empaque", 1), 1)
                     
+                    costo = audit_and_correct_cost(raw_costo, cant_comprada, empaque_val)
                     raw_pv = (costo * multiplicador_ganancia) * 1.18
                     precio_venta = round_to_nearest_5(raw_pv)
                     stock_val = cant_comprada * empaque_val
@@ -279,13 +332,13 @@ if modulo == "📄 Factura Individual":
                     rows_preview.append({
                         "No.": idx,
                         "Código Oficial POS": str(official_code),
-                        "Nombre Artículo": desc.strip().upper(),
+                        "Nombre Maestro / Artículo": matched_name,
                         "Cant. Compra": cant_comprada,
                         "Empaque": empaque_val,
                         "Stock Total": stock_val,
-                        "Costo Unit. Sin ITBIS": costo,
+                        "Costo Unitario": costo,
                         "Precio Venta": precio_venta,
-                        "Origen Código": status_match
+                        "Estado Emparejamiento": status_match
                     })
 
                 df_resultado = pd.DataFrame(rows_preview)
@@ -299,12 +352,12 @@ if modulo == "📄 Factura Individual":
                 
                 for item_dict in rows_preview:
                     row_cells = [
-                        item_dict["Nombre Artículo"],
+                        item_dict["Nombre Maestro / Artículo"],
                         str(item_dict["Código Oficial POS"]),
                         "General",
                         "producto",
                         item_dict["Precio Venta"],
-                        item_dict["Costo Unit. Sin ITBIS"],
+                        item_dict["Costo Unitario"],
                         item_dict["Stock Total"],
                         5,
                         0.18,
@@ -330,7 +383,7 @@ if modulo == "📄 Factura Individual":
 # ==========================================
 elif modulo == "📂 Múltiples Facturas (Lote)":
     st.markdown("<h2>📂 Procesador por <span style='color: #0284c7;'>Lotes y Consolidación Oficial</span></h2>", unsafe_allow_html=True)
-    st.markdown("<p style='color: #64748b;'>Procesa múltiples facturas asignando los códigos correctos y consolidando sin duplicados.</p>", unsafe_allow_html=True)
+    st.markdown("<p style='color: #64748b;'>Procesa múltiples facturas asignando los códigos correctos del maestro y consolidando sin duplicados.</p>", unsafe_allow_html=True)
     st.markdown("---")
 
     st.markdown('<div class="card-container">', unsafe_allow_html=True)
@@ -438,21 +491,21 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
             processed_rows = []
             for item in raw_items:
                 desc = str(item.get("descripcion", ""))
-                invoice_code = str(item.get("codigo", ""))
                 
                 # Asignación automática del código oficial de la memoria/maestro por nombre
-                official_code, _ = get_official_barcode(desc, invoice_code)
+                official_code, matched_name, _ = match_official_barcode(desc)
 
-                costo = safe_float(item.get("costo_sin_itbis", 0))
+                raw_costo = safe_float(item.get("costo_sin_itbis", 0))
                 cant_comprada = safe_int(item.get("cantidad", 1), 1)
                 empaque_val = safe_int(item.get("empaque", 1), 1)
 
+                costo = audit_and_correct_cost(raw_costo, cant_comprada, empaque_val)
                 raw_pv = (costo * multiplicador_ganancia) * 1.18
                 precio_venta = round_to_nearest_5(raw_pv)
                 stock_val = cant_comprada * empaque_val
 
                 processed_rows.append({
-                    "Nombre": desc.strip().upper(),
+                    "Nombre": matched_name,
                     "Código Barra": str(official_code),
                     "Categoría": "General",
                     "Tipo": "producto",
