@@ -82,6 +82,7 @@ paid_api_key = st.secrets.get("GEMINI_API_KEY_PAID", os.environ.get("GEMINI_API_
 MEMORY_FILE = "proveedores_memoria.json"
 OVERRIDES_FILE = "mapeo_productos_overrides.json"
 BARCODE_MEMORY_FILE = "codigos_escaneados_memoria.json"
+MASTER_INVENTORY_FILE = "Inventario_Completo_2026-09-14.xlsx"
 
 def load_json_file(filepath):
     if os.path.exists(filepath):
@@ -107,6 +108,28 @@ if "product_overrides" not in st.session_state:
 
 if "barcode_memory" not in st.session_state:
     st.session_state["barcode_memory"] = load_json_file(BARCODE_MEMORY_FILE)
+
+# Cargar inventario maestro para validación estricta
+@st.cache_data
+def load_master_inventory():
+    if os.path.exists(MASTER_INVENTORY_FILE):
+        try:
+            df_m = pd.read_excel(MASTER_INVENTORY_FILE, sheet_name=0, dtype=str)
+            code_dict = {}
+            row_dict = {}
+            for _, row in df_m.iterrows():
+                name_clean = str(row['Nombre']).strip().upper()
+                code_val = str(row['Código Barra']).strip()
+                if code_val.endswith('.0'):
+                    code_val = code_val[:-2]
+                code_dict[name_clean] = code_val
+                row_dict[name_clean] = row.to_dict()
+            return code_dict, row_dict
+        except Exception as e:
+            print(f"Error cargando inventario maestro: {e}")
+    return {}, {}
+
+master_code_dict, master_row_dict = load_master_inventory()
 
 # Funciones auxiliares
 def safe_float(val, default=0.0):
@@ -174,16 +197,8 @@ with st.sidebar.expander("🛠️ Correcciones Manuales"):
     else:
         st.info("Sin reglas manuales.")
 
-if "custom_equivalences" not in st.session_state:
-    st.session_state["custom_equivalences"] = {
-        "BARCELO 40 ANIVERSARIO": "IMPERIAL PREMIUM BLEND 40 AÑOS",
-        "BARCELO IMPERIAL PORTO": "IMPERIAL PORTO",
-        "DOBEL": "MAESTRO DOBEL",
-        "CORONA CERO": "CERVEZA CORONA CERO"
-    }
-
 # ==========================================
-# MOTOR DE INTELIGENCIA Y EMPAREJAMIENTO
+# MOTOR DE INTELIGENCIA Y EMPAREJAMIENTO CON MAESTRO
 # ==========================================
 def validate_with_master(item_description, original_code):
     clean_desc_key = str(item_description).strip().upper()
@@ -191,28 +206,34 @@ def validate_with_master(item_description, original_code):
     if "CORONA CERO" in clean_desc_key or "CERO 355" in clean_desc_key:
         return "750304423180", "Actualizado (Regla Maestra Inmediata Corona Cero)"
 
-    clean_orig_code = clean_barcode(original_code)
+    # 1. Buscar coincidencia exacta en el inventario maestro
+    if master_code_dict and clean_desc_key in master_code_dict:
+        return clean_barcode(master_code_dict[clean_desc_key]), "Actualizado (Maestro Exacto)"
 
+    # 2. Buscar similitud difusa en el inventario maestro
+    if master_code_dict:
+        master_names = list(master_code_dict.keys())
+        close_matches = difflib.get_close_matches(clean_desc_key, master_names, n=1, cutoff=0.60)
+        if close_matches:
+            matched_name = close_matches[0]
+            code_found = master_code_dict[matched_name]
+            return clean_barcode(code_found), f"Actualizado (Maestro por Similitud: '{matched_name}')"
+
+    # 3. Correcciones manuales uverrides
     if clean_desc_key in st.session_state["product_overrides"]:
         return clean_barcode(st.session_state["product_overrides"][clean_desc_key]), "Actualizado (Regla Guardada)"
 
+    # 4. Memoria viva de códigos
     b_mem = st.session_state["barcode_memory"]
     for b_code, b_name in b_mem.items():
         if b_name == clean_desc_key:
             return clean_barcode(b_code), "Actualizado (Memoria Viva Exacta)"
 
-    if b_mem:
-        name_to_code = {str(name).upper(): code for code, name in b_mem.items()}
-        close_matches = difflib.get_close_matches(clean_desc_key, name_to_code.keys(), n=1, cutoff=0.65)
-        if close_matches:
-            matched_name = close_matches[0]
-            code_found = name_to_code[matched_name]
-            return clean_barcode(code_found), f"Actualizado (Memoria Viva por Similitud: '{matched_name}')"
-
+    clean_orig_code = clean_barcode(original_code)
     if clean_orig_code != "S/C (Sin Código)":
         b_mem[clean_orig_code] = clean_desc_key
         save_json_file(BARCODE_MEMORY_FILE, b_mem)
-        return clean_orig_code, "✨ Nuevo Código Registrado Automáticamente en Memoria"
+        return clean_orig_code, "✨ Nuevo Código Registrado en Memoria"
 
     return "S/C (Sin Código)", "⚠️ Sin Código Detectado"
 
@@ -285,7 +306,7 @@ def process_invoice_with_ai(file_obj, file_type):
 # ==========================================
 if modulo == "📄 Factura Individual":
     st.markdown("<h2>📊 Automatizador de Facturas <span style='color: #0284c7;'>(Individual)</span></h2>", unsafe_allow_html=True)
-    st.markdown("<p style='color: #64748b;'>Sube tu factura individual con preservación estricta de códigos con ceros a la izquierda.</p>", unsafe_allow_html=True)
+    st.markdown("<p style='color: #64748b;'>Sube tu factura individual con validación estricta contra el maestro.</p>", unsafe_allow_html=True)
     st.markdown("---")
 
     st.markdown('<div class="card-container">', unsafe_allow_html=True)
@@ -371,11 +392,11 @@ if modulo == "📄 Factura Individual":
                 st.download_button("📥 Descargar Excel Plantilla WilPOS Actualizada", output.getvalue(), "Inventario_WilPOS_Actualizado.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
 # ==========================================
-# MÓDULO 2: MÚLTIPLES FACTURAS (LOTE EN TIEMPO REAL ARCHIVO POR ARCHIVO)
+# MÓDULO 2: MÚLTIPLES FACTURAS (LOTE CON CONSOLIDACIÓN AUTOMÁTICA)
 # ==========================================
 elif modulo == "📂 Múltiples Facturas (Lote)":
-    st.markdown("<h2>📂 Procesador por <span style='color: #0284c7;'>Lotes en Tiempo Real (Archivo por Archivo)</span></h2>", unsafe_allow_html=True)
-    st.markdown("<p style='color: #64748b;'>Procesa tus facturas una por una automáticamente sin congelar la pantalla.</p>", unsafe_allow_html=True)
+    st.markdown("<h2>📂 Procesador por <span style='color: #0284c7;'>Lotes con Consolidación Inteligente</span></h2>", unsafe_allow_html=True)
+    st.markdown("<p style='color: #64748b;'>Procesa tus facturas en vivo, validando con el maestro y consolidando duplicados automáticamente.</p>", unsafe_allow_html=True)
     st.markdown("---")
 
     st.markdown('<div class="card-container">', unsafe_allow_html=True)
@@ -385,7 +406,6 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
     uploaded_files = st.file_uploader("📂 Sube tus facturas (Selección múltiple)", type=["pdf", "png", "jpg", "jpeg"], accept_multiple_files=True, key="batch_files")
     st.markdown('</div>', unsafe_allow_html=True)
 
-    # Guardar bytes en session_state para persistencia absoluta
     if uploaded_files:
         if "cached_uploaded_files" not in st.session_state or len(st.session_state["cached_uploaded_files"]) != len(uploaded_files):
             st.session_state["cached_uploaded_files"] = [
@@ -408,7 +428,7 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
         processed_so_far = st.session_state["batch_processed_count"]
 
         b_col1, b_col2 = st.columns(2)
-        iniciar_btn = b_col1.button("🚀 Iniciar Procesamiento en Vivo (Archivo por Archivo)", type="primary")
+        iniciar_btn = b_col1.button("🚀 Iniciar Procesamiento y Consolidación en Vivo", type="primary")
         reiniciar_lote = b_col2.button("🔄 Reiniciar / Limpiar Lote")
 
         if reiniciar_lote:
@@ -427,7 +447,6 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
             st.session_state["is_live_processing"] = True
             st.rerun()
 
-        # 🟢 PROCESAMIENTO UNO A UNO EN VIVO CON RE-RUN INSTANTÁNEO
         is_live = st.session_state.get("is_live_processing", False)
         if is_live:
             if processed_so_far < total_files:
@@ -456,7 +475,7 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
                             "Proveedor": nombre_prov,
                             "Nº Documento": num_doc if num_doc else "N/D",
                             "Estado": "🔴 Omitido (Duplicado)",
-                            "Motivo": f"Factura ya existente (RNC: {rnc_emisor}, Doc: {num_doc}, Total: RD$ {total_doc_val:,.2f})"
+                            "Motivo": f"Factura ya existente (RNC: {rnc_emisor}, Doc: {num_doc})"
                         })
                     else:
                         st.session_state["batch_signatures"].add(doc_signature)
@@ -481,13 +500,13 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
                     })
 
                 st.session_state["batch_processed_count"] += 1
-                st.rerun() # Recarga instantánea para procesar el siguiente archivo en vivo
+                st.rerun()
             else:
                 st.session_state["is_live_processing"] = False
                 st.success("🎉 ¡Procesamiento de todo el lote finalizado con éxito!")
                 st.rerun()
 
-        # Mostrar Dashboard y Resultados Actuales en Tiempo Real
+        # Dashboard y Consolidación Final Automática
         if st.session_state["batch_processed_count"] > 0:
             st.markdown("---")
             st.markdown("## 📊 Dashboard de Auditoría y Progreso en Vivo")
@@ -500,7 +519,7 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
             col_m1.metric("📁 Archivos Procesados", f"{p_total_done} / {total_files}")
             col_m2.metric("🟢 Procesados OK", p_ok)
             col_m3.metric("🔴 Omitidos / Duplicados", p_omitidos)
-            col_m4.metric("📦 Productos Totales", len(st.session_state["batch_accumulated_items"]))
+            col_m4.metric("📦 Ítems Brutos", len(st.session_state["batch_accumulated_items"]))
 
             st.markdown("### 📋 Detalle de Archivos Evaluados")
             df_audit = pd.DataFrame(st.session_state["batch_audit_log"])
@@ -508,12 +527,13 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
 
             if p_total_done == total_files and st.session_state["batch_accumulated_items"]:
                 st.markdown("---")
-                st.markdown(f"### 📦 Consolidado de Inventario Resultante")
+                st.markdown(f"### 📦 Consolidado de Inventario Resultante (Sin Duplicados)")
 
-                rows_preview = []
+                raw_items = st.session_state["batch_accumulated_items"]
                 multiplicador_ganancia = 1 + (margen_ganancia_lote / 100.0)
 
-                for idx, item in enumerate(st.session_state["batch_accumulated_items"], start=1):
+                processed_rows = []
+                for item in raw_items:
                     desc = str(item.get("descripcion", ""))
                     orig_code = clean_barcode(item.get("codigo", ""))
                     final_code, status_match = validate_with_master(desc, orig_code)
@@ -526,53 +546,103 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
                     precio_venta = round_to_nearest_5(raw_pv)
                     stock_val = cant_comprada * empaque_val
                     
-                    rows_preview.append({
-                        "No.": idx,
-                        "Código Barra POS": str(final_code),
-                        "Nombre": desc,
-                        "Cant. Compra": cant_comprada,
-                        "Empaque": empaque_val,
-                        "Stock Total": stock_val,
-                        "Costo Unit. Sin ITBIS": costo,
-                        "Precio Venta": precio_venta,
-                        "Estado Memoria": status_match
+                    # Usar nombre maestro si hay coincidencia exacta o cercana
+                    clean_desc_key = desc.strip().upper()
+                    master_matched_name = clean_desc_key
+                    if master_code_dict:
+                        if clean_desc_key in master_code_dict:
+                            # Encontrar la llave exacta del maestro
+                            for mk in master_code_dict.keys():
+                                if mk == clean_desc_key:
+                                    master_matched_name = mk
+                                    break
+                        else:
+                            close_m = difflib.get_close_matches(clean_desc_key, list(master_code_dict.keys()), n=1, cutoff=0.60)
+                            if close_m:
+                                master_matched_name = close_m[0]
+
+                    m_row = master_row_dict.get(master_matched_name, {})
+
+                    processed_rows.append({
+                        "Nombre": master_matched_name if final_code != "S/C (Sin Código)" else desc,
+                        "Código Barra": str(final_code),
+                        "Categoría": m_row.get('Categoría', 'General'),
+                        "Tipo": m_row.get('Tipo', 'producto'),
+                        "Precio Venta": safe_float(m_row.get('Precio Venta', precio_venta)),
+                        "Costo": safe_float(m_row.get('Costo', costo)),
+                        "Stock": stock_val,
+                        "Stock Mínimo": safe_int(m_row.get('Stock Mínimo', 5)),
+                        "ITBIS": safe_float(m_row.get('ITBIS', 0.18)),
+                        "Unidad Medida": m_row.get('Unidad Medida', 'unidad'),
+                        "Venta Granel": m_row.get('Venta Granel', 'No'),
+                        "Cantidad Empaque": safe_int(m_row.get('Cantidad Empaque', empaque_val)),
+                        "Precio Variable": m_row.get('Precio Variable', 'No'),
+                        "Descuento %": safe_float(m_row.get('Descuento %', 0)),
+                        "Descuento Monto": safe_float(m_row.get('Descuento Monto', 0)),
+                        "Precio Especial": m_row.get('Precio Especial', None),
+                        "Descuento Activo": m_row.get('Descuento Activo', 'No'),
+                        "Descuento Nota": m_row.get('Descuento Nota', None)
                     })
 
-                df_batch = pd.DataFrame(rows_preview)
-                df_batch["Código Barra POS"] = df_batch["Código Barra POS"].astype(str)
-                st.dataframe(df_batch, use_container_width=True, hide_index=True)
+                df_temp = pd.DataFrame(processed_rows)
+
+                # CONSOLIDAR DUPLICADOS AGRUPANDO POR CÓDIGO Y NOMBRE
+                df_grouped = df_temp.groupby(['Código Barra', 'Nombre'], as_index=False).agg({
+                    'Stock': 'sum',
+                    'Costo': 'mean',
+                    'Precio Venta': 'mean',
+                    'Categoría': 'first',
+                    'Tipo': 'first',
+                    'Stock Mínimo': 'first',
+                    'ITBIS': 'first',
+                    'Unidad Medida': 'first',
+                    'Venta Granel': 'first',
+                    'Cantidad Empaque': 'first',
+                    'Precio Variable': 'first',
+                    'Descuento %': 'first',
+                    'Descuento Monto': 'first',
+                    'Precio Especial': 'first',
+                    'Descuento Activo': 'first',
+                    'Descuento Nota': 'first'
+                })
+
+                df_final_preview = df_grouped.sort_values(by="Stock", ascending=False).reset_index(drop=True)
+                df_final_preview["Código Barra"] = df_final_preview["Código Barra"].astype(str)
+
+                st.success(f"✨ ¡Consolidación exitosa! Se redujo a **{len(df_final_preview)} productos únicos** sin duplicados.")
+                st.dataframe(df_final_preview, use_container_width=True, hide_index=True)
 
                 wb = openpyxl.Workbook()
                 ws_prod = wb.active
                 ws_prod.title = "Productos"
                 ws_prod.append(['Nombre', 'Código Barra', 'Categoría', 'Tipo', 'Precio Venta', 'Costo', 'Stock', 'Stock Mínimo', 'ITBIS', 'Unidad Medida', 'Venta Granel', 'Cantidad Empaque', 'Precio Variable', 'Descuento %', 'Descuento Monto', 'Precio Especial', 'Descuento Activo', 'Descuento Nota'])
 
-                for item_dict in rows_preview:
+                for _, row in df_final_preview.iterrows():
                     ws_prod.append([
-                        item_dict["Nombre"],
-                        str(item_dict["Código Barra POS"]),
-                        "General",
-                        "producto",
-                        item_dict["Precio Venta"],
-                        item_dict["Costo Unit. Sin ITBIS"],
-                        item_dict["Stock Total"],
-                        5,
-                        0.18,
-                        "unidad",
-                        "No",
-                        item_dict["Empaque"],
-                        "No",
-                        0,
-                        0,
-                        None,
-                        "No",
-                        None
+                        row["Nombre"],
+                        str(row["Código Barra"]),
+                        row["Categoría"],
+                        row["Tipo"],
+                        row["Precio Venta"],
+                        row["Costo"],
+                        row["Stock"],
+                        row["Stock Mínimo"],
+                        row["ITBIS"],
+                        row["Unidad Medida"],
+                        row["Venta Granel"],
+                        row["Cantidad Empaque"],
+                        row["Precio Variable"],
+                        row["Descuento %"],
+                        row["Descuento Monto"],
+                        row["Precio Especial"],
+                        row["Descuento Activo"],
+                        row["Descuento Nota"]
                     ])
                     ws_prod.cell(row=ws_prod.max_row, column=2).number_format = '@'
 
                 output = io.BytesIO()
                 wb.save(output)
-                st.download_button("📥 Descargar Excel Consolidado Final (Lote Completo)", output.getvalue(), "Inventario_WilPOS_Consolidado_Lote.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+                st.download_button("📥 Descargar Excel Consolidado Final (Sin Duplicados y Códigos del Maestro)", output.getvalue(), "Inventario_WilPOS_Consolidado_Corregido.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
 # ==========================================
 # MÓDULO 3: EXTRAER CÓDIGO DESDE IMAGEN
