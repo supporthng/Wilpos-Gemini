@@ -194,16 +194,12 @@ with st.sidebar.expander(f"📦 Códigos Oficiales ({len(st.session_state['barco
         st.info("Sin códigos guardados.")
 
 # ==========================================
-# MOTOR DE ASIGNACIÓN OFICIAL POR NOMBRE (SOBREESCRIBIENDO CUALQUIER CÓDIGO DE FACTURA)
+# MOTOR DE ASIGNACIÓN AUTÓNOMA POR NOMBRE
 # ==========================================
 def match_official_barcode(item_description):
     raw_name = str(item_description).strip().upper()
     b_mem = st.session_state["barcode_memory"]
     
-    # Excepción directa garantizada
-    if "CORONA CERO" in raw_name or "CERO 355" in raw_name:
-        return "750304423180", "CERVEZA CORONA CERO 355ML", "Regla Maestra Directa"
-
     # 1. Coincidencia Exacta
     if raw_name in b_mem:
         return clean_barcode(b_mem[raw_name]), raw_name, "Maestro Exacto"
@@ -391,7 +387,7 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
     l_col1, l_col2 = st.columns([1, 3])
     with l_col1:
         margen_ganancia_lote = st.number_input("⚙️ Ganancia (%) Lote", min_value=0.0, max_value=500.0, value=25.0, step=1.0)
-    uploaded_files = st.file_uploader("📂 Sube tus facturas (Selección múltiple)", type=["pdf", "png", "jpg", "jpeg"], accept_multiple_files=True, key="batch_files")
+    uploaded_files = st.file_uploader("📂 Sube tu factura (Selección múltiple)", type=["pdf", "png", "jpg", "jpeg"], accept_multiple_files=True, key="batch_files")
     st.markdown('</div>', unsafe_allow_html=True)
 
     if uploaded_files:
