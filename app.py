@@ -179,7 +179,6 @@ def process_invoice_gemini_flash(file_obj, file_type):
     for intento in range(2):
         try:
             genai.configure(api_key=ACTIVE_GEMINI_KEY)
-            # Modelo actualizado requerido por la API: gemini-3.6-flash
             model = genai.GenerativeModel('gemini-3.6-flash')
             
             file_obj.seek(0)
@@ -195,7 +194,7 @@ def process_invoice_gemini_flash(file_obj, file_type):
             if raw_text.startswith("```json"): raw_text = raw_text[7:]
             if raw_text.endswith("```"): raw_text = raw_text[:-3]
             
-            time.sleep(4.0) # Pausa de seguridad 15 RPM
+            time.sleep(4.0)
             return json.loads(raw_text.strip()), "✅ Éxito (Gemini Flash Gratuito)"
         except Exception as e:
             err_str = str(e)
@@ -316,11 +315,16 @@ if modulo == "📄 Factura Individual":
                 t4.metric("Total Neto Factura", f"RD$ {calc_total_factura:,.2f}")
                 st.markdown("---")
 
+                # Auditoría visual clara de artículos procesados
+                st.info(f"📋 **Auditoría de Lectura:** Se detectaron **{len(data_items)} ítems** en la factura. Procesados y listos: **{len(rows_preview)}**")
+
                 if rows_preview:
                     st.markdown("### ✅ Artículos Procesados Exitosamente")
                     df_resultado = pd.DataFrame(rows_preview)
                     df_resultado["Código Oficial POS"] = df_resultado["Código Oficial POS"].astype(str)
-                    st.dataframe(df_resultado, use_container_width=True, hide_index=True)
+                    
+                    altura_tabla = min(max(len(rows_preview) * 35 + 40, 200), 850)
+                    st.dataframe(df_resultado, use_container_width=True, hide_index=True, height=altura_tabla)
                     
                     wb = openpyxl.Workbook()
                     ws_prod = wb.active
