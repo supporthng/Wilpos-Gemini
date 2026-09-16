@@ -299,7 +299,7 @@ def process_invoice_with_ai(file_obj, file_type, use_openai_fallback=False):
         "Devuelve la información estrictamente en formato JSON con la siguiente estructura exacta: "
         '{"emisor_rnc": "...", "emisor_nombre": "...", "numero_documento": "...", "fecha": "...", "subtotal": 0.0, "itbis": 0.0, "total": 0.0, "items": [{"descripcion": "...", "cantidad": 1, "empaque": 1, "costo_sin_itbis": 0.0}]}. '
         "Respuesta JSON pura sin texto adicional."
-    ]
+    )
 
     last_err = ""
     for intento in range(2):
