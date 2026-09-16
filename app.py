@@ -211,6 +211,10 @@ def process_invoice_exact_18(file_obj, file_type, use_openai_fallback=False):
             file_bytes = file_obj.read()
             image_input = file_bytes if "pdf" in file_type.lower() else Image.open(io.BytesIO(file_bytes))
             response = model.generate_content([image_input, prompt_text])
+            
+            if not response or not response.text:
+                raise ValueError("La IA devolvió una respuesta vacía o nula.")
+                
             raw_text = response.text.strip()
             if raw_text.startswith("```json"): raw_text = raw_text[7:]
             if raw_text.endswith("```"): raw_text = raw_text[:-3]
@@ -227,7 +231,7 @@ def process_invoice_exact_18(file_obj, file_type, use_openai_fallback=False):
 # ==========================================
 if modulo == "📄 Factura Individual":
     st.markdown("<h2>📊 Automatizador de Facturas <span style='color: #0284c7;'>(Individual)</span></h2>", unsafe_allow_html=True)
-    st.markdown("<p style='color: #64748b;'>Extracción de códigos, 18 renglones y detección dinámica de descuento comercial (columna COM.) por cada producto.</p>", unsafe_allow_html=True)
+    st.markdown("<p style='color: #64748b;'>Extracción blindada de códigos, 18 renglones y descuento comercial dinámico.</p>", unsafe_allow_html=True)
     st.markdown("---")
 
     st.markdown('<div class="card-container">', unsafe_allow_html=True)
@@ -241,9 +245,9 @@ if modulo == "📄 Factura Individual":
 
     if uploaded_file is not None:
         st.success(f"¡Archivo cargado: {uploaded_file.name}!")
-        if st.button("🚀 Procesar Factura con Descuento Dinámico"):
+        if st.button("🚀 Procesar Factura con Blindaje Activo"):
             file_type = uploaded_file.type if hasattr(uploaded_file, 'type') else 'image/jpeg'
-            with st.spinner("Procesando renglones y detectando descuentos comerciales..."):
+            with st.spinner("Procesando renglones con seguridad reforzada..."):
                 parsed_data, success_msg = process_invoice_exact_18(uploaded_file, file_type, use_openai_fallback=use_openai_single)
 
             if success_msg == "QUOTA_EXCEEDED":
@@ -281,7 +285,6 @@ if modulo == "📄 Factura Individual":
                         b_mem = st.session_state["barcode_memory"]
                         extracted_code = clean_barcode(b_mem.get(desc.upper(), "S/C (Sin Código)"))
 
-                    # Detección dinámica del porcentaje de descuento de la columna COM.
                     desc_pct = safe_float(item.get("descuento_porcentaje") or 0.0)
                     cant_comprada = safe_int(item.get("cantidad") or 1, 1)
                     unidad_txt = str(item.get("unidad") or "CAJA")
@@ -289,7 +292,6 @@ if modulo == "📄 Factura Individual":
                     
                     empaque_val = parse_empaque_from_tamano(tamano_txt, unidad_txt)
                     
-                    # Cálculo contable exacto con el descuento específico detectado
                     importe_bruto = precio_lista * cant_comprada
                     descuento_linea = importe_bruto * (desc_pct / 100.0)
                     importe_neto_linea = importe_bruto - descuento_linea
@@ -371,7 +373,7 @@ if modulo == "📄 Factura Individual":
 # ==========================================
 elif modulo == "📂 Múltiples Facturas (Lote)":
     st.markdown("<h2>📂 Procesador por <span style='color: #0284c7;'>Lotes y Consolidación Oficial</span></h2>", unsafe_allow_html=True)
-    st.markdown("<p style='color: #64748b;'>Procesa múltiples facturas detectando descuentos dinámicos y consolidando inventario.</p>", unsafe_allow_html=True)
+    st.markdown("<p style='color: #64748b;'>Procesa múltiples facturas aplicando descuento dinámico y consolidando stock.</p>", unsafe_allow_html=True)
     st.markdown("---")
 
     st.markdown('<div class="card-container">', unsafe_allow_html=True)
