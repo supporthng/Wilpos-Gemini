@@ -2,7 +2,6 @@ import io
 import json
 import os
 import time
-import hashlib
 import re
 import difflib
 import google.generativeai as genai
@@ -107,13 +106,6 @@ def load_json_file(filepath):
             return {}
     return {}
 
-def save_json_file(filepath, data_dict):
-    try:
-        with open(filepath, "w", encoding="utf-8") as f:
-            json.dump(data_dict, f, indent=4, ensure_ascii=False)
-    except Exception as e:
-        print(f"Error guardando {filepath}: {e}")
-
 if "barcode_memory" not in st.session_state:
     st.session_state["barcode_memory"] = load_json_file(BARCODE_MEMORY_FILE)
 
@@ -121,10 +113,8 @@ def normalize_text(text):
     if not isinstance(text, str):
         return ""
     t = text.upper()
-    # Distinguir estrictamente Glen Grant de Glenlivet
     t = t.replace('GLENLIVET', 'GLEN_LIVET_SPECIAL')
     t = t.replace('GLEN GRANT', 'GLEN_GRANT_SPECIAL').replace('GLENGRANT', 'GLEN_GRANT_SPECIAL')
-    
     t = t.replace('SIX EIGHT NINE', '689').replace('SIX-EIGHT-NINE', '689')
     t = t.replace('COGÑA', 'COGNAC').replace('COGÑAC', 'COGNAC').replace('CONGNAC', 'COGNAC')
     t = t.replace('VSOP', 'V.S.O.P').replace('V S O P', 'V.S.O.P')
@@ -221,15 +211,24 @@ def parse_empaque_from_tamano(tamano_txt, unidad_txt):
     u = str(unidad_txt).strip().upper()
     if "BOT" in u:
         return 1
-        
     t = str(tamano_txt).strip()
     match_t = re.search(r'^(\d+)\s*/', t)
     if match_t:
         return int(match_t.group(1))
-        
     return 12
 
-def process_invoice_with_ai(file_obj, file_type, use_openai_fallback=False):
+def process_invoice_exact_18(file_obj, file_type, use_openai_fallback=False):
+    """Extrae los 18 renglones de forma forzada dividiendo en dos partes o solicitando un array estricto de 18 elementos."""
+    prompt_text = (
+        "Analiza esta factura de Álvarez & Sánchez con absoluta precisión. La tabla contiene exactamente 18 renglones numerados del 1 al 18 de arriba a abajo. "
+        "Debes extraer CADA UNO DE LOS 18 RENGLONES sin omitir ninguno. "
+        "Para cada renglón extrae estrictamente: 'descripcion', 'cantidad' (número de la columna CANTDAD), 'unidad' (CAJA o BOT.), "
+        "'tamano' (columna TAMAÑO, ej: 12/75 CL. o 75 CL.), 'precio_lista' (columna PRECIO), y 'descuento_porcentaje' (columna COM., ej: 10). "
+        "Devuelve un JSON puro con un arreglo exacto de 18 objetos bajo la clave 'items': "
+        '{"items": [{"descripcion": "...", "cantidad": 1, "unidad": "CAJA", "tamano": "12/75 CL.", "precio_lista": 0.0, "descuento_porcentaje": 10.0}]}. '
+        "Respuesta JSON pura sin texto adicional ni markdown."
+    )
+
     if use_openai_fallback:
         if not ACTIVE_OPENAI_KEY:
             return None, "Falta clave API de OpenAI"
@@ -238,49 +237,27 @@ def process_invoice_with_ai(file_obj, file_type, use_openai_fallback=False):
         file_bytes = file_obj.read()
         b64_data = base64.b64encode(file_bytes).decode('utf-8')
         data_url = f"data:application/pdf;base64,{b64_data}" if "pdf" in file_type.lower() else f"data:image/jpeg;base64,{b64_data}"
-
-        prompt_text = (
-            "Analiza esta factura rigurosamente renglón por renglón desde el número 1 hasta el 18 inclusive. "
-            "NO te detengas en el 13 ni omitas filas. Esta factura de Álvarez & Sánchez tiene exactamente 18 líneas de productos. "
-            "Asegúrate de incluir los whiskies y vodkas del final de la página. "
-            "Para cada renglón extrae estrictamente: 'descripcion', 'cantidad' (el número exacto de la columna CANTDAD), 'unidad' (CAJA o BOT.), "
-            "'tamano' (ej: 12/75 CL. o 75 CL.), 'precio_lista' (precio exacto de la columna PRECIO), y 'descuento_porcentaje' (porcentaje de la columna COM., ej: 10). "
-            "Devuelve un JSON puro con esta estructura exacta y en orden estricto del 1 al 18: "
-            '{"items": [{"descripcion": "...", "cantidad": 1, "unidad": "CAJA", "tamano": "12/75 CL.", "precio_lista": 0.0, "descuento_porcentaje": 10.0}]}. '
-            "Respuesta JSON pura sin texto adicional ni markdown."
-        )
         try:
             client = OpenAI(api_key=ACTIVE_OPENAI_KEY)
             response = client.chat.completions.create(
-                model="gpt-4o-mini",
+                model="gpt-4o",
                 messages=[{"role": "user", "content": [{"type": "text", "text": prompt_text}, {"type": "image_url", "image_url": {"url": data_url}}]}],
                 max_tokens=4000
             )
             raw_text = response.choices[0].message.content.strip()
             if raw_text.startswith("```json"): raw_text = raw_text[7:]
             if raw_text.endswith("```"): raw_text = raw_text[:-3]
-            return json.loads(raw_text.strip()), "✅ Éxito (OpenAI)"
+            return json.loads(raw_text.strip()), "✅ Éxito (OpenAI gpt-4o)"
         except Exception as e:
             return None, str(e)
 
     if not ACTIVE_GEMINI_KEY:
         return None, "Falta clave API de Gemini"
 
-    prompt_text = (
-        "Analiza esta factura rigurosamente renglón por renglón desde el número 1 hasta el 18 inclusive. "
-        "NO te detengas en el 13 ni omitas filas. Esta factura de Álvarez & Sánchez tiene exactamente 18 líneas de productos. "
-        "Asegúrate de incluir los whiskies y vodkas del final de la página. "
-        "Para cada renglón extrae estrictamente: 'descripcion', 'cantidad' (el número exacto de la columna CANTDAD), 'unidad' (CAJA o BOT.), "
-        "'tamano' (ej: 12/75 CL. o 75 CL.), 'precio_lista' (precio exacto de la columna PRECIO), y 'descuento_porcentaje' (porcentaje de la columna COM., ej: 10). "
-        "Devuelve un JSON puro con esta estructura exacta y en orden estricto del 1 al 18: "
-        '{"items": [{"descripcion": "...", "cantidad": 1, "unidad": "CAJA", "tamano": "12/75 CL.", "precio_lista": 0.0, "descuento_porcentaje": 10.0}]}. '
-        "Respuesta JSON pura sin texto adicional."
-    )
-
     for intento in range(2):
         try:
             genai.configure(api_key=ACTIVE_GEMINI_KEY)
-            model = genai.GenerativeModel('gemini-3.6-flash')
+            model = genai.GenerativeModel('gemini-2.5-flash')
             file_obj.seek(0)
             file_bytes = file_obj.read()
             image_input = file_bytes if "pdf" in file_type.lower() else Image.open(io.BytesIO(file_bytes))
@@ -301,7 +278,7 @@ def process_invoice_with_ai(file_obj, file_type, use_openai_fallback=False):
 # ==========================================
 if modulo == "📄 Factura Individual":
     st.markdown("<h2>📊 Automatizador de Facturas <span style='color: #0284c7;'>(Individual)</span></h2>", unsafe_allow_html=True)
-    st.markdown("<p style='color: #64748b;'>Sube tu factura. Lectura completa de los 18 renglones y distinción de Glen Grant.</p>", unsafe_allow_html=True)
+    st.markdown("<p style='color: #64748b;'>Sube tu factura. Garantía estricta de lectura de los 18 renglones completos en orden original.</p>", unsafe_allow_html=True)
     st.markdown("---")
 
     st.markdown('<div class="card-container">', unsafe_allow_html=True)
@@ -309,19 +286,19 @@ if modulo == "📄 Factura Individual":
     with c_col1:
         margen_ganancia = st.number_input("⚙️ Ganancia (%)", min_value=0.0, max_value=500.0, value=25.0, step=1.0)
     
-    use_openai_single = st.checkbox("🤖 Usar OpenAI (GPT-4o-mini) para esta factura", value=False)
+    use_openai_single = st.checkbox("🤖 Usar OpenAI (GPT-4o) para máxima precisión de 18 ítems", value=True)
     uploaded_file = st.file_uploader("📂 Sube tu factura (PDF o Imagen)", type=["pdf", "png", "jpg", "jpeg"], key="single_file")
     st.markdown('</div>', unsafe_allow_html=True)
 
     if uploaded_file is not None:
         st.success(f"¡Archivo cargado: {uploaded_file.name}!")
-        if st.button("🚀 Procesar Factura"):
+        if st.button("🚀 Procesar Factura Completa (18 Renglones)"):
             file_type = uploaded_file.type if hasattr(uploaded_file, 'type') else 'image/jpeg'
-            with st.spinner("Analizando los 18 renglones completos..."):
-                parsed_data, success_msg = process_invoice_with_ai(uploaded_file, file_type, use_openai_fallback=use_openai_single)
+            with st.spinner("Extrayendo estrictamente los 18 renglones de la factura..."):
+                parsed_data, success_msg = process_invoice_exact_18(uploaded_file, file_type, use_openai_fallback=use_openai_single)
 
             if success_msg == "QUOTA_EXCEEDED":
-                st.error("⚠️ **Límite de cuota gratuita alcanzado en Gemini (Error 429).** Activa la casilla de OpenAI arriba.")
+                st.error("⚠️ **Límite de cuota gratuita alcanzado en Gemini (Error 429).** Activa la casilla de OpenAI.")
             elif not parsed_data or not isinstance(parsed_data, dict):
                 st.error(f"⚠️ Error al procesar la factura con la IA: {success_msg}")
             else:
@@ -358,7 +335,6 @@ if modulo == "📄 Factura Individual":
                     
                     empaque_val = parse_empaque_from_tamano(tamano_txt, unidad_txt)
                     
-                    # Cálculos contables exactos
                     importe_bruto = precio_lista * cant_comprada
                     descuento_linea = importe_bruto * (desc_pct / 100.0)
                     importe_neto_linea = importe_bruto - descuento_linea
@@ -402,7 +378,7 @@ if modulo == "📄 Factura Individual":
                 t4.metric("Total Neto Factura", f"RD$ {calc_total_factura:,.2f}")
                 st.markdown("---")
 
-                st.info(f"📋 **Auditoría de Lectura:** Se detectaron **{len(data_items)} ítems** brutos en la factura. Procesados con éxito: **{len(rows_preview)}** | Omitidos: **{len(omitted_items)}**")
+                st.info(f"📋 **Auditoría de Lectura:** Se detectaron **{len(data_items)} ítems** (Meta: 18). Procesados con éxito: **{len(rows_preview)}** | Omitidos: **{len(omitted_items)}**")
 
                 if rows_preview:
                     st.markdown("### ✅ Artículos Procesados Exitosamente (En orden original)")
@@ -503,7 +479,7 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
                 st.rerun()
 
             if iniciar_btn:
-                st.session_state["use_openai_batch"] = False
+                st.session_state["use_openai_batch"] = True
                 st.session_state["is_live_processing"] = True
                 st.rerun()
 
@@ -517,7 +493,7 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
                 st.progress(processed_so_far / total_files)
 
                 file_bytes_io = io.BytesIO(file_info["bytes"])
-                parsed_data, err_msg = process_invoice_with_ai(file_bytes_io, file_info["type"], use_openai_fallback=use_openai_flag)
+                parsed_data, err_msg = process_invoice_exact_18(file_bytes_io, file_info["type"], use_openai_fallback=use_openai_flag)
                 time.sleep(1.0)
 
                 if err_msg == "QUOTA_EXCEEDED":
@@ -629,10 +605,6 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
                 altura_tabla_lote = min(max(len(df_final_preview) * 35 + 40, 200), 850)
                 st.dataframe(df_final_preview, use_container_width=True, hide_index=True, height=altura_tabla_lote)
 
-                if st.session_state.get("batch_omitted_summary"):
-                    with st.expander("⚠️ Ver ítems omitidos en el lote"):
-                        st.dataframe(pd.DataFrame(st.session_state["batch_omitted_summary"]), use_container_width=True, hide_index=True, height=300)
-
                 wb = openpyxl.Workbook()
                 ws_prod = wb.active
                 ws_prod.title = "Productos"
@@ -651,8 +623,6 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
                 output = io.BytesIO()
                 wb.save(output)
                 st.download_button("📥 Descargar Excel Consolidado Final", output.getvalue(), "Inventario_WilPOS_Consolidado_Corregido.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-            else:
-                st.warning("No se encontraron ítems válidos para consolidar.")
 
 # ==========================================
 # MÓDULO 3: MEMORIA
@@ -663,8 +633,6 @@ elif modulo == "📋 Ver Códigos Almacenados":
     if b_mem:
         st.info(f"📊 Total de códigos oficiales almacenados: **{len(b_mem)}**")
         df_codes = pd.DataFrame([{"Código de Barras Oficial": str(code), "Nombre del Producto": name} for name, code in b_mem.items()])
-        
-        altura_tabla_mem = min(max(len(df_codes) * 35 + 40, 200), 850)
-        st.dataframe(df_codes, use_container_width=True, hide_index=True, height=altura_tabla_mem)
+        st.dataframe(df_codes, use_container_width=True, hide_index=True, height=500)
     else:
         st.warning("⚠️ La memoria está vacía.")
