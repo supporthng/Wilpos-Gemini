@@ -277,10 +277,8 @@ if modulo == "📄 Factura Individual":
                         omitted_items.append({"Item #": idx, "Descripción": desc, "Razón": "Precio de lista en 0"})
                         continue
 
-                    # Usar el código de barras extraído directamente de la factura por la IA
                     extracted_code = clean_barcode(item.get("codigo_barras"))
                     if extracted_code == "S/C (Sin Código)":
-                        # Respaldo en memoria si faltara
                         b_mem = st.session_state["barcode_memory"]
                         extracted_code = clean_barcode(b_mem.get(desc.upper(), "S/C (Sin Código)"))
 
