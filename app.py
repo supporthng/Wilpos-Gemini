@@ -135,12 +135,20 @@ def clean_barcode(code_val):
         return "S/C (Sin Código)"
     return digits
 
-def run_countdown(seconds=30, message="Límite de la capa gratuita alcanzado (15 peticiones por minuto). Reintentando en"):
-    placeholder = st.empty()
-    for remaining in range(seconds, 0, -1):
-        placeholder.warning(f"⚠️ {message} **{remaining} segundos**...")
+def run_visual_countdown(total_seconds=30, text_msg="Límite de la capa gratuita alcanzado (15 peticiones por minuto). Pausa de seguridad activa:"):
+    st.warning(f"⚠️ {text_msg}")
+    bar = st.progress(0)
+    status_text = st.empty()
+    
+    for i in range(total_seconds):
+        rem = total_seconds - i
+        pct = float((i + 1) / total_seconds)
+        bar.progress(pct)
+        status_text.text(f"⏳ Faltan {rem} segundos para reintentar automáticamente...")
         time.sleep(1)
-    placeholder.empty()
+        
+    bar.empty()
+    status_text.empty()
 
 # ==========================================
 # MENÚ Y CONFIGURACIÓN LATERAL
@@ -207,7 +215,7 @@ def process_invoice_gemini_flash(file_obj, file_type):
             err_str = str(e)
             if "429" in err_str or "quota" in err_str.lower():
                 if intento < 1:
-                    run_countdown(30, "Límite de la capa gratuita alcanzado (15 peticiones por minuto). Cuenta regresiva para reintentar:")
+                    run_visual_countdown(30, "Límite de la capa gratuita alcanzado (15 peticiones por minuto). Conteo regresivo visual:")
                     continue
                 return None, "QUOTA_EXCEEDED"
             return None, f"Error técnico API: {err_str}"
@@ -237,7 +245,7 @@ if modulo == "📄 Factura Individual":
                 parsed_data, success_msg = process_invoice_gemini_flash(uploaded_file, file_type)
 
             if success_msg == "QUOTA_EXCEEDED":
-                st.error("⚠️ **Límite de la capa gratuita alcanzado (15 peticiones por minuto).** El contador automático se activó; por favor intenta nuevamente en unos segundos.")
+                st.error("⚠️ **Límite de la capa gratuita alcanzado (15 peticiones por minuto).** El contador automático finalizó; por favor presiona nuevamente el botón de procesar.")
             elif not parsed_data or not isinstance(parsed_data, dict):
                 st.error(f"⚠️ {success_msg}")
             else:
@@ -360,14 +368,14 @@ if modulo == "📄 Factura Individual":
 # ==========================================
 elif modulo == "📂 Múltiples Facturas (Lote)":
     st.markdown("<h2>📂 Procesador por <span style='color: #0284c7;'>Lotes (Flash Free)</span></h2>", unsafe_allow_html=True)
-    st.markdown("<p style='color: #64748b;'>Procesa múltiples facturas aplicando cuenta regresiva automática ante saturación.</p>", unsafe_allow_html=True)
+    st.markdown("<p style='color: #64748b;'>Procesa múltiples facturas aplicando barra de progreso y conteo regresivo visual.</p>", unsafe_allow_html=True)
     st.markdown("---")
 
     st.markdown('<div class="card-container">', unsafe_allow_html=True)
     l_col1, _ = st.columns([1, 3])
     with l_col1:
         margen_ganancia_lote = st.number_input("⚙️ Ganancia (%) Lote", min_value=0.0, max_value=500.0, value=25.0, step=1.0)
-    uploaded_files = st.file_uploader("📂 Sube tus facturas (Selección múltiple)", type=["pdf", "png", "jpg", "jpeg"], accept_multiple_files=True, key="batch_files")
+    uploaded_files = st.file_uploader("📂 Sube tu factura (Selección múltiple)", type=["pdf", "png", "jpg", "jpeg"], accept_multiple_files=True, key="batch_files")
     st.markdown('</div>', unsafe_allow_html=True)
 
     if uploaded_files:
@@ -416,7 +424,7 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
                 parsed_data, err_msg = process_invoice_gemini_flash(file_bytes_io, file_info["type"])
 
                 if err_msg == "QUOTA_EXCEEDED":
-                    run_countdown(30, "Límite temporal alcanzado en lote. Cuenta regresiva para reanudar:")
+                    run_visual_countdown(30, "Límite temporal alcanzado en lote. Conteo regresivo visual para reanudar:")
                     st.rerun()
                 elif "Error técnico" in err_msg:
                     st.error(f"⚠️ {err_msg}")
