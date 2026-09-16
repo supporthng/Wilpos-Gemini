@@ -114,10 +114,15 @@ def load_json_file(filepath):
     data["WHISKY ESCOCES MALTA 12 AÑOS GLEN GRANT"] = "8000040630269"
     data["VINO TINTO SIX EIGHT NINE 689"] = "051497322618"
     data["VODKA SKYY"] = "721059007504"
+    data["VODKA INFUSIONS CITRUS SKYY"] = "721059627504"
+    data["VODKA INFUSIONS RASPBERRY SKYY"] = "721059637503"
     return data
 
 if "barcode_memory" not in st.session_state:
     st.session_state["barcode_memory"] = load_json_file(BARCODE_MEMORY_FILE)
+
+if "master_catalog" not in st.session_state:
+    st.session_state["master_catalog"] = {}
 
 def safe_float(val, default=0.0):
     try:
@@ -144,6 +149,25 @@ def clean_barcode(code_val):
         return "S/C (Sin Código)"
     return s_val
 
+def get_resolved_barcode(extracted_code, description):
+    cleaned = clean_barcode(extracted_code)
+    desc_upper = str(description).strip().upper()
+    
+    # 1. Si el código extraído es válido, lo usamos y actualizamos la memoria
+    if cleaned != "S/C (Sin Código)":
+        st.session_state["barcode_memory"][desc_upper] = cleaned
+        return cleaned
+    
+    # 2. Si no viene en la factura, buscamos en el Catálogo Maestro cargado
+    if desc_upper in st.session_state["master_catalog"]:
+        return st.session_state["master_catalog"][desc_upper]
+        
+    # 3. Si no está en el maestro, buscamos en la memoria interna
+    if desc_upper in st.session_state["barcode_memory"]:
+        return st.session_state["barcode_memory"][desc_upper]
+        
+    return "S/C (Sin Código)"
+
 # ==========================================
 # MENÚ Y CONFIGURACIÓN LATERAL
 # ==========================================
@@ -153,7 +177,7 @@ st.sidebar.markdown("---")
 
 modulo = st.sidebar.radio(
     "Menú de Navegación",
-    ["📄 Factura Individual", "📂 Múltiples Facturas (Lote)", "📋 Ver Códigos Almacenados"]
+    ["📄 Factura Individual", "📂 Múltiples Facturas (Lote)", "📁 Cargar Archivo Maestro", "📋 Ver Códigos Almacenados"]
 )
 
 st.sidebar.markdown("---")
@@ -313,10 +337,8 @@ if modulo == "📄 Factura Individual":
                         omitted_items.append({"Item #": idx, "Descripción": desc, "Razón": "Precio de lista en 0"})
                         continue
 
-                    extracted_code = clean_barcode(item.get("codigo_barras"))
-                    if extracted_code == "S/C (Sin Código)":
-                        b_mem = st.session_state["barcode_memory"]
-                        extracted_code = clean_barcode(b_mem.get(desc.upper(), "S/C (Sin Código)"))
+                    extracted_code = item.get("codigo_barras")
+                    resolved_code = get_resolved_barcode(extracted_code, desc)
 
                     desc_pct = safe_float(item.get("descuento_porcentaje") or 0)
                     cant_comprada = safe_int(item.get("cantidad") or 1, 1)
@@ -344,7 +366,7 @@ if modulo == "📄 Factura Individual":
                     
                     rows_preview.append({
                         "No.": idx,
-                        "Código Oficial POS": str(extracted_code),
+                        "Código Oficial POS": str(resolved_code),
                         "Nombre Maestro / Artículo": desc,
                         "Cant. Compra": cant_comprada,
                         "Unidad": unidad_txt,
@@ -353,7 +375,7 @@ if modulo == "📄 Factura Individual":
                         "Stock Total": total_unidades_linea,
                         "Costo Unitario": costo,
                         "Precio Venta": precio_venta,
-                        "Estado": "Directo Factura"
+                        "Estado": "Catálogo Maestro" if resolved_code != clean_barcode(extracted_code) else "Directo Factura"
                     })
 
                 calc_neto_gravado = calc_subtotal - calc_descuento_total
@@ -515,7 +537,9 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
                 if not desc:
                     continue
 
-                extracted_code = clean_barcode(item.get("codigo_barras"))
+                extracted_code = item.get("codigo_barras")
+                resolved_code = get_resolved_barcode(extracted_code, desc)
+                
                 precio_lista = safe_float(item.get("precio_lista") or 0)
                 desc_pct = safe_float(item.get("descuento_porcentaje") or 0)
                 cant_comprada = safe_int(item.get("cantidad") or 1, 1)
@@ -542,7 +566,7 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
 
                 processed_rows.append({
                     "Nombre": desc,
-                    "Código Barra": str(extracted_code),
+                    "Código Barra": str(resolved_code),
                     "Categoría": "General", "Tipo": "producto",
                     "Precio Venta": precio_venta, "Costo": costo,
                     "Stock": stock_val, "Stock Mínimo": 5, "ITBIS": 0.18,
@@ -598,13 +622,57 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
                 st.download_button("📥 Descargar Excel Consolidado Final", output.getvalue(), "Inventario_WilPOS_Consolidado_Corregido.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
 # ==========================================
-# MÓDULO 3: MEMORIA
+# MÓDULO 3: CARGAR ARCHIVO MAESTRO
+# ==========================================
+elif modulo == "📁 Cargar Archivo Maestro":
+    st.markdown("<h2>📁 Gestión de <span style='color: #0284c7;'>Catálogo Maestro</span></h2>", unsafe_allow_html=True)
+    st.markdown("<p style='color: #64748b;'>Sube tu archivo Excel maestro para mapear automáticamente los códigos de barras de los productos.</p>", unsafe_allow_html=True)
+    st.markdown("---")
+
+    master_file = st.file_uploader("📂 Sube tu Catálogo Maestro (Excel .xlsx)", type=["xlsx"], key="master_upload")
+    
+    if master_file is not None:
+        try:
+            df_master = pd.read_excel(master_file)
+            st.success("¡Archivo maestro cargado con éxito!")
+            st.write("Vista previa de tus datos:", df_master.head())
+            
+            st.markdown("### Selecciona las columnas correspondientes")
+            cols = df_master.columns.tolist()
+            col_name = st.selectbox("Columna con el Nombre / Descripción del Producto", cols)
+            col_code = st.selectbox("Columna con el Código de Barras Oficial", cols)
+            
+            if st.button("💾 Guardar Catálogo en Memoria"):
+                count = 0
+                temp_dict = {}
+                for _, row in df_master.iterrows():
+                    p_name = str(row[col_name]).strip().upper()
+                    p_code = clean_barcode(row[col_code])
+                    if p_name and p_code != "S/C (Sin Código)":
+                        temp_dict[p_name] = p_code
+                        count += 1
+                
+                st.session_state["master_catalog"] = temp_dict
+                st.success(f"¡Se han importado y guardado correctamente {count} productos en el catálogo maestro!")
+        except Exception as e:
+            st.error(f"Error al leer el archivo Excel: {e}")
+
+    if st.session_state["master_catalog"]:
+        st.markdown("---")
+        st.markdown(f"### 📋 Productos activos en el Catálogo Maestro ({len(st.session_state['master_catalog'])})")
+        df_current_master = pd.DataFrame([{"Descripción": k, "Código de Barras": v} for k, v in st.session_state["master_catalog"].items()])
+        st.dataframe(df_current_master, use_container_width=True, hide_index=True, height=400)
+    else:
+        st.info("ℹ️ Aún no hay productos cargados en el catálogo maestro temporal. Sube un archivo Excel para comenzar.")
+
+# ==========================================
+# MÓDULO 4: MEMORIA
 # ==========================================
 elif modulo == "📋 Ver Códigos Almacenados":
     st.markdown("<h2>📋 Memoria de <span style='color: #0284c7;'>Códigos Almacenados</span></h2>", unsafe_allow_html=True)
     b_mem = st.session_state["barcode_memory"]
     if b_mem:
-        st.info(f"📊 Total de códigos oficiales almacenados: **{len(b_mem)}**")
+        st.info(f"📊 Total de códigos oficiales almacenados en memoria: **{len(b_mem)}**")
         df_codes = pd.DataFrame([{"Código de Barras Oficial": str(code), "Nombre del Producto": name} for name, code in b_mem.items()])
         st.dataframe(df_codes, use_container_width=True, hide_index=True, height=500)
     else:
