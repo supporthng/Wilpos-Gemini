@@ -105,7 +105,7 @@ def load_json_file(filepath):
         except Exception:
             data = {}
     
-    # DICCIONARIO MAESTRO BLINDADO (Códigos exactos de la factura de Álvarez & Sánchez)
+    # DICCIONARIO MAESTRO BLINDADO (Incluyendo códigos exactos de 689 y demás referencias)
     master_exactos = {
         "VINO TINTO RESERVA CUNE (D.O.RIOJA)": "8410591003045",
         "VINO TINTO MERLOT VIÑA TARAPACA": "7804340909534",
@@ -119,6 +119,8 @@ def load_json_file(filepath):
         "VINO TINTO MERLOT CALIFORNIA JOSH 23": "857744011157",
         "VINO TTO CAB SAUV BOURBON RESERV JOSH 22": "031259004327",
         "VINO TTO CAB SAUV NORTH RESERVE JOSH 21": "031259000046",
+        "VINO TINTO PINOT NOIR 689 CELLARS": "051497455286",
+        "VINO TINTO SIX EIGHT NINE": "7804320763439",
         "VINO TINTO PINOT NOIR 689 CELLARS 23": "051497455309",
         "VINO TINTO SIX EIGHT NINE 689 23": "051497322618",
         "WHISKY ESCOCES MALTA 12 AÑOS GLEN GRANT": "8000040630269",
@@ -174,21 +176,30 @@ modulo = st.sidebar.radio(
 
 def parse_empaque_from_tamano(tamano_txt, unidad_txt):
     u = str(unidad_txt).strip().upper()
-    if "BOT" in u:
-        return 1
-    t = str(tamano_txt).strip()
+    t = str(tamano_txt).strip().upper()
+    
+    # 1. Buscar patrón con barra (ej: 12/75 CL)
     match_t = re.search(r'^(\d+)\s*/', t)
     if match_t:
         return int(match_t.group(1))
+    
+    # 2. Si indica que viene en cajas/botellas de 6 (ej: 6 BOT. o tamaño con 6)
+    if "6" in t or "6" in u:
+        return 6
+        
+    # 3. Si es botella unitaria sin especificar lote de 6 o 12
+    if "BOT" in u and not "6" in t and not "12" in t:
+        return 1
+        
     return 12
 
 def process_invoice_exact_18(file_obj, file_type, use_openai_fallback=False):
     prompt_text = (
-        "Analiza esta factura de Álvarez & Sánchez con absoluta precisión quirúrgica. "
-        "La tabla tiene exactamente 18 renglones numerados del 1 al 18. "
-        "Para cada renglón extrae únicamente la descripción exacta, cantidad, unidad, tamaño, precio de lista y descuento de la columna 'COM.'. "
-        "Devuelve un JSON puro con un arreglo exacto de 18 objetos bajo la clave 'items': "
-        '{"items": [{"descripcion": "...", "cantidad": 1, "unidad": "CAJA", "tamano": "12/75 CL.", "precio_lista": 0.0, "descuento_porcentaje": 10.0}]}. '
+        "Analiza esta factura con absoluta precisión quirúrgica. "
+        "La tabla tiene exactamente los renglones de la factura. "
+        "Para cada renglón extrae la descripción exacta, cantidad, unidad, tamaño, precio de lista y descuento de la columna 'COM.'. "
+        "Devuelve un JSON puro con un arreglo de objetos bajo la clave 'items': "
+        '{"items": [{"descripcion": "...", "cantidad": 1, "unidad": "CAJA", "tamano": "6 BOT.", "precio_lista": 0.0, "descuento_porcentaje": 10.0}]}. '
         "Respuesta JSON pura sin texto adicional ni markdown."
     )
 
@@ -245,7 +256,7 @@ def process_invoice_exact_18(file_obj, file_type, use_openai_fallback=False):
 # ==========================================
 if modulo == "📄 Factura Individual":
     st.markdown("<h2>📊 Automatizador de Facturas <span style='color: #0284c7;'>(Individual)</span></h2>", unsafe_allow_html=True)
-    st.markdown("<p style='color: #64748b;'>Procesamiento con mapeo maestro blindado y 18 renglones exactos.</p>", unsafe_allow_html=True)
+    st.markdown("<p style='color: #64748b;'>Procesamiento con detección inteligente de empaques y códigos oficiales.</p>", unsafe_allow_html=True)
     st.markdown("---")
 
     st.markdown('<div class="card-container">', unsafe_allow_html=True)
@@ -259,9 +270,9 @@ if modulo == "📄 Factura Individual":
 
     if uploaded_file is not None:
         st.success(f"¡Archivo cargado: {uploaded_file.name}!")
-        if st.button("🚀 Procesar Factura con Matcheo Blindado"):
+        if st.button("🚀 Procesar Factura"):
             file_type = uploaded_file.type if hasattr(uploaded_file, 'type') else 'image/jpeg'
-            with st.spinner("Procesando y asignando códigos oficiales exactos..."):
+            with st.spinner("Procesando y asignando códigos oficiales..."):
                 parsed_data, success_msg = process_invoice_exact_18(uploaded_file, file_type, use_openai_fallback=use_openai_single)
 
             if success_msg == "QUOTA_EXCEEDED":
@@ -296,13 +307,11 @@ if modulo == "📄 Factura Individual":
                         omitted_items.append({"Item #": idx, "Descripción": desc, "Razón": "Precio de lista en 0"})
                         continue
 
-                    # Búsqueda exacta y por similitud segura en el diccionario maestro
                     upper_desc = desc.upper()
                     extracted_code = "S/C (Sin Código)"
                     if upper_desc in b_mem:
                         extracted_code = b_mem[upper_desc]
                     else:
-                        # Buscar por coincidencia parcial limpia
                         for m_key, m_code in b_mem.items():
                             if any(w in upper_desc for w in m_key.split() if len(w) > 4):
                                 extracted_code = m_code
@@ -346,7 +355,7 @@ if modulo == "📄 Factura Individual":
                         "Desc. %": f"{desc_pct}%",
                         "Costo Unitario": costo,
                         "Precio Venta": precio_venta,
-                        "Estado": "Maestro OK"
+                        "Estado": "OK"
                     })
 
                 calc_neto_gravado = calc_subtotal - calc_descuento_total
@@ -399,7 +408,7 @@ if modulo == "📄 Factura Individual":
 # ==========================================
 elif modulo == "📂 Múltiples Facturas (Lote)":
     st.markdown("<h2>📂 Procesador por <span style='color: #0284c7;'>Lotes y Consolidación Oficial</span></h2>", unsafe_allow_html=True)
-    st.markdown("<p style='color: #64748b;'>Procesa múltiples facturas con matcheo maestro y consolidación de stock.</p>", unsafe_allow_html=True)
+    st.markdown("<p style='color: #64748b;'>Procesa múltiples facturas con empaques correctos y consolidación de stock.</p>", unsafe_allow_html=True)
     st.markdown("---")
 
     st.markdown('<div class="card-container">', unsafe_allow_html=True)
