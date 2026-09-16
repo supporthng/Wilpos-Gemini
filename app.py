@@ -256,10 +256,12 @@ def process_invoice_with_ai(file_obj, file_type, use_openai_fallback=False):
 
         prompt_text = (
             "Analiza esta factura rigurosamente línea por línea de arriba a abajo. Esta página contiene exactamente 18 renglones de productos. "
-            "NO omitas ninguno ni compactes filas. Para cada renglón extrae estrictamente: 'descripcion', 'cantidad' (número de cajas), 'empaque', "
-            "y 'importe_neto_linea' (el valor TOTAL final de la línea ya con descuento aplicado, indicado en la columna IMPORTE de la factura, ej: 14040.0). "
+            "NO omitas ninguno ni compactes filas. Para cada renglón extrae estrictamente: "
+            "'descripcion', 'cantidad' (número de cajas), 'empaque', "
+            "'precio_lista' (el precio unitario o de caja indicado en la columna PRECIO antes de descuento, ej: 15600.0 para el Cune), "
+            "y 'descuento_porcentaje' (el porcentaje indicado en la columna COM. o DESC., ej: 10 para 10%). "
             "Devuelve un JSON puro con esta estructura exacta: "
-            '{"subtotal": 0.0, "descuento_total": 0.0, "itbis": 0.0, "total": 0.0, "items": [{"descripcion": "...", "cantidad": 1, "empaque": 12, "importe_neto_linea": 0.0}]}. '
+            '{"subtotal": 0.0, "descuento_total": 0.0, "itbis": 0.0, "total": 0.0, "items": [{"descripcion": "...", "cantidad": 1, "empaque": 12, "precio_lista": 0.0, "descuento_porcentaje": 10.0}]}. '
             "Respuesta JSON pura sin texto adicional ni markdown."
         )
         try:
@@ -281,10 +283,12 @@ def process_invoice_with_ai(file_obj, file_type, use_openai_fallback=False):
 
     prompt_text = (
         "Analiza esta factura rigurosamente línea por línea de arriba a abajo. Esta página contiene exactamente 18 renglones de productos. "
-        "NO omitas ninguno ni compactes filas. Para cada renglón extrae estrictamente: 'descripcion', 'cantidad' (número de cajas), 'empaque', "
-        "y 'importe_neto_linea' (el valor TOTAL final de la línea ya con descuento aplicado, indicado en la columna IMPORTE de la factura, ej: 14040.0). "
+        "NO omitas ninguno ni compactes filas. Para cada renglón extrae estrictamente: "
+        "'descripcion', 'cantidad' (número de cajas), 'empaque', "
+        "'precio_lista' (el precio unitario o de caja indicado en la columna PRECIO antes de descuento, ej: 15600.0 para el Cune), "
+        "y 'descuento_porcentaje' (el porcentaje indicado en la columna COM. o DESC., ej: 10 para 10%). "
         "Devuelve un JSON puro con esta estructura exacta: "
-        '{"subtotal": 0.0, "descuento_total": 0.0, "itbis": 0.0, "total": 0.0, "items": [{"descripcion": "...", "cantidad": 1, "empaque": 12, "importe_neto_linea": 0.0}]}. '
+        '{"subtotal": 0.0, "descuento_total": 0.0, "itbis": 0.0, "total": 0.0, "items": [{"descripcion": "...", "cantidad": 1, "empaque": 12, "precio_lista": 0.0, "descuento_porcentaje": 10.0}]}. '
         "Respuesta JSON pura sin texto adicional."
     )
 
@@ -366,21 +370,26 @@ if modulo == "📄 Factura Individual":
                         omitted_items.append({"Item #": idx, "Descripción": "(Sin descripción)", "Razón": "Línea sin descripción"})
                         continue
 
-                    importe_neto_linea = safe_float(
-                        item.get("importe_neto_linea") or 
-                        item.get("importe") or 
-                        item.get("total") or 0
+                    precio_lista = safe_float(
+                        item.get("precio_lista") or 
+                        item.get("precio") or 0
                     )
                     
-                    if importe_neto_linea <= 0:
-                        omitted_items.append({"Item #": idx, "Descripción": desc, "Razón": "Importe neto en 0"})
+                    if precio_lista <= 0:
+                        omitted_items.append({"Item #": idx, "Descripción": desc, "Razón": "Precio de lista en 0"})
                         continue
 
                     official_code, matched_name, status_match = match_official_barcode(desc)
+                    desc_pct = safe_float(item.get("descuento_porcentaje") or 0)
                     cant_comprada = safe_int(item.get("cantidad") or 1, 1)
                     empaque_ai = safe_int(item.get("empaque") or 1, 1)
                     
                     empaque_val = parse_empaque_from_description(desc, empaque_ai)
+                    
+                    # Cálculo matemático exacto contable
+                    importe_bruto = precio_lista * cant_comprada
+                    descuento_linea = importe_bruto * (desc_pct / 100.0)
+                    importe_neto_linea = importe_bruto - descuento_linea
                     
                     total_unidades_linea = cant_comprada * empaque_val
                     if total_unidades_linea > 0:
@@ -535,11 +544,11 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
                         for itm in items:
                             if isinstance(itm, dict):
                                 d_txt = str(itm.get("descripcion") or itm.get("nombre") or "").strip()
-                                p_val = safe_float(itm.get("importe_neto_linea") or 0)
+                                p_val = safe_float(itm.get("precio_lista") or 0)
                                 if d_txt and p_val > 0:
                                     st.session_state["batch_accumulated_items"].append(itm)
                                 else:
-                                    st.session_state["batch_omitted_summary"].append({"Archivo": file_info["name"], "Descripción": d_txt or "(Vacío)", "Razón": "Descripción vacía o importe 0"})
+                                    st.session_state["batch_omitted_summary"].append({"Archivo": file_info["name"], "Descripción": d_txt or "(Vacío)", "Razón": "Descripción vacía o precio 0"})
                 else:
                     st.session_state["batch_audit_log"].append({"Archivo": file_info["name"], "Estado": f"🔴 Error: {err_msg}"})
 
@@ -568,11 +577,16 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
                     continue
 
                 official_code, matched_name, _ = match_official_barcode(desc)
-                importe_neto_linea = safe_float(item.get("importe_neto_linea") or 0)
+                precio_lista = safe_float(item.get("precio_lista") or 0)
+                desc_pct = safe_float(item.get("descuento_porcentaje") or 0)
                 cant_comprada = safe_int(item.get("cantidad") or 1, 1)
                 empaque_ai = safe_int(item.get("empaque") or 1, 1)
 
                 empaque_val = parse_empaque_from_description(desc, empaque_ai)
+                
+                importe_bruto = precio_lista * cant_comprada
+                descuento_linea = importe_bruto * (desc_pct / 100.0)
+                importe_neto_linea = importe_bruto - descuento_linea
                 
                 total_unidades_linea = cant_comprada * empaque_val
                 if total_unidades_linea > 0:
