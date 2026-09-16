@@ -150,7 +150,7 @@ def safe_int(val, default=1):
         return default
 
 def round_to_nearest_5(x):
-    return round(round(x / 5) * 5, 2)
+    return float(round(round(x / 5) * 5))
 
 def clean_barcode(code_val):
     if not code_val:
@@ -224,13 +224,10 @@ def audit_and_correct_cost(costo_unit, cantidad, empaque):
     
     # AUDITORÍA INTELIGENTE DE COSTOS / CAJAS
     if emp <= 1:
-        # Si el empaque detectado es 1 pero el costo unitario es extremadamente alto (> 3000 DOP),
-        # es un costo total de caja/pack. Lo ajustamos dividiendo entre 6 (estándar de caja de licores).
         if c > 3000:
             return c / 6, 6
         return c, 1
     
-    # Si empaque > 1 pero el costo por unidad empaque sigue siendo mayor al costo total o desproporcionado
     if c > 800 and (c / emp) < c:
         if (c / emp) >= 5:
             return c / emp, emp
