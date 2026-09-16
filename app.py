@@ -231,8 +231,8 @@ def parse_empaque_from_description(item_desc, ai_empaque):
         
     d = str(item_desc).upper()
     
-    # 1. Buscar patrón tipo "12/75", "24/12", "6/75" en la descripción de la factura
-    match_slash = re.search(r'(\d+)\s*/\s*([\d\.]+)', d)
+    # 1. Buscar patrón tipo "12/75", "24/12", "6/75", "24X330" en la descripción
+    match_slash = re.search(r'(\d+)\s*(?:/|X|x)\s*([\d\.]+)', d)
     if match_slash:
         val1 = int(match_slash.group(1))
         val2 = float(match_slash.group(2))
@@ -242,16 +242,18 @@ def parse_empaque_from_description(item_desc, ai_empaque):
             return int(val2)
         return val1
 
-    # 2. Reglas por categoría / marcas si el texto indica el tipo
-    if any(b in d for b in ["PRESIDENTE", "MICHELOB", "COORS", "BRAHMA", "CORONA", "STELLA", "HEINEKEN", "BECKS"]):
+    # 2. Reglas estrictas por categoría y marcas para Cervezas y Licores
+    if any(b in d for b in ["PRESIDENTE", "MICHELOB", "COORS", "BRAHMA", "CORONA", "STELLA", "HEINEKEN", "BECKS", "ESTRELLA", "PERONI"]):
         if "22OZ" in d or "650ML" in d or "GRANDE" in d:
             return 12
-        return 24
+        return 24  # Caja estándar de cerveza
         
-    if any(w in d for w in ["VINO", "WHISKY", "VODKA", "TEQUILA", "RON", "RUM", "GIN", "COGNAC", "LICOR", "FIREBALL", "CAMPARI", "AMARETTO", "KAHLUA", "MIDORI"]):
-        return 6
+    if any(w in d for w in ["VINO", "WHISKY", "VODKA", "TEQUILA", "RON", "RUM", "GIN", "COGNAC", "LICOR", "FIREBALL", "CAMPARI", "AMARETTO", "KAHLUA", "MIDORI", "STOLICHNAYA", "JOSH", "JUAN GIL", "TARAPACA"]):
+        if "6" in d or "6/" in d:
+            return 6
+        return 12  # Caja estándar de vino o licor
 
-    if any(bev in d for bev in ["GATORADE", "ALOE", "CLAMATO", "REDBULL", "MONSTER", "COCA", "PEPSI", "AGUA", "OCEANSPRAY", "FOURLOKO", "THEONE"]):
+    if any(bev in d for bev in ["GATORADE", "ALOE", "CLAMATO", "REDBULL", "MONSTER", "COCA", "PEPSI", "AGUA", "OCEANSPRAY", "FOURLOKO", "THEONE", "SCHWEPPES", "FEVER TREE"]):
         return 12
 
     return 1
@@ -260,16 +262,18 @@ def audit_and_correct_cost(item_desc, costo_unit, cantidad, empaque):
     c = safe_float(costo_unit)
     cant = safe_int(cantidad, 1)
     
-    # Extraer empaque real directamente de la descripción o IA
+    # Obtener el empaque real
     emp = parse_empaque_from_description(item_desc, empaque)
     
-    # Si tenemos empaque > 1 y el costo es de caja/bulto, dividimos
+    # CORRECCIÓN CLAVE: Si el costo total de la línea es mayor a 800 y el empaque detectado es > 1,
+    # y el usuario está metiendo una caja completa, dividimos estrictamente entre el empaque.
     if emp > 1:
-        if c > 800 and (c / emp) < c:
-            return round(c / emp, 2), emp
+        return round(c / emp, 2), emp
             
-    # Si empaque era 1 pero el costo es elevado, aplicamos regla de seguridad por costo total
-    if emp <= 1 and c > 2500:
+    # Si por alguna razón el empaque quedó en 1 pero el costo es alto (> 1,200 para una sola unidad suelta es sospechoso en cervezas/refrescos)
+    if emp <= 1 and c > 1200:
+        if any(b in str(item_desc).upper() for b in ["PRESIDENTE", "MICHELOB", "COORS", "CERVEZA", "AGUA", "MONSTER", "RED BULL"]):
+            return round(c / 24, 2), 24
         return round(c / 6, 2), 6
         
     return round(c, 2), emp
@@ -499,7 +503,6 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
 
         processed_so_far = st.session_state["batch_processed_count"]
 
-        # Si el lote se pausó por cuota, ofrecemos la opción de continuar con OpenAI
         if st.session_state.get("quota_paused", False):
             st.error("⚠️ **Límite de cuota gratuita de Gemini alcanzado (Error 429).** El lote se ha detenido de forma segura.")
             st.info("¿Deseas continuar procesando las facturas restantes utilizando **OpenAI (GPT-4o-mini)** como respaldo automático?")
