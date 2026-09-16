@@ -1,6 +1,7 @@
 import io
 import json
 import os
+import time
 import hashlib
 import difflib
 import google.generativeai as genai
@@ -104,16 +105,14 @@ def normalize_text(text):
         return ""
     t = text.upper()
     
-    # ==========================================
-    # DICCIONARIO GENERAL DE EQUIVALENCIAS Y SINÓNIMOS
-    # ==========================================
+    # Equivalencias de marcas y términos
     t = t.replace('SIX EIGHT NINE', '689').replace('SIX-EIGHT-NINE', '689')
     t = t.replace('COGÑA', 'COGNAC').replace('COGÑAC', 'COGNAC').replace('CONGNAC', 'COGNAC')
     t = t.replace('VSOP', 'V.S.O.P').replace('V S O P', 'V.S.O.P')
     t = t.replace('VS ', 'VERY SPECIAL ').replace(' VS', ' VERY SPECIAL')
     t = t.replace('GIN ', 'GINEBRA ').replace(' GIN', ' GINEBRA')
     
-    # Unificación de capacidades y formatos
+    # Capacidades y formatos
     t = t.replace(' 5CL', ' 50 ML').replace(' 5 CL', ' 50 ML').replace('5CL', '50 ML')
     t = t.replace(' 75CL', ' 750 ML').replace(' 75 CL', ' 750 ML').replace('75CL', '750 ML')
     t = t.replace(' 70CL', ' 700 ML').replace(' 70 CL', ' 700 ML').replace('70CL', '700 ML')
@@ -176,7 +175,6 @@ def match_official_barcode(item_description):
     if not b_mem:
         return "S/C (Sin Código)", raw_name, "⚠️ Memoria Vacía"
 
-    # 1. Coincidencia Exacta
     if raw_name in b_mem:
         return clean_barcode(b_mem[raw_name]), raw_name, "Maestro Exacto"
 
@@ -187,7 +185,6 @@ def match_official_barcode(item_description):
     best_code = "S/C (Sin Código)"
     best_name = raw_name
 
-    # 2. Búsqueda inteligente por tokens y secuencia
     for master_name, code in b_mem.items():
         norm_master = normalize_text(master_name)
         master_tokens = set(norm_master.split())
@@ -206,7 +203,6 @@ def match_official_barcode(item_description):
             best_code = code
             best_name = master_name
 
-    # Umbral ultra-flexible (0.28) optimizado para cruzar cualquier variante de proveedor
     if best_score >= 0.28:
         return clean_barcode(best_code), best_name, f"Smart Match ({best_score:.2f})"
 
@@ -247,24 +243,26 @@ def process_invoice_with_ai(file_obj, file_type):
         return None, ""
 
     for api_k, label in keys_to_try:
-        try:
-            genai.configure(api_key=api_k)
-            model = genai.GenerativeModel('gemini-3.6-flash')
-            file_obj.seek(0)
-            file_bytes = file_obj.read()
-            response = model.generate_content([
-                {'mime_type': file_type, 'data': file_bytes},
-                prompt_text
-            ])
-            raw_text = response.text.strip()
-            if raw_text.startswith("```json"):
-                raw_text = raw_text[7:]
-            if raw_text.endswith("```"):
-                raw_text = raw_text[:-3]
-            parsed_data = json.loads(raw_text.strip())
-            return parsed_data, f"✅ Éxito"
-        except Exception:
-            continue
+        for intento in range(2): # Reintento automático en caso de fallo temporal
+            try:
+                genai.configure(api_key=api_k)
+                model = genai.GenerativeModel('gemini-3.6-flash')
+                file_obj.seek(0)
+                file_bytes = file_obj.read()
+                response = model.generate_content([
+                    {'mime_type': file_type, 'data': file_bytes},
+                    prompt_text
+                ])
+                raw_text = response.text.strip()
+                if raw_text.startswith("```json"):
+                    raw_text = raw_text[7:]
+                if raw_text.endswith("```"):
+                    raw_text = raw_text[:-3]
+                parsed_data = json.loads(raw_text.strip())
+                return parsed_data, f"✅ Éxito"
+            except Exception:
+                time.sleep(1)
+                continue
     return None, ""
 
 # ==========================================
@@ -424,6 +422,9 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
 
                 file_bytes_io = io.BytesIO(file_info["bytes"])
                 parsed_data, err_msg = process_invoice_with_ai(file_bytes_io, file_info["type"])
+                
+                # Pausa breve de seguridad para evitar saturar la API en lotes grandes
+                time.sleep(0.5)
 
                 if parsed_data and isinstance(parsed_data, dict):
                     rnc_emisor = str(parsed_data.get("emisor_rnc", "")).strip()
@@ -457,7 +458,7 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
                 st.rerun()
             else:
                 st.session_state["is_live_processing"] = False
-                st.success("🎉 ¡Lote finalizado!")
+                st.success("🎉 ¡Lote finalizado con éxito!")
                 st.rerun()
 
         if st.session_state["batch_processed_count"] > 0:
@@ -526,7 +527,7 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
             df_final_preview = df_grouped.sort_values(by="Stock", ascending=False).reset_index(drop=True)
             df_final_preview["Código Barra"] = df_final_preview["Código Barra"].astype(str)
 
-            st.success(f"✨ Se consolidaron **{len(df_final_preview)} productos únicos** con sus códigos oficiales asignados.")
+            st.success(f"✨ Se consolidaron **{len(df_final_preview)} productos únicos** provenientes de tus facturas.")
             st.dataframe(df_final_preview, use_container_width=True, hide_index=True)
 
             wb = openpyxl.Workbook()
