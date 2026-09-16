@@ -254,15 +254,7 @@ def process_invoice_with_ai(file_obj, file_type, use_openai_fallback=False):
         b64_data = base64.b64encode(file_bytes).decode('utf-8')
         data_url = f"data:application/pdf;base64,{b64_data}" if "pdf" in file_type.lower() else f"data:image/jpeg;base64,{b64_data}"
 
-        prompt_text = (
-            "Analiza esta factura COMPLETAMENTE de arriba a abajo. Extrae TODOS los ítems de la tabla sin omitir ninguno. "
-            "Para cada ítem, extrae estrictamente: 'descripcion', 'cantidad', 'empaque', "
-            "'precio_lista' (el precio unitario o de caja indicado en la columna PRECIO antes de descuento), "
-            "y 'descuento_porcentaje' (el porcentaje de descuento indicado en COM. o DESC., ejemplo: 10 para 10%, o 0). "
-            "Devuelve un JSON puro con esta estructura exacta: "
-            '{"emisor_rnc": "...", "emisor_nombre": "...", "numero_documento": "...", "fecha": "...", "total": 0.0, "items": [{"descripcion": "...", "cantidad": 1, "empaque": 1, "precio_lista": 0.0, "descuento_porcentaje": 0.0}]}. '
-            "Respuesta JSON pura sin texto adicional ni markdown."
-        )
+        prompt_text = "Analiza esta factura COMPLETAMENTE de arriba a abajo. Extrae los totales de cabecera: 'subtotal' (subtotal gravado), 'descuento_total' (si aplica), 'itbis' (itbis total), y 'total' (total neto de la factura). Luego extrae TODOS los ítems de la tabla con: 'descripcion', 'cantidad', 'empaque', 'precio_lista' (precio antes de descuento), y 'descuento_porcentaje' (ej. 10 para 10%). Devuelve un JSON puro con esta estructura exacta: {\"emisor_rnc\": \"...\", \"emisor_nombre\": \"...\", \"numero_documento\": \"...\", \"fecha\": \"...\", \"subtotal\": 0.0, \"descuento_total\": 0.0, \"itbis\": 0.0, \"total\": 0.0, \"items\": [{\"descripcion\": \"...\", \"cantidad\": 1, \"empaque\": 1, \"precio_lista\": 0.0, \"descuento_porcentaje\": 0.0}]}. Respuesta JSON pura sin texto adicional ni markdown."
         try:
             client = OpenAI(api_key=ACTIVE_OPENAI_KEY)
             response = client.chat.completions.create(
@@ -280,15 +272,7 @@ def process_invoice_with_ai(file_obj, file_type, use_openai_fallback=False):
     if not ACTIVE_GEMINI_KEY:
         return None, "Falta clave API de Gemini"
 
-    prompt_text = (
-        "Analiza esta factura COMPLETAMENTE de arriba a abajo. Extrae TODOS los ítems de la tabla sin omitir ninguno. "
-        "Para cada ítem, extrae estrictamente: 'descripcion', 'cantidad', 'empaque', "
-        "'precio_lista' (el precio unitario o de caja indicado en la columna PRECIO antes de descuento), "
-        "y 'descuento_porcentaje' (el porcentaje de descuento indicado en COM. o DESC., ejemplo: 10 para 10%, o 0). "
-        "Devuelve un JSON puro con esta estructura exacta: "
-        '{"emisor_rnc": "...", "emisor_nombre": "...", "numero_documento": "...", "fecha": "...", "total": 0.0, "items": [{"descripcion": "...", "cantidad": 1, "empaque": 1, "precio_lista": 0.0, "descuento_porcentaje": 0.0}]}. '
-        "Respuesta JSON pura sin texto adicional."
-    )
+    prompt_text = "Analiza esta factura COMPLETAMENTE de arriba a abajo. Extrae los totales de cabecera: 'subtotal' (subtotal gravado), 'descuento_total' (si aplica), 'itbis' (itbis total), y 'total' (total neto de la factura). Luego extrae TODOS los ítems de la tabla con: 'descripcion', 'cantidad', 'empaque', 'precio_lista' (precio antes de descuento), y 'descuento_porcentaje' (ej. 10 para 10%). Devuelve un JSON puro con esta estructura exacta: {\"emisor_rnc\": \"...\", \"emisor_nombre\": \"...\", \"numero_documento\": \"...\", \"fecha\": \"...\", \"subtotal\": 0.0, \"descuento_total\": 0.0, \"itbis\": 0.0, \"total\": 0.0, \"items\": [{\"descripcion\": \"...\", \"cantidad\": 1, \"empaque\": 1, \"precio_lista\": 0.0, \"descuento_porcentaje\": 0.0}]}. Respuesta JSON pura sin texto adicional."
 
     for intento in range(2):
         try:
@@ -339,25 +323,42 @@ if modulo == "📄 Factura Individual":
                 st.error(f"⚠️ Error al procesar la factura con la IA: {success_msg}")
             else:
                 st.success(success_msg)
-                data_items = parsed_data.get("items", [])
                 
+                # Mostrar Totales de la Factura Oficiales leídos
+                inv_subtotal = safe_float(parsed_data.get("subtotal", 0))
+                inv_descuento = safe_float(parsed_data.get("descuento_total", 0))
+                inv_itbis = safe_float(parsed_data.get("itbis", 0))
+                inv_total = safe_float(parsed_data.get("total", 0))
+
+                st.markdown("### 📑 Totales Oficiales de la Factura (Proveedor)")
+                t1, t2, t3, t4 = st.columns(4)
+                t1.metric("Subtotal Gravado", f"RD$ {inv_subtotal:,.2f}")
+                t2.metric("Descuento Total", f"RD$ {inv_descuento:,.2f}")
+                t3.metric("ITBIS Total (18%)", f"RD$ {inv_itbis:,.2f}")
+                t4.metric("Total Neto Factura", f"RD$ {inv_total:,.2f}")
+                st.markdown("---")
+
+                data_items = parsed_data.get("items", [])
                 rows_preview = []
                 omitted_items = []
                 multiplicador_ganancia = 1 + (margen_ganancia / 100.0)
 
+                calc_subtotal_acum = 0.0
+                calc_itbis_acum = 0.0
+
                 for idx, item in enumerate(data_items, start=1):
                     if not isinstance(item, dict):
-                        omitted_items.append({"Item #": idx, "Descripción": str(item), "Razón": "Estructura de datos inválida (no es un diccionario)"})
+                        omitted_items.append({"Item #": idx, "Descripción": str(item), "Razón": "Estructura de datos inválida"})
                         continue
                     
-                    desc = str(item.get("descripcion") or item.get("nombre") or item.get("articulo") or "").strip()
+                    desc = str(item.get("descripcion") or item.get("nombre") or "").strip()
                     if not desc:
-                        omitted_items.append({"Item #": idx, "Descripción": "(Sin descripción)", "Razón": "Línea sin descripción o texto en blanco"})
+                        omitted_items.append({"Item #": idx, "Descripción": "(Sin descripción)", "Razón": "Línea sin descripción"})
                         continue
 
-                    precio_lista = safe_float(item.get("precio_lista") or item.get("costo_sin_itbis") or item.get("precio") or 0)
+                    precio_lista = safe_float(item.get("precio_lista") or 0)
                     if precio_lista <= 0:
-                        omitted_items.append({"Item #": idx, "Descripción": desc, "Razón": "Precio de lista en 0 o inválido"})
+                        omitted_items.append({"Item #": idx, "Descripción": desc, "Razón": "Precio de lista en 0"})
                         continue
 
                     official_code, matched_name, status_match = match_official_barcode(desc)
@@ -366,12 +367,21 @@ if modulo == "📄 Factura Individual":
                     empaque_ai = safe_int(item.get("empaque") or 1, 1)
                     
                     empaque_val = parse_empaque_from_description(desc, empaque_ai)
-                    neto_linea = precio_lista * (1 - (desc_pct / 100.0))
                     
-                    if empaque_val > 1 and neto_linea > (800 / empaque_val):
-                        costo = round(neto_linea / empaque_val, 2)
+                    # Cálculo correcto neto de línea (precio * cantidad * (1 - desc))
+                    importe_bruto = precio_lista * cant_comprada
+                    descuento_linea = importe_bruto * (desc_pct / 100.0)
+                    neto_linea_total = importe_bruto - descuento_linea
+                    
+                    calc_subtotal_acum += neto_linea_total
+                    calc_itbis_acum += neto_linea_total * 0.18
+
+                    # Costo unitario real para WilPOS (neto sin itbis dividido entre empaque)
+                    neto_unitario = neto_linea_total / cant_comprada
+                    if empaque_val > 1 and neto_unitario > (800 / empaque_val):
+                        costo = round(neto_unitario / empaque_val, 2)
                     else:
-                        costo = round(neto_linea, 2)
+                        costo = round(neto_unitario, 2)
 
                     raw_pv = (costo * multiplicador_ganancia) * 1.18
                     precio_venta = round_to_nearest_5(raw_pv)
@@ -389,7 +399,7 @@ if modulo == "📄 Factura Individual":
                         "Estado": status_match
                     })
 
-                st.info(f"📋 **Auditoría de Lectura:** Se detectaron **{len(data_items)} ítems** brutos en la factura. Procesados con éxito: **{len(rows_preview)}** | Omitidos: **{len(omitted_items)}**")
+                st.info(f"📋 **Auditoría de Lectura:** Se detectaron **{len(data_items)} ítems** brutos. Procesados con éxito: **{len(rows_preview)}** | Omitidos: **{len(omitted_items)}**")
 
                 if rows_preview:
                     st.markdown("### ✅ Artículos Procesados Exitosamente")
@@ -518,7 +528,7 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
                         for itm in items:
                             if isinstance(itm, dict):
                                 d_txt = str(itm.get("descripcion") or itm.get("nombre") or "").strip()
-                                p_val = safe_float(itm.get("precio_lista") or itm.get("costo_sin_itbis") or 0)
+                                p_val = safe_float(itm.get("precio_lista") or 0)
                                 if d_txt and p_val > 0:
                                     st.session_state["batch_accumulated_items"].append(itm)
                                 else:
@@ -551,18 +561,21 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
                     continue
 
                 official_code, matched_name, _ = match_official_barcode(desc)
-                precio_lista = safe_float(item.get("precio_lista") or item.get("costo_sin_itbis") or 0)
+                precio_lista = safe_float(item.get("precio_lista") or 0)
                 desc_pct = safe_float(item.get("descuento_porcentaje") or 0)
                 cant_comprada = safe_int(item.get("cantidad") or 1, 1)
                 empaque_ai = safe_int(item.get("empaque") or 1, 1)
 
                 empaque_val = parse_empaque_from_description(desc, empaque_ai)
-                neto_linea = precio_lista * (1 - (desc_pct / 100.0))
+                importe_bruto = precio_lista * cant_comprada
+                descuento_linea = importe_bruto * (desc_pct / 100.0)
+                neto_linea_total = importe_bruto - descuento_linea
+                neto_unitario = neto_linea_total / cant_comprada
                 
-                if empaque_val > 1 and neto_linea > (800 / empaque_val):
-                    costo = round(neto_linea / empaque_val, 2)
+                if empaque_val > 1 and neto_unitario > (800 / empaque_val):
+                    costo = round(neto_unitario / empaque_val, 2)
                 else:
-                    costo = round(neto_linea, 2)
+                    costo = round(neto_unitario, 2)
 
                 raw_pv = (costo * multiplicador_ganancia) * 1.18
                 precio_venta = round_to_nearest_5(raw_pv)
