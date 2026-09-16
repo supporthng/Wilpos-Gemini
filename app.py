@@ -73,10 +73,21 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-# Configuración de Claves API
-free_key_1 = st.secrets.get("GEMINI_API_KEY_1", os.environ.get("GEMINI_API_KEY_1", ""))
-free_key_2 = st.secrets.get("GEMINI_API_KEY_2", os.environ.get("GEMINI_API_KEY_2", ""))
-paid_api_key = st.secrets.get("GEMINI_API_KEY_PAID", os.environ.get("GEMINI_API_KEY_PAID", ""))
+# ------------------------------------------
+# BÚSQUEDA UNIVERSAL DE CLAVE API
+# ------------------------------------------
+api_key_candidates = [
+    st.secrets.get("GEMINI_API_KEY"),
+    st.secrets.get("GOOGLE_API_KEY"),
+    st.secrets.get("GEMINI_API_KEY_PAID"),
+    st.secrets.get("GEMINI_API_KEY_1"),
+    os.environ.get("GEMINI_API_KEY"),
+    os.environ.get("GOOGLE_API_KEY"),
+    os.environ.get("GEMINI_API_KEY_PAID"),
+    os.environ.get("GEMINI_API_KEY_1")
+]
+
+ACTIVE_GEMINI_KEY = next((k for k in api_key_candidates if k and str(k).strip()), None)
 
 # Archivo de persistencia de memoria
 BARCODE_MEMORY_FILE = "codigos_escaneados_memoria.json"
@@ -105,14 +116,12 @@ def normalize_text(text):
         return ""
     t = text.upper()
     
-    # Equivalencias generales de marcas y términos
     t = t.replace('SIX EIGHT NINE', '689').replace('SIX-EIGHT-NINE', '689')
     t = t.replace('COGÑA', 'COGNAC').replace('COGÑAC', 'COGNAC').replace('CONGNAC', 'COGNAC')
     t = t.replace('VSOP', 'V.S.O.P').replace('V S O P', 'V.S.O.P')
     t = t.replace('VS ', 'VERY SPECIAL ').replace(' VS', ' VERY SPECIAL')
     t = t.replace('GIN ', 'GINEBRA ').replace(' GIN', ' GINEBRA')
     
-    # Capacidades y formatos
     t = t.replace(' 5CL', ' 50 ML').replace(' 5 CL', ' 50 ML').replace('5CL', '50 ML')
     t = t.replace(' 75CL', ' 750 ML').replace(' 75 CL', ' 750 ML').replace('75CL', '750 ML')
     t = t.replace(' 70CL', ' 700 ML').replace(' 70 CL', ' 700 ML').replace('70CL', '700 ML')
@@ -223,6 +232,9 @@ def audit_and_correct_cost(costo_unit, cantidad, empaque):
     return c
 
 def process_invoice_with_ai(file_obj, file_type):
+    if not ACTIVE_GEMINI_KEY:
+        return None, "❌ Error: No se encontró ninguna clave API de Gemini configurada en st.secrets o variables de entorno."
+
     prompt_text = (
         "Analiza esta factura detalladamente. Extrae los datos de cabecera: 'emisor_rnc', 'emisor_nombre', 'numero_documento', 'fecha', 'subtotal', 'itbis', 'total'. "
         "Para cada ítem, extrae unícamente: 'descripcion', 'cantidad', 'empaque', y 'costo_sin_itbis'. "
@@ -231,39 +243,27 @@ def process_invoice_with_ai(file_obj, file_type):
         "Respuesta JSON pura sin texto adicional."
     )
 
-    keys_to_try = []
-    if paid_api_key:
-        keys_to_try.append((paid_api_key, "Paid Tier"))
-    if free_key_1:
-        keys_to_try.append((free_key_1, "Free Key 1"))
-    if free_key_2:
-        keys_to_try.append((free_key_2, "Free Key 2"))
-
-    if not keys_to_try:
-        return None, ""
-
-    for api_k, label in keys_to_try:
-        for intento in range(2):
-            try:
-                genai.configure(api_key=api_k)
-                model = genai.GenerativeModel('gemini-1.5-flash')
-                file_obj.seek(0)
-                file_bytes = file_obj.read()
-                response = model.generate_content([
-                    {'mime_type': file_type, 'data': file_bytes},
-                    prompt_text
-                ])
-                raw_text = response.text.strip()
-                if raw_text.startswith("```json"):
-                    raw_text = raw_text[7:]
-                if raw_text.endswith("```"):
-                    raw_text = raw_text[:-3]
-                parsed_data = json.loads(raw_text.strip())
-                return parsed_data, f"✅ Éxito"
-            except Exception:
-                time.sleep(1)
-                continue
-    return None, ""
+    for intento in range(2):
+        try:
+            genai.configure(api_key=ACTIVE_GEMINI_KEY)
+            model = genai.GenerativeModel('gemini-1.5-flash')
+            file_obj.seek(0)
+            file_bytes = file_obj.read()
+            response = model.generate_content([
+                {'mime_type': file_type, 'data': file_bytes},
+                prompt_text
+            ])
+            raw_text = response.text.strip()
+            if raw_text.startswith("```json"):
+                raw_text = raw_text[7:]
+            if raw_text.endswith("```"):
+                raw_text = raw_text[:-3]
+            parsed_data = json.loads(raw_text.strip())
+            return parsed_data, f"✅ Éxito"
+        except Exception as e:
+            time.sleep(1.5)
+            continue
+    return None, "❌ Error de conexión o formato con la IA"
 
 # ==========================================
 # MÓDULO 1: FACTURA INDIVIDUAL
@@ -456,7 +456,7 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
                             st.session_state["batch_accumulated_items"].extend(items)
                 else:
                     st.session_state["batch_audit_log"].append({
-                        "Archivo": file_info["name"], "Estado": "🔴 Error IA"
+                        "Archivo": file_info["name"], "Estado": f"🔴 Error IA ({err_msg})"
                     })
 
                 st.session_state["batch_processed_count"] += 1
