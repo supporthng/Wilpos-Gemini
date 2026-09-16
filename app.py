@@ -135,6 +135,13 @@ def clean_barcode(code_val):
         return "S/C (Sin Código)"
     return digits
 
+def run_countdown(seconds=30, message="Límite de la capa gratuita alcanzado (15 peticiones por minuto). Reintentando en"):
+    placeholder = st.empty()
+    for remaining in range(seconds, 0, -1):
+        placeholder.warning(f"⚠️ {message} **{remaining} segundos**...")
+        time.sleep(1)
+    placeholder.empty()
+
 # ==========================================
 # MENÚ Y CONFIGURACIÓN LATERAL
 # ==========================================
@@ -200,7 +207,7 @@ def process_invoice_gemini_flash(file_obj, file_type):
             err_str = str(e)
             if "429" in err_str or "quota" in err_str.lower():
                 if intento < 1:
-                    time.sleep(8.0)
+                    run_countdown(30, "Límite de la capa gratuita alcanzado (15 peticiones por minuto). Cuenta regresiva para reintentar:")
                     continue
                 return None, "QUOTA_EXCEEDED"
             return None, f"Error técnico API: {err_str}"
@@ -230,7 +237,7 @@ if modulo == "📄 Factura Individual":
                 parsed_data, success_msg = process_invoice_gemini_flash(uploaded_file, file_type)
 
             if success_msg == "QUOTA_EXCEEDED":
-                st.error("⚠️ **Límite de la capa gratuita alcanzado (15 peticiones por minuto).** Espera 30 segundos y vuelve a intentar.")
+                st.error("⚠️ **Límite de la capa gratuita alcanzado (15 peticiones por minuto).** El contador automático se activó; por favor intenta nuevamente en unos segundos.")
             elif not parsed_data or not isinstance(parsed_data, dict):
                 st.error(f"⚠️ {success_msg}")
             else:
@@ -315,7 +322,6 @@ if modulo == "📄 Factura Individual":
                 t4.metric("Total Neto Factura", f"RD$ {calc_total_factura:,.2f}")
                 st.markdown("---")
 
-                # Auditoría visual clara de artículos procesados
                 st.info(f"📋 **Auditoría de Lectura:** Se detectaron **{len(data_items)} ítems** en la factura. Procesados y listos: **{len(rows_preview)}**")
 
                 if rows_preview:
@@ -354,7 +360,7 @@ if modulo == "📄 Factura Individual":
 # ==========================================
 elif modulo == "📂 Múltiples Facturas (Lote)":
     st.markdown("<h2>📂 Procesador por <span style='color: #0284c7;'>Lotes (Flash Free)</span></h2>", unsafe_allow_html=True)
-    st.markdown("<p style='color: #64748b;'>Procesa múltiples facturas aplicando pausas de seguridad de 4s entre facturas.</p>", unsafe_allow_html=True)
+    st.markdown("<p style='color: #64748b;'>Procesa múltiples facturas aplicando cuenta regresiva automática ante saturación.</p>", unsafe_allow_html=True)
     st.markdown("---")
 
     st.markdown('<div class="card-container">', unsafe_allow_html=True)
@@ -410,8 +416,7 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
                 parsed_data, err_msg = process_invoice_gemini_flash(file_bytes_io, file_info["type"])
 
                 if err_msg == "QUOTA_EXCEEDED":
-                    st.warning("⚠️ Límite temporal alcanzado. Pausando 15 segundos...")
-                    time.sleep(15)
+                    run_countdown(30, "Límite temporal alcanzado en lote. Cuenta regresiva para reanudar:")
                     st.rerun()
                 elif "Error técnico" in err_msg:
                     st.error(f"⚠️ {err_msg}")
