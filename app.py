@@ -207,7 +207,7 @@ def process_invoice_exact_18(file_obj, file_type, use_openai_fallback=False):
     for intento in range(2):
         try:
             genai.configure(api_key=ACTIVE_GEMINI_KEY)
-            model = genai.GenerativeModel('gemini-2.5-flash')
+            model = genai.GenerativeModel('gemini-3.6-flash')
             file_obj.seek(0)
             file_bytes = file_obj.read()
             image_input = file_bytes if "pdf" in file_type.lower() else Image.open(io.BytesIO(file_bytes))
