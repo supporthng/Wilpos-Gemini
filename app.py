@@ -248,7 +248,7 @@ def parse_empaque_from_description(item_desc, ai_empaque):
             return 12
         return 24  # Caja estándar de cerveza
         
-    if any(w in d for w in ["VINO", "WHISKY", "VODKA", "TEQUILA", "RON", "RUM", "GIN", "COGNAC", "LICOR", "FIREBALL", "CAMPARI", "AMARETTO", "KAHLUA", "MIDORI", "STOLICHNAYA", "JOSH", "JUAN GIL", "TARAPACA"]):
+    if any(w in d for w in ["VINO", "WHISKY", "VODKA", "TEQUILA", "RON", "RUM", "GIN", "COGNAC", "LICOR", "FIREBALL", "CAMPARI", "AMARETTO", "KAHLUA", "MIDORI", "STOLICHNAYA", "JOSH", "JUAN GIL", "TARAPACA", "GLENLIVET", "BUCHANAN", "OLD PARR"]):
         if "6" in d or "6/" in d:
             return 6
         return 12  # Caja estándar de vino o licor
@@ -265,12 +265,11 @@ def audit_and_correct_cost(item_desc, costo_unit, cantidad, empaque):
     # Obtener el empaque real
     emp = parse_empaque_from_description(item_desc, empaque)
     
-    # CORRECCIÓN CLAVE: Si el costo total de la línea es mayor a 800 y el empaque detectado es > 1,
-    # y el usuario está metiendo una caja completa, dividimos estrictamente entre el empaque.
+    # Si el empaque detectado es > 1 y el costo recibido es el costo total de la caja, dividimos estrictamente
     if emp > 1:
         return round(c / emp, 2), emp
             
-    # Si por alguna razón el empaque quedó en 1 pero el costo es alto (> 1,200 para una sola unidad suelta es sospechoso en cervezas/refrescos)
+    # Si por alguna razón el empaque quedó en 1 pero el costo es alto para una sola unidad suelta
     if emp <= 1 and c > 1200:
         if any(b in str(item_desc).upper() for b in ["PRESIDENTE", "MICHELOB", "COORS", "CERVEZA", "AGUA", "MONSTER", "RED BULL"]):
             return round(c / 24, 2), 24
