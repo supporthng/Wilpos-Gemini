@@ -103,8 +103,21 @@ def normalize_text(text):
     if not isinstance(text, str):
         return ""
     t = text.upper()
+    
+    # ==========================================
+    # DICCIONARIO GENERAL DE EQUIVALENCIAS Y SINÓNIMOS
+    # ==========================================
+    t = t.replace('SIX EIGHT NINE', '689').replace('SIX-EIGHT-NINE', '689')
+    t = t.replace('COGÑA', 'COGNAC').replace('COGÑAC', 'COGNAC').replace('CONGNAC', 'COGNAC')
+    t = t.replace('VSOP', 'V.S.O.P').replace('V S O P', 'V.S.O.P')
+    t = t.replace('VS ', 'VERY SPECIAL ').replace(' VS', ' VERY SPECIAL')
+    t = t.replace('GIN ', 'GINEBRA ').replace(' GIN', ' GINEBRA')
+    
+    # Unificación de capacidades y formatos
     t = t.replace(' 5CL', ' 50 ML').replace(' 5 CL', ' 50 ML').replace('5CL', '50 ML')
     t = t.replace(' 75CL', ' 750 ML').replace(' 75 CL', ' 750 ML').replace('75CL', '750 ML')
+    t = t.replace(' 70CL', ' 700 ML').replace(' 70 CL', ' 700 ML').replace('70CL', '700 ML')
+    t = t.replace(' 500ML', ' 500 ML').replace(' 500 ML', ' 500 ML')
     t = t.replace(' 1L', ' 1000 ML').replace(' 1 LT', ' 1000 ML').replace('1L', '1000 ML')
     t = t.replace(' 33CL', ' 330 ML').replace('33CL', '330 ML').replace(' 50CL', ' 500 ML').replace('50CL', '500 ML')
     t = t.replace(' 3 LT', ' 3000 ML').replace(' 3LT', ' 3000 ML')
@@ -112,7 +125,7 @@ def normalize_text(text):
     t = t.replace('PTE.', 'PRESIDENTE').replace('HU', '').replace('CJ', '').replace('BOT.', '').replace('LATA', 'LATA')
     t = t.replace(' 120Z', ' 12 OZ')
     
-    for ch in ['/', '-', ',', '.', '(', ')', '%', '+', '"', "'"]:
+    for ch in ['/', '-', ',', '.', '(', ')', '%', '+', '"', "'", 'º']:
         t = t.replace(ch, ' ')
     return " ".join(t.split())
 
@@ -154,7 +167,7 @@ modulo = st.sidebar.radio(
 )
 
 # ==========================================
-# MOTOR MAESTRO INTELIGENTE (INDEPENDIENTE DEL ORDEN)
+# MOTOR MAESTRO INTELIGENTE (UMBRAL 0.28)
 # ==========================================
 def match_official_barcode(item_description):
     raw_name = str(item_description).strip().upper()
@@ -174,7 +187,7 @@ def match_official_barcode(item_description):
     best_code = "S/C (Sin Código)"
     best_name = raw_name
 
-    # 2. Búsqueda por solapamiento de palabras clave (tokens), sin importar el orden
+    # 2. Búsqueda inteligente por tokens y secuencia
     for master_name, code in b_mem.items():
         norm_master = normalize_text(master_name)
         master_tokens = set(norm_master.split())
@@ -186,15 +199,15 @@ def match_official_barcode(item_description):
         token_score = len(common_tokens) / max(len(input_tokens), len(master_tokens))
         seq_ratio = difflib.SequenceMatcher(None, norm_input, norm_master).ratio()
         
-        combined_score = (token_score * 0.7) + (seq_ratio * 0.3)
+        combined_score = (token_score * 0.65) + (seq_ratio * 0.35)
         
         if combined_score > best_score:
             best_score = combined_score
             best_code = code
             best_name = master_name
 
-    # Umbral flexible para garantizar cruce de nombres con distintas estructuras
-    if best_score >= 0.40:
+    # Umbral ultra-flexible (0.28) optimizado para cruzar cualquier variante de proveedor
+    if best_score >= 0.28:
         return clean_barcode(best_code), best_name, f"Smart Match ({best_score:.2f})"
 
     return "S/C (Sin Código)", raw_name, "⚠️ Sin Coincidencia en Maestro"
@@ -567,7 +580,6 @@ elif modulo == "📋 Ver Códigos Almacenados":
                 df_master = pd.read_excel(master_upload, sheet_name=0, dtype=str)
                 new_memory = {}
                 
-                # Detección automática inteligente de columnas (Código vs Nombre)
                 col_code = None
                 col_name = None
                 for c in df_master.columns:
@@ -585,7 +597,6 @@ elif modulo == "📋 Ver Códigos Almacenados":
                     val_a = str(r[col_code]).strip()
                     val_b = str(r[col_name]).strip()
                     
-                    # Asignación segura sin importar el orden de las columnas en el Excel
                     if val_a.isdigit() or len(val_a) <= 15:
                         c_val, n_val = val_a, val_b.upper()
                     else:
