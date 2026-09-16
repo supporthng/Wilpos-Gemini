@@ -255,9 +255,9 @@ def process_invoice_with_ai(file_obj, file_type, use_openai_fallback=False):
         data_url = f"data:application/pdf;base64,{b64_data}" if "pdf" in file_type.lower() else f"data:image/jpeg;base64,{b64_data}"
 
         prompt_text = (
-            "Analiza esta factura COMPLETAMENTE de arriba a abajo. Extrae TODOS los renglones de la tabla (los 16 ítems de la página). "
-            "Para cada ítem extrae estrictamente: 'descripcion', 'cantidad' (número de cajas), 'empaque', "
-            "y 'importe_neto_linea' (el valor TOTAL final de la línea ya con descuento aplicado, que aparece en la columna IMPORTE de la factura, ej: 14040.0 para la primera línea). "
+            "Analiza esta factura rigurosamente línea por línea de arriba a abajo. Esta página contiene exactamente 18 renglones de productos. "
+            "NO omitas ninguno ni compactes filas. Para cada renglón extrae estrictamente: 'descripcion', 'cantidad' (número de cajas), 'empaque', "
+            "y 'importe_neto_linea' (el valor TOTAL final de la línea ya con descuento aplicado, indicado en la columna IMPORTE de la factura, ej: 14040.0). "
             "Devuelve un JSON puro con esta estructura exacta: "
             '{"subtotal": 0.0, "descuento_total": 0.0, "itbis": 0.0, "total": 0.0, "items": [{"descripcion": "...", "cantidad": 1, "empaque": 12, "importe_neto_linea": 0.0}]}. '
             "Respuesta JSON pura sin texto adicional ni markdown."
@@ -280,9 +280,9 @@ def process_invoice_with_ai(file_obj, file_type, use_openai_fallback=False):
         return None, "Falta clave API de Gemini"
 
     prompt_text = (
-        "Analiza esta factura COMPLETAMENTE de arriba a abajo. Extrae TODOS los renglones de la tabla (los 16 ítems de la página). "
-        "Para cada ítem extrae estrictamente: 'descripcion', 'cantidad' (número de cajas), 'empaque', "
-        "y 'importe_neto_linea' (el valor TOTAL final de la línea ya con descuento aplicado, que aparece en la columna IMPORTE de la factura, ej: 14040.0 para la primera línea). "
+        "Analiza esta factura rigurosamente línea por línea de arriba a abajo. Esta página contiene exactamente 18 renglones de productos. "
+        "NO omitas ninguno ni compactes filas. Para cada renglón extrae estrictamente: 'descripcion', 'cantidad' (número de cajas), 'empaque', "
+        "y 'importe_neto_linea' (el valor TOTAL final de la línea ya con descuento aplicado, indicado en la columna IMPORTE de la factura, ej: 14040.0). "
         "Devuelve un JSON puro con esta estructura exacta: "
         '{"subtotal": 0.0, "descuento_total": 0.0, "itbis": 0.0, "total": 0.0, "items": [{"descripcion": "...", "cantidad": 1, "empaque": 12, "importe_neto_linea": 0.0}]}. '
         "Respuesta JSON pura sin texto adicional."
