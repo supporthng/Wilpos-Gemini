@@ -172,25 +172,24 @@ def parse_empaque_from_tamano(tamano_txt, unidad_txt):
 
 def process_invoice_exact_18(file_obj, file_type, use_paid_gemini=False, use_openai_fallback=False):
     prompt_text = (
-        "Analiza esta factura de Álvarez & Sánchez con absoluta precisión. La tabla contiene exactamente 18 renglones numerados del 1 al 18 de arriba a abajo. "
-        "Debes extraer CADA UNO DE LOS 18 RENGLONES uno por uno en estricto orden, sin omitir ni duplicar ninguno. "
-        "Para cada renglón extrae estrictamente: "
-        "1. 'codigo_barras': el número exacto de la columna 'CODIGO DE BARRAS' impresa en la factura (ej: 051497322618 para Six Eight Nine, 8000040630269 para Glen Grant, 721059007504 para Vodka Skyy). "
+        "Analiza esta factura de Álvarez & Sánchez con extrema precisión horizontal. La tabla tiene filas numeradas. "
+        "Debes asegurar que el 'codigo_barras' de la columna izquierda esté estrictamente alineado con la 'descripcion' de esa misma línea horizontal exacta, sin desplazar los códigos hacia arriba ni hacia abajo. "
+        "Para cada renglón extrae exactamente: "
+        "1. 'codigo_barras': el número exacto de la columna 'CODIGO DE BARRAS' que se encuentra en la misma fila horizontal de la descripción. "
         "2. 'descripcion': el texto exacto de la columna 'DESCRIPCION'. "
         "3. 'cantidad': número de la columna 'CANTDAD'. "
         "4. 'unidad': 'CAJA' o 'BOT.'. "
         "5. 'tamano': texto exacto de la columna 'TAMAÑO' (ej: 12/75 CL., 6/70 CL., 75 CL.). "
         "6. 'precio_lista': número exacto de la columna 'PRECIO'. "
         "7. 'descuento_porcentaje': porcentaje de la columna 'COM.' (ej: 10). "
-        "Devuelve un JSON puro con un arreglo exacto de 18 objetos bajo la clave 'items': "
+        "Devuelve un JSON puro con un arreglo exacto de objetos bajo la clave 'items': "
         '{"items": [{"codigo_barras": "...", "descripcion": "...", "cantidad": 1, "unidad": "CAJA", "tamano": "12/75 CL.", "precio_lista": 0.0, "descuento_porcentaje": 10.0}]}. '
         "Respuesta JSON pura sin texto adicional ni markdown."
     )
 
-    # Selección de Clave Gemini (Pago vs Gratis)
     active_key = ACTIVE_GEMINI_PAID_KEY if use_paid_gemini else ACTIVE_GEMINI_FREE_KEY
     if not active_key and use_paid_gemini:
-        active_key = ACTIVE_GEMINI_FREE_KEY # Respaldo si no hay clave pago configurada
+        active_key = ACTIVE_GEMINI_FREE_KEY
 
     if not active_key and use_openai_fallback:
         use_openai_fallback = True
@@ -232,14 +231,12 @@ def process_invoice_exact_18(file_obj, file_type, use_paid_gemini=False, use_ope
         except Exception as e:
             last_err = str(e)
             if "429" in last_err or "quota" in last_err.lower():
-                # Si se agotó la gratuita y tenemos clave de pago configurada, intentamos con la de pago automáticamente
                 if not use_paid_gemini and ACTIVE_GEMINI_PAID_KEY:
                     active_key = ACTIVE_GEMINI_PAID_KEY
                     continue
                 return None, "QUOTA_EXCEEDED"
             time.sleep(1)
             
-    # Si falló Gemini y se permite OpenAI como respaldo final
     if use_openai_fallback and ACTIVE_OPENAI_KEY:
         import base64
         file_obj.seek(0)
