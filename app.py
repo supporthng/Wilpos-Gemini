@@ -254,7 +254,7 @@ def process_invoice_with_ai(file_obj, file_type, use_openai_fallback=False):
         b64_data = base64.b64encode(file_bytes).decode('utf-8')
         data_url = f"data:application/pdf;base64,{b64_data}" if "pdf" in file_type.lower() else f"data:image/jpeg;base64,{b64_data}"
 
-        prompt_text = "Analiza esta factura COMPLETAMENTE de arriba a abajo. Extrae los totales de cabecera: 'subtotal', 'descuento_total', 'itbis', 'total'. Luego extrae TODOS los ítems de la tabla con: 'descripcion', 'cantidad', 'empaque', 'precio_lista' (el precio unitario o de caja indicado en la columna PRECIO antes de descuento), y 'descuento_porcentaje' (el porcentaje de descuento indicado en COM. o DESC., ejemplo: 10 para 10%, o 0). Devuelve un JSON puro con esta estructura exacta: {\"emisor_rnc\": \"...\", \"emisor_nombre\": \"...\", \"numero_documento\": \"...\", \"fecha\": \"...\", \"subtotal\": 0.0, \"descuento_total\": 0.0, \"itbis\": 0.0, \"total\": 0.0, \"items\": [{\"descripcion\": \"...\", \"cantidad\": 1, \"empaque\": 1, \"precio_lista\": 0.0, \"descuento_porcentaje\": 0.0}]}. Respuesta JSON pura sin texto adicional ni markdown."
+        prompt_text = "Analiza esta factura COMPLETAMENTE de arriba a abajo. Extrae TODOS los renglones de la tabla sin omitir ninguno (asegúrate de incluir los 16 ítems si es una página completa). Para cada ítem extrae: 'descripcion', 'cantidad', 'empaque', 'precio_lista' (precio unitario o de caja en la columna PRECIO antes de descuento), y 'descuento_porcentaje' (ej. 10 para 10%). Devuelve un JSON puro con esta estructura exacta: {\"emisor_rnc\": \"...\", \"emisor_nombre\": \"...\", \"numero_documento\": \"...\", \"fecha\": \"...\", \"subtotal\": 0.0, \"descuento_total\": 0.0, \"itbis\": 0.0, \"total\": 0.0, \"items\": [{\"descripcion\": \"...\", \"cantidad\": 1, \"empaque\": 1, \"precio_lista\": 0.0, \"descuento_porcentaje\": 0.0}]}. Respuesta JSON pura sin texto adicional ni markdown."
         try:
             client = OpenAI(api_key=ACTIVE_OPENAI_KEY)
             response = client.chat.completions.create(
@@ -272,7 +272,7 @@ def process_invoice_with_ai(file_obj, file_type, use_openai_fallback=False):
     if not ACTIVE_GEMINI_KEY:
         return None, "Falta clave API de Gemini"
 
-    prompt_text = "Analiza esta factura COMPLETAMENTE de arriba a abajo. Extrae los totales de cabecera: 'subtotal', 'descuento_total', 'itbis', 'total'. Luego extrae TODOS los ítems de la tabla con: 'descripcion', 'cantidad', 'empaque', 'precio_lista' (el precio unitario o de caja indicado en la columna PRECIO antes de descuento), y 'descuento_porcentaje' (el porcentaje de descuento indicado en COM. o DESC., ejemplo: 10 para 10%, o 0). Devuelve un JSON puro con esta estructura exacta: {\"emisor_rnc\": \"...\", \"emisor_nombre\": \"...\", \"numero_documento\": \"...\", \"fecha\": \"...\", \"subtotal\": 0.0, \"descuento_total\": 0.0, \"itbis\": 0.0, \"total\": 0.0, \"items\": [{\"descripcion\": \"...\", \"cantidad\": 1, \"empaque\": 1, \"precio_lista\": 0.0, \"descuento_porcentaje\": 0.0}]}. Respuesta JSON pura sin texto adicional."
+    prompt_text = "Analiza esta factura COMPLETAMENTE de arriba a abajo. Extrae TODOS los renglones de la tabla sin omitir ninguno (asegúrate de incluir los 16 ítems si es una página completa). Para cada ítem extrae: 'descripcion', 'cantidad', 'empaque', 'precio_lista' (precio unitario o de caja en la columna PRECIO antes de descuento), y 'descuento_porcentaje' (ej. 10 para 10%). Devuelve un JSON puro con esta estructura exacta: {\"emisor_rnc\": \"...\", \"emisor_nombre\": \"...\", \"numero_documento\": \"...\", \"fecha\": \"...\", \"subtotal\": 0.0, \"descuento_total\": 0.0, \"itbis\": 0.0, \"total\": 0.0, \"items\": [{\"descripcion\": \"...\", \"cantidad\": 1, \"empaque\": 1, \"precio_lista\": 0.0, \"descuento_porcentaje\": 0.0}]}. Respuesta JSON pura sin texto adicional."
 
     for intento in range(2):
         try:
@@ -298,7 +298,7 @@ def process_invoice_with_ai(file_obj, file_type, use_openai_fallback=False):
 # ==========================================
 if modulo == "📄 Factura Individual":
     st.markdown("<h2>📊 Automatizador de Facturas <span style='color: #0284c7;'>(Individual)</span></h2>", unsafe_allow_html=True)
-    st.markdown("<p style='color: #64748b;'>Sube tu factura. El sistema analiza automáticamente el empaque y asigna los códigos de tu maestro.</p>", unsafe_allow_html=True)
+    st.markdown("<p style='color: #64748b;'>Sube tu factura. El sistema muestra absolutamente todos los renglones uno por uno para tu control físico.</p>", unsafe_allow_html=True)
     st.markdown("---")
 
     st.markdown('<div class="card-container">', unsafe_allow_html=True)
@@ -314,7 +314,7 @@ if modulo == "📄 Factura Individual":
         st.success(f"¡Archivo cargado: {uploaded_file.name}!")
         if st.button("🚀 Procesar Factura"):
             file_type = uploaded_file.type if hasattr(uploaded_file, 'type') else 'image/jpeg'
-            with st.spinner("Analizando factura completa y empaques..."):
+            with st.spinner("Analizando factura completa y renglones..."):
                 parsed_data, success_msg = process_invoice_with_ai(uploaded_file, file_type, use_openai_fallback=use_openai_single)
 
             if success_msg == "QUOTA_EXCEEDED":
@@ -370,7 +370,6 @@ if modulo == "📄 Factura Individual":
                     
                     empaque_val = parse_empaque_from_description(desc, empaque_ai)
                     
-                    # Cálculo matemático exacto
                     importe_bruto = precio_lista * cant_comprada
                     descuento_linea = importe_bruto * (desc_pct / 100.0)
                     neto_linea_total = importe_bruto - descuento_linea
@@ -397,10 +396,10 @@ if modulo == "📄 Factura Individual":
                         "Estado": status_match
                     })
 
-                st.info(f"📋 **Auditoría de Lectura:** Se detectaron **{len(data_items)} ítems** brutos. Procesados con éxito: **{len(rows_preview)}** | Omitidos: **{len(omitted_items)}**")
+                st.info(f"📋 **Auditoría de Lectura:** Se detectaron **{len(data_items)} ítems** brutos en la factura. Procesados con éxito: **{len(rows_preview)}** | Omitidos: **{len(omitted_items)}**")
 
                 if rows_preview:
-                    st.markdown("### ✅ Artículos Procesados Exitosamente")
+                    st.markdown("### ✅ Artículos Procesados Exitosamente (Sin Agrupar para Control Físico)")
                     df_resultado = pd.DataFrame(rows_preview)
                     df_resultado["Código Oficial POS"] = df_resultado["Código Oficial POS"].astype(str)
                     st.dataframe(df_resultado, use_container_width=True, hide_index=True)
