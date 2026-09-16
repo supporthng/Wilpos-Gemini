@@ -255,9 +255,9 @@ def process_invoice_with_ai(file_obj, file_type, use_openai_fallback=False):
         data_url = f"data:application/pdf;base64,{b64_data}" if "pdf" in file_type.lower() else f"data:image/jpeg;base64,{b64_data}"
 
         prompt_text = (
-            "Analiza esta factura COMPLETAMENTE de arriba a abajo. Extrae TODOS los renglones de la tabla (exactamente los 16 ítems si es esta página). "
+            "Analiza esta factura COMPLETAMENTE de arriba a abajo. Extrae TODOS los renglones de la tabla sin omitir ninguno (asegúrate de incluir los 16 ítems si es una página completa). "
             "Para cada ítem extrae estrictamente: 'descripcion', 'cantidad' (número de cajas/unidades), 'empaque', "
-            "'precio_lista' (el precio unitario o de caja indicado en la columna PRECIO antes de descuento, ej: 15600.0 para el Cune), "
+            "'precio_lista' (el precio unitario o de caja indicado en la columna PRECIO antes de descuento), "
             "y 'descuento_porcentaje' (el porcentaje indicado en COM. o DESC., ej: 10 para 10%). "
             "Devuelve un JSON puro con esta estructura exacta: "
             '{"subtotal": 0.0, "descuento_total": 0.0, "itbis": 0.0, "total": 0.0, "items": [{"descripcion": "...", "cantidad": 1, "empaque": 12, "precio_lista": 0.0, "descuento_porcentaje": 10.0}]}. '
@@ -281,9 +281,9 @@ def process_invoice_with_ai(file_obj, file_type, use_openai_fallback=False):
         return None, "Falta clave API de Gemini"
 
     prompt_text = (
-        "Analiza esta factura COMPLETAMENTE de arriba a abajo. Extrae TODOS los renglones de la tabla (exactamente los 16 ítems si es esta página). "
+        "Analiza esta factura COMPLETAMENTE de arriba a abajo. Extrae TODOS los renglones de la tabla sin omitir ninguno (asegúrate de incluir los 16 ítems si es una página completa). "
         "Para cada ítem extrae estrictamente: 'descripcion', 'cantidad' (número de cajas/unidades), 'empaque', "
-        "'precio_lista' (el precio unitario o de caja indicado en la columna PRECIO antes de descuento, ej: 15600.0 para el Cune), "
+        "'precio_lista' (el precio unitario o de caja indicado en la columna PRECIO antes de descuento), "
         "y 'descuento_porcentaje' (el porcentaje indicado en COM. o DESC., ej: 10 para 10%). "
         "Devuelve un JSON puro con esta estructura exacta: "
         '{"subtotal": 0.0, "descuento_total": 0.0, "itbis": 0.0, "total": 0.0, "items": [{"descripcion": "...", "cantidad": 1, "empaque": 12, "precio_lista": 0.0, "descuento_porcentaje": 10.0}]}. '
@@ -417,7 +417,7 @@ if modulo == "📄 Factura Individual":
                     st.markdown("### ✅ Artículos Procesados Exitosamente (Sin Agrupar para Control Físico)")
                     df_resultado = pd.DataFrame(rows_preview)
                     df_resultado["Código Oficial POS"] = df_resultado["Código Oficial POS"].astype(str)
-                    st.dataframe(df_resultado, use_container_width=True, hide_index=True)
+                    st.dataframe(df_resultado, use_container_width=True, hide_index=True, height=600)
                     
                     wb = openpyxl.Workbook()
                     ws_prod = wb.active
@@ -443,7 +443,7 @@ if modulo == "📄 Factura Individual":
                 
                 if omitted_items:
                     st.markdown("### ⚠️ Artículos Omitidos / Descartados")
-                    st.dataframe(pd.DataFrame(omitted_items), use_container_width=True, hide_index=True)
+                    st.dataframe(pd.DataFrame(omitted_items), use_container_width=True, hide_index=True, height=300)
 
 # ==========================================
 # MÓDULO 2: MÚLTIPLES FACTURAS (LOTE)
@@ -630,11 +630,11 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
                 kpi4.metric("💰 Inversión Neta (Sin ITBIS)", f"RD$ {inversion_total_lote:,.2f}")
 
                 st.markdown("---")
-                st.dataframe(df_final_preview, use_container_width=True, hide_index=True)
+                st.dataframe(df_final_preview, use_container_width=True, hide_index=True, height=600)
 
                 if st.session_state.get("batch_omitted_summary"):
                     with st.expander("⚠️ Ver ítems omitidos en el lote"):
-                        st.dataframe(pd.DataFrame(st.session_state["batch_omitted_summary"]), use_container_width=True, hide_index=True)
+                        st.dataframe(pd.DataFrame(st.session_state["batch_omitted_summary"]), use_container_width=True, hide_index=True, height=300)
 
                 wb = openpyxl.Workbook()
                 ws_prod = wb.active
@@ -666,6 +666,6 @@ elif modulo == "📋 Ver Códigos Almacenados":
     if b_mem:
         st.info(f"📊 Total de códigos oficiales almacenados: **{len(b_mem)}**")
         df_codes = pd.DataFrame([{"Código de Barras Oficial": str(code), "Nombre del Producto": name} for name, code in b_mem.items()])
-        st.dataframe(df_codes, use_container_width=True, hide_index=True, height=450)
+        st.dataframe(df_codes, use_container_width=True, hide_index=True, height=600)
     else:
         st.warning("⚠️ La memoria está vacía.")
