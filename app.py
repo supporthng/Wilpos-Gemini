@@ -352,7 +352,15 @@ if modulo == "📄 Factura Individual":
                         omitted_items.append({"Item #": idx, "Descripción": "(Sin descripción)", "Razón": "Línea sin descripción"})
                         continue
 
-                    importe_neto = safe_float(item.get("importe_neto_linea") or 0)
+                    importe_neto = safe_float(
+                        item.get("importe_neto_linea") or 
+                        item.get("costo_sin_itbis") or 
+                        item.get("importe") or 
+                        item.get("valor") or 
+                        item.get("precio_lista") or 
+                        item.get("precio") or 0
+                    )
+                    
                     if importe_neto <= 0:
                         omitted_items.append({"Item #": idx, "Descripción": desc, "Razón": "Importe neto en 0"})
                         continue
@@ -362,9 +370,8 @@ if modulo == "📄 Factura Individual":
                     empaque_ai = safe_int(item.get("empaque") or 1, 1)
                     
                     empaque_val = parse_empaque_from_description(desc, empaque_ai)
-                    
-                    # Cálculo ciego y exacto: Importe neto de la línea dividido entre total de unidades físicas (cajas * empaque)
                     total_unidades_linea = cant_comprada * empaque_val
+                    
                     if total_unidades_linea > 0:
                         costo = round(importe_neto / total_unidades_linea, 2)
                     else:
@@ -515,7 +522,13 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
                         for itm in items:
                             if isinstance(itm, dict):
                                 d_txt = str(itm.get("descripcion") or itm.get("nombre") or "").strip()
-                                p_val = safe_float(itm.get("importe_neto_linea") or 0)
+                                p_val = safe_float(
+                                    itm.get("importe_neto_linea") or 
+                                    itm.get("costo_sin_itbis") or 
+                                    itm.get("importe") or 
+                                    itm.get("valor") or 
+                                    itm.get("precio_lista") or 0
+                                )
                                 if d_txt and p_val > 0:
                                     st.session_state["batch_accumulated_items"].append(itm)
                                 else:
@@ -548,7 +561,13 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
                     continue
 
                 official_code, matched_name, _ = match_official_barcode(desc)
-                importe_neto = safe_float(item.get("importe_neto_linea") or 0)
+                importe_neto = safe_float(
+                    item.get("importe_neto_linea") or 
+                    item.get("costo_sin_itbis") or 
+                    item.get("importe") or 
+                    item.get("valor") or 
+                    item.get("precio_lista") or 0
+                )
                 cant_comprada = safe_int(item.get("cantidad") or 1, 1)
                 empaque_ai = safe_int(item.get("empaque") or 1, 1)
 
