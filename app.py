@@ -115,6 +115,8 @@ def load_json_file(filepath):
     data["VODKA SKYY"] = "721059007504"
     data["VODKA INFUSIONS CITRUS SKYY"] = "721059627504"
     data["VODKA INFUSIONS RASPBERRY SKYY"] = "721059637503"
+    data["FIREBALL APPLE 50 ML"] = "088004087524"
+    data["FIREBALL APPLE 750 ML"] = "088004087425"
     return data
 
 if "barcode_memory" not in st.session_state:
@@ -149,7 +151,7 @@ def clean_barcode(code_val):
     return s_val
 
 def extract_size_token(text):
-    """Extrae patrones de tamaño/volumen como 5CL, 75CL, 1L, etc."""
+    """Extrae patrones de tamaño/volumen como 5CL, 50ML, 750ML, etc."""
     match = re.search(r'\b\d+\s*(?:CL|ML|L|LT|OZ)\b', str(text).upper())
     return match.group(0).replace(" ", "") if match else None
 
@@ -168,17 +170,18 @@ def get_resolved_barcode(extracted_code, description):
     if desc_upper in st.session_state["barcode_memory"]:
         return st.session_state["barcode_memory"][desc_upper]
         
-    # Extraer el tamaño/presentación del ítem actual (ej: '5CL', '75CL')
+    # Extraer el tamaño/presentación del ítem actual (ej: '5CL', '50ML', '750ML')
     target_size = extract_size_token(desc_upper)
 
-    # Función auxiliar para filtrar candidatos por tamaño si el ítem lo especifica
     def filter_by_size(keys_list):
         if not target_size:
             return keys_list
-        filtered = [k for k in keys_list if target_size in k.replace(" ", "")]
-        return filtered if filtered else keys_list # Si no hay coincidencia exacta de tamaño, relaja el filtro
+        # Normalizar unidades equivalentes comunes (ej: 5CL == 50ML)
+        norm_target = target_size.replace("5CL", "50ML")
+        filtered = [k for k in keys_list if norm_target in k.replace(" ", "").replace("5CL", "50ML")]
+        return filtered if filtered else keys_list
 
-    # 3. Búsqueda difusa inteligente (Fuzzy Matching) respetando el tamaño/presentación
+    # 3. Búsqueda difusa inteligente respetando estrictamente el tamaño/presentación
     master_keys = filter_by_size(list(st.session_state["master_catalog"].keys()))
     if master_keys:
         coincidencias = difflib.get_close_matches(desc_upper, master_keys, n=1, cutoff=0.35)
@@ -232,10 +235,10 @@ def process_invoice_exact_18(file_obj, file_type, use_paid_gemini=False, use_ope
         "Analiza esta factura o tiquet con máxima precisión horizontal y vertical. "
         "Extrae cada renglón de producto detallando: "
         "1. 'codigo_barras': código de barras oficial si lo trae impreso, de lo contrario déjalo vacío o S/C. "
-        "2. 'descripcion': texto completo de la descripción (incluyendo tamaño o volumen como 5CL, 75CL, etc.). "
+        "2. 'descripcion': texto completo de la descripción (incluyendo tamaño o volumen como 5CL, 50ML, 750ML, etc.). "
         "3. 'cantidad': número exacto de unidades o cantidad comprada. "
         "4. 'unidad': 'CAJA' o 'BOT.' o 'UNIDAD'. "
-        "5. 'tamano': presentación o tamaño exacto (ej: 5 CL., 75 CL.). "
+        "5. 'tamano': presentación o tamaño exacto (ej: 5 CL., 50 ML., 750 ML.). "
         "6. 'precio_lista': precio unitario o precio base. "
         "7. 'valor': monto total de la línea si no hay precio unitario explícito. "
         "8. 'descuento_porcentaje': porcentaje de descuento si aplica. "
