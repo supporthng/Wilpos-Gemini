@@ -172,7 +172,7 @@ def process_invoice_exact_18(file_obj, file_type, use_openai_fallback=False):
         "4. 'unidad': 'CAJA' o 'BOT.'. "
         "5. 'tamano': texto exacto de la columna 'TAMAÑO' (ej: 12/75 CL., 6/70 CL., 75 CL.). "
         "6. 'precio_lista': número exacto de la columna 'PRECIO'. "
-        "7. 'descuento_porcentaje': detecta y extrae el porcentaje exacto impreso en la columna 'COM.' para ese renglón específico (ej: 10 para 10%, 5 para 5%, o 0 si no aplica). "
+        "7. 'descuento_porcentaje': porcentaje exacto de la columna 'COM.' (ej: 10 para el 10% de descuento comercial). "
         "Devuelve un JSON puro con un arreglo exacto de 18 objetos bajo la clave 'items': "
         '{"items": [{"codigo_barras": "...", "descripcion": "...", "cantidad": 1, "unidad": "CAJA", "tamano": "12/75 CL.", "precio_lista": 0.0, "descuento_porcentaje": 10.0}]}. '
         "Respuesta JSON pura sin texto adicional ni markdown."
@@ -211,10 +211,6 @@ def process_invoice_exact_18(file_obj, file_type, use_openai_fallback=False):
             file_bytes = file_obj.read()
             image_input = file_bytes if "pdf" in file_type.lower() else Image.open(io.BytesIO(file_bytes))
             response = model.generate_content([image_input, prompt_text])
-            
-            if not response or not response.text:
-                raise ValueError("La IA devolvió una respuesta vacía o nula.")
-                
             raw_text = response.text.strip()
             if raw_text.startswith("```json"): raw_text = raw_text[7:]
             if raw_text.endswith("```"): raw_text = raw_text[:-3]
@@ -231,7 +227,7 @@ def process_invoice_exact_18(file_obj, file_type, use_openai_fallback=False):
 # ==========================================
 if modulo == "📄 Factura Individual":
     st.markdown("<h2>📊 Automatizador de Facturas <span style='color: #0284c7;'>(Individual)</span></h2>", unsafe_allow_html=True)
-    st.markdown("<p style='color: #64748b;'>Extracción blindada de códigos, 18 renglones y descuento comercial dinámico.</p>", unsafe_allow_html=True)
+    st.markdown("<p style='color: #64748b;'>Extracción de códigos de barras, 18 renglones y descuento comercial aplicado al costo.</p>", unsafe_allow_html=True)
     st.markdown("---")
 
     st.markdown('<div class="card-container">', unsafe_allow_html=True)
@@ -245,9 +241,9 @@ if modulo == "📄 Factura Individual":
 
     if uploaded_file is not None:
         st.success(f"¡Archivo cargado: {uploaded_file.name}!")
-        if st.button("🚀 Procesar Factura con Blindaje Activo"):
+        if st.button("🚀 Procesar Factura con Descuento Aplicado"):
             file_type = uploaded_file.type if hasattr(uploaded_file, 'type') else 'image/jpeg'
-            with st.spinner("Procesando renglones con seguridad reforzada..."):
+            with st.spinner("Procesando renglones y aplicando descuento comercial del 10%..."):
                 parsed_data, success_msg = process_invoice_exact_18(uploaded_file, file_type, use_openai_fallback=use_openai_single)
 
             if success_msg == "QUOTA_EXCEEDED":
@@ -285,13 +281,14 @@ if modulo == "📄 Factura Individual":
                         b_mem = st.session_state["barcode_memory"]
                         extracted_code = clean_barcode(b_mem.get(desc.upper(), "S/C (Sin Código)"))
 
-                    desc_pct = safe_float(item.get("descuento_porcentaje") or 0.0)
+                    desc_pct = safe_float(item.get("descuento_porcentaje") or 10.0) # Descuento comercial 10%
                     cant_comprada = safe_int(item.get("cantidad") or 1, 1)
                     unidad_txt = str(item.get("unidad") or "CAJA")
                     tamano_txt = str(item.get("tamano") or "12/75 CL.")
                     
                     empaque_val = parse_empaque_from_tamano(tamano_txt, unidad_txt)
                     
+                    # Cálculo contable exacto con descuento aplicado
                     importe_bruto = precio_lista * cant_comprada
                     descuento_linea = importe_bruto * (desc_pct / 100.0)
                     importe_neto_linea = importe_bruto - descuento_linea
@@ -318,10 +315,9 @@ if modulo == "📄 Factura Individual":
                         "Tamaño/Empaque": tamano_txt,
                         "Empaque Num": empaque_val,
                         "Stock Total": total_unidades_linea,
-                        "Desc. %": f"{desc_pct}%",
                         "Costo Unitario": costo,
                         "Precio Venta": precio_venta,
-                        "Estado": "OK"
+                        "Estado": f"Desc. {desc_pct}% OK"
                     })
 
                 calc_neto_gravado = calc_subtotal - calc_descuento_total
@@ -373,7 +369,7 @@ if modulo == "📄 Factura Individual":
 # ==========================================
 elif modulo == "📂 Múltiples Facturas (Lote)":
     st.markdown("<h2>📂 Procesador por <span style='color: #0284c7;'>Lotes y Consolidación Oficial</span></h2>", unsafe_allow_html=True)
-    st.markdown("<p style='color: #64748b;'>Procesa múltiples facturas aplicando descuento dinámico y consolidando stock.</p>", unsafe_allow_html=True)
+    st.markdown("<p style='color: #64748b;'>Procesa múltiples facturas aplicando el descuento comercial y consolidando stock.</p>", unsafe_allow_html=True)
     st.markdown("---")
 
     st.markdown('<div class="card-container">', unsafe_allow_html=True)
@@ -489,7 +485,7 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
 
                 extracted_code = clean_barcode(item.get("codigo_barras"))
                 precio_lista = safe_float(item.get("precio_lista") or 0)
-                desc_pct = safe_float(item.get("descuento_porcentaje") or 0.0)
+                desc_pct = safe_float(item.get("descuento_porcentaje") or 10.0)
                 cant_comprada = safe_int(item.get("cantidad") or 1, 1)
                 unidad_txt = str(item.get("unidad") or "CAJA")
                 tamano_txt = str(item.get("tamano") or "12/75 CL.")
