@@ -121,6 +121,10 @@ def normalize_text(text):
     if not isinstance(text, str):
         return ""
     t = text.upper()
+    # Distinguir estrictamente Glen Grant de Glenlivet
+    t = t.replace('GLENLIVET', 'GLEN_LIVET_SPECIAL')
+    t = t.replace('GLEN GRANT', 'GLEN_GRANT_SPECIAL').replace('GLENGRANT', 'GLEN_GRANT_SPECIAL')
+    
     t = t.replace('SIX EIGHT NINE', '689').replace('SIX-EIGHT-NINE', '689')
     t = t.replace('COGÑA', 'COGNAC').replace('COGÑAC', 'COGNAC').replace('CONGNAC', 'COGNAC')
     t = t.replace('VSOP', 'V.S.O.P').replace('V S O P', 'V.S.O.P')
@@ -236,11 +240,12 @@ def process_invoice_with_ai(file_obj, file_type, use_openai_fallback=False):
         data_url = f"data:application/pdf;base64,{b64_data}" if "pdf" in file_type.lower() else f"data:image/jpeg;base64,{b64_data}"
 
         prompt_text = (
-            "Analiza esta factura rigurosamente línea por línea de arriba a abajo, en el orden exacto del 1 al 18. "
-            "Para cada renglón extrae estrictamente: 'descripcion', 'cantidad' (el número exacto de la columna CANTDAD), 'unidad' (lo que dice la columna UNID., CAJA o BOT.), "
-            "'tamano' (lo que indica exactamente la columna TAMAÑO, ej: 12/75 CL. o 75 CL.), "
-            "'precio_lista' (el precio exacto de la columna PRECIO para ese renglón), y 'descuento_porcentaje' (el porcentaje de la columna COM., ej: 10 para 10%). "
-            "Devuelve un JSON puro con esta estructura exacta y en orden estricto: "
+            "Analiza esta factura rigurosamente renglón por renglón desde el número 1 hasta el 18 inclusive. "
+            "NO te detengas en el 13 ni omitas filas. Esta factura de Álvarez & Sánchez tiene exactamente 18 líneas de productos. "
+            "Asegúrate de incluir los whiskies y vodkas del final de la página. "
+            "Para cada renglón extrae estrictamente: 'descripcion', 'cantidad' (el número exacto de la columna CANTDAD), 'unidad' (CAJA o BOT.), "
+            "'tamano' (ej: 12/75 CL. o 75 CL.), 'precio_lista' (precio exacto de la columna PRECIO), y 'descuento_porcentaje' (porcentaje de la columna COM., ej: 10). "
+            "Devuelve un JSON puro con esta estructura exacta y en orden estricto del 1 al 18: "
             '{"items": [{"descripcion": "...", "cantidad": 1, "unidad": "CAJA", "tamano": "12/75 CL.", "precio_lista": 0.0, "descuento_porcentaje": 10.0}]}. '
             "Respuesta JSON pura sin texto adicional ni markdown."
         )
@@ -262,11 +267,12 @@ def process_invoice_with_ai(file_obj, file_type, use_openai_fallback=False):
         return None, "Falta clave API de Gemini"
 
     prompt_text = (
-        "Analiza esta factura rigurosamente línea por línea de arriba a abajo, en el orden exacto del 1 al 18. "
-        "Para cada renglón extrae estrictamente: 'descripcion', 'cantidad' (el número exacto de la columna CANTDAD), 'unidad' (lo que dice la columna UNID., CAJA o BOT.), "
-        "'tamano' (lo que indica exactamente la columna TAMAÑO, ej: 12/75 CL. o 75 CL.), "
-        "'precio_lista' (el precio exacto de la columna PRECIO para ese renglón), y 'descuento_porcentaje' (el porcentaje de la columna COM., ej: 10 para 10%). "
-        "Devuelve un JSON puro con esta estructura exacta y en orden estricto: "
+        "Analiza esta factura rigurosamente renglón por renglón desde el número 1 hasta el 18 inclusive. "
+        "NO te detengas en el 13 ni omitas filas. Esta factura de Álvarez & Sánchez tiene exactamente 18 líneas de productos. "
+        "Asegúrate de incluir los whiskies y vodkas del final de la página. "
+        "Para cada renglón extrae estrictamente: 'descripcion', 'cantidad' (el número exacto de la columna CANTDAD), 'unidad' (CAJA o BOT.), "
+        "'tamano' (ej: 12/75 CL. o 75 CL.), 'precio_lista' (precio exacto de la columna PRECIO), y 'descuento_porcentaje' (porcentaje de la columna COM., ej: 10). "
+        "Devuelve un JSON puro con esta estructura exacta y en orden estricto del 1 al 18: "
         '{"items": [{"descripcion": "...", "cantidad": 1, "unidad": "CAJA", "tamano": "12/75 CL.", "precio_lista": 0.0, "descuento_porcentaje": 10.0}]}. '
         "Respuesta JSON pura sin texto adicional."
     )
@@ -295,7 +301,7 @@ def process_invoice_with_ai(file_obj, file_type, use_openai_fallback=False):
 # ==========================================
 if modulo == "📄 Factura Individual":
     st.markdown("<h2>📊 Automatizador de Facturas <span style='color: #0284c7;'>(Individual)</span></h2>", unsafe_allow_html=True)
-    st.markdown("<p style='color: #64748b;'>Sube tu factura. Lectura exacta de empaques desde la columna TAMAÑO en orden original.</p>", unsafe_allow_html=True)
+    st.markdown("<p style='color: #64748b;'>Sube tu factura. Lectura completa de los 18 renglones y distinción de Glen Grant.</p>", unsafe_allow_html=True)
     st.markdown("---")
 
     st.markdown('<div class="card-container">', unsafe_allow_html=True)
@@ -311,7 +317,7 @@ if modulo == "📄 Factura Individual":
         st.success(f"¡Archivo cargado: {uploaded_file.name}!")
         if st.button("🚀 Procesar Factura"):
             file_type = uploaded_file.type if hasattr(uploaded_file, 'type') else 'image/jpeg'
-            with st.spinner("Analizando 18 renglones y empaques..."):
+            with st.spinner("Analizando los 18 renglones completos..."):
                 parsed_data, success_msg = process_invoice_with_ai(uploaded_file, file_type, use_openai_fallback=use_openai_single)
 
             if success_msg == "QUOTA_EXCEEDED":
