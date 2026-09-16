@@ -110,7 +110,6 @@ def load_json_file(filepath):
         except Exception:
             data = {}
     
-    # Códigos oficiales fijos verificados en factura
     data["WHISKY ESCOCES MALTA 12 AÑOS GLEN GRANT"] = "8000040630269"
     data["VINO TINTO SIX EIGHT NINE 689"] = "051497322618"
     data["VODKA SKYY"] = "721059007504"
@@ -181,10 +180,20 @@ st.sidebar.markdown("---")
 st.sidebar.markdown("### ⚙️ Configuración de API")
 use_gemini_paid_api = st.sidebar.checkbox("💎 Usar Gemini Paid (API de Pago)", value=bool(ACTIVE_GEMINI_PAID_KEY))
 
-def parse_empaque_from_tamano(tamano_txt, unidad_txt):
+def parse_empaque_from_tamano(tamano_txt, unidad_txt, descripcion_txt=""):
     u = str(unidad_txt).strip().upper()
-    if "BOT" in u:
+    d = str(descripcion_txt).strip().upper()
+    
+    # Si la unidad es botella suelta explícita
+    if "BOT" in u and "CAJA" not in u:
         return 1
+        
+    # Reglas específicas solicitadas
+    if "INFUSIONS" in d:
+        return 6
+    if "GLEN GRANT" in d:
+        return 12
+        
     t = str(tamano_txt).strip()
     match_t = re.search(r'^(\d+)\s*/', t)
     if match_t:
@@ -342,7 +351,7 @@ if modulo == "📄 Factura Individual":
                     unidad_txt = str(item.get("unidad") or "CAJA")
                     tamano_txt = str(item.get("tamano") or "12/75 CL.")
                     
-                    empaque_val = parse_empaque_from_tamano(tamano_txt, unidad_txt)
+                    empaque_val = parse_empaque_from_tamano(tamano_txt, unidad_txt, desc)
                     
                     importe_bruto = precio_lista * cant_comprada
                     descuento_linea = importe_bruto * (desc_pct / 100.0)
@@ -543,7 +552,7 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
                 unidad_txt = str(item.get("unidad") or "CAJA")
                 tamano_txt = str(item.get("tamano") or "12/75 CL.")
 
-                empaque_val = parse_empaque_from_tamano(tamano_txt, unidad_txt)
+                empaque_val = parse_empaque_from_tamano(tamano_txt, unidad_txt, desc)
                 
                 importe_bruto = precio_lista * cant_comprada
                 descuento_linea = importe_bruto * (desc_pct / 100.0)
