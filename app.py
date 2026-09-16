@@ -3,7 +3,6 @@ import json
 import os
 import time
 import re
-import difflib
 import google.generativeai as genai
 from openai import OpenAI
 from PIL import Image
@@ -106,7 +105,6 @@ def load_json_file(filepath):
         except Exception:
             data = {}
     
-    # Códigos oficiales fijos verificados en factura
     data["WHISKY ESCOCES MALTA 12 AÑOS GLEN GRANT"] = "8000040630269"
     data["VINO TINTO SIX EIGHT NINE 689"] = "051497322618"
     data["VODKA SKYY"] = "721059007504"
@@ -130,15 +128,28 @@ def safe_int(val, default=1):
 def round_to_nearest_5(x):
     return float(round(round(x / 5) * 5))
 
-def clean_barcode(code_val):
+def is_valid_barcode(code_val):
     if not code_val:
+        return False
+    s_val = str(code_val).strip()
+    if s_val.endswith('.0'):
+        s_val = s_val[:-2]
+    # Limpiar a solo dígitos
+    digits = re.sub(r'\D', '', s_val)
+    # Regla real: Los códigos de barras comerciales estándar (EAN-8, UPC-A, EAN-13, ITF-14) 
+    # tienen estrictamente entre 8 y 14 dígitos. Los códigos internos cortos (ej: 3625) tienen 4-5 dígitos y se rechazan.
+    return 8 <= len(digits) <= 14
+
+def clean_barcode(code_val):
+    if not is_valid_barcode(code_val):
         return "S/C (Sin Código)"
     s_val = str(code_val).strip()
     if s_val.endswith('.0'):
         s_val = s_val[:-2]
-    if s_val.lower() in ["nan", "none", "", "s/c", "sin codigo"]:
-        return "S/C (Sin Código)"
-    return s_val
+    digits = re.sub(r'\D', '', s_val)
+    if len(digits) == 11 and digits.startswith(('3', '0')):
+        digits = '0' + digits
+    return digits
 
 # ==========================================
 # MENÚ Y CONFIGURACIÓN LATERAL
@@ -164,17 +175,20 @@ def parse_empaque_from_tamano(tamano_txt, unidad_txt):
 
 def process_invoice_exact_18(file_obj, file_type, use_openai_fallback=False):
     prompt_text = (
-        "Analiza esta factura de Álvarez & Sánchez con absoluta precisión. La tabla contiene exactamente 18 renglones numerados del 1 al 18 de arriba a abajo. "
-        "Debes extraer CADA UNO DE LOS 18 RENGLONES uno por uno en estricto orden, sin omitir ni duplicar ninguno. "
-        "Para cada renglón extrae estrictamente: "
-        "1. 'codigo_barras': el número exacto de la columna 'CODIGO DE BARRAS' impresa en la factura (ej: 051497322618 para Six Eight Nine, 8000040630269 para Glen Grant, 721059007504 para Vodka Skyy). "
-        "2. 'descripcion': el texto exacto de la columna 'DESCRIPCION'. "
-        "3. 'cantidad': número de la columna 'CANTDAD'. "
-        "4. 'unidad': 'CAJA' o 'BOT.'. "
-        "5. 'tamano': texto exacto de la columna 'TAMAÑO' (ej: 12/75 CL., 6/70 CL., 75 CL.). "
-        "6. 'precio_lista': número exacto de la columna 'PRECIO'. "
-        "7. 'descuento_porcentaje': porcentaje de la columna 'COM.' (ej: 10). "
-        "Devuelve un JSON puro con un arreglo exacto de 18 objetos bajo la clave 'items': "
+        "Analiza esta factura de Álvarez & Sánchez con extrema precisión. "
+        "La tabla tiene exactamente 18 renglones numerados del 1 al 18. "
+        "ATENCIÓN: En la factura hay dos columnas de códigos a la izquierda: "
+        "1. La primera columna es 'CODIGO' (códigos internos cortos de 4-5 dígitos como 3625, 3553). ¡NO USES ESTOS! "
+        "2. La segunda columna más ancha es 'CODIGO DE BARRAS' (códigos comerciales largos de 12 o 13 dígitos como 8410591003045). DEBES EXTRAER EXCLUSIVAMENTE ESTOS. "
+        "Para cada renglón extrae: "
+        "- 'codigo_barras': el código largo de la columna 'CODIGO DE BARRAS'. "
+        "- 'descripcion': texto exacto de 'DESCRIPCION'. "
+        "- 'cantidad': número de 'CANTDAD'. "
+        "- 'unidad': 'CAJA' o 'BOT.'. "
+        "- 'tamano': texto exacto de 'TAMAÑO'. "
+        "- 'precio_lista': número de 'PRECIO'. "
+        "- 'descuento_porcentaje': porcentaje de 'COM.'. "
+        "Devuelve un JSON puro con un arreglo de 18 objetos bajo la clave 'items': "
         '{"items": [{"codigo_barras": "...", "descripcion": "...", "cantidad": 1, "unidad": "CAJA", "tamano": "12/75 CL.", "precio_lista": 0.0, "descuento_porcentaje": 10.0}]}. '
         "Respuesta JSON pura sin texto adicional ni markdown."
     )
@@ -212,6 +226,10 @@ def process_invoice_exact_18(file_obj, file_type, use_openai_fallback=False):
             file_bytes = file_obj.read()
             image_input = file_bytes if "pdf" in file_type.lower() else Image.open(io.BytesIO(file_bytes))
             response = model.generate_content([image_input, prompt_text])
+            
+            if not response or not response.text:
+                raise ValueError("La IA devolvió una respuesta vacía o nula.")
+                
             raw_text = response.text.strip()
             if raw_text.startswith("```json"): raw_text = raw_text[7:]
             if raw_text.endswith("```"): raw_text = raw_text[:-3]
@@ -228,7 +246,7 @@ def process_invoice_exact_18(file_obj, file_type, use_openai_fallback=False):
 # ==========================================
 if modulo == "📄 Factura Individual":
     st.markdown("<h2>📊 Automatizador de Facturas <span style='color: #0284c7;'>(Individual)</span></h2>", unsafe_allow_html=True)
-    st.markdown("<p style='color: #64748b;'>Extracción directa de códigos de barras oficiales impresos sin duplicados.</p>", unsafe_allow_html=True)
+    st.markdown("<p style='color: #64748b;'>Extracción con validación estricta de longitud comercial de códigos de barras (8 a 14 dígitos).</p>", unsafe_allow_html=True)
     st.markdown("---")
 
     st.markdown('<div class="card-container">', unsafe_allow_html=True)
@@ -242,9 +260,9 @@ if modulo == "📄 Factura Individual":
 
     if uploaded_file is not None:
         st.success(f"¡Archivo cargado: {uploaded_file.name}!")
-        if st.button("🚀 Procesar Factura Exacta (18 Renglones)"):
+        if st.button("🚀 Procesar Factura con Validación Real"):
             file_type = uploaded_file.type if hasattr(uploaded_file, 'type') else 'image/jpeg'
-            with st.spinner("Leyendo códigos de barras y renglones de la factura..."):
+            with st.spinner("Procesando y validando códigos de barras comerciales..."):
                 parsed_data, success_msg = process_invoice_exact_18(uploaded_file, file_type, use_openai_fallback=use_openai_single)
 
             if success_msg == "QUOTA_EXCEEDED":
@@ -267,7 +285,7 @@ if modulo == "📄 Factura Individual":
                         omitted_items.append({"Item #": idx, "Descripción": str(item), "Razón": "Estructura inválida"})
                         continue
                     
-                    desc = str(item.get("descripcion") or item.get("nombre") or "").strip()
+                    desc = str(item.get("descripcion") or "").strip()
                     if not desc:
                         omitted_items.append({"Item #": idx, "Descripción": "(Sin descripción)", "Razón": "Línea sin descripción"})
                         continue
@@ -277,14 +295,16 @@ if modulo == "📄 Factura Individual":
                         omitted_items.append({"Item #": idx, "Descripción": desc, "Razón": "Precio de lista en 0"})
                         continue
 
-                    # Usar el código de barras extraído directamente de la factura por la IA
-                    extracted_code = clean_barcode(item.get("codigo_barras"))
+                    # Validación estricta del código de barras
+                    raw_code = item.get("codigo_barras")
+                    extracted_code = clean_barcode(raw_code)
+                    
+                    # Si el código es inválido o corto (confundido con la columna CODIGO), buscar en memoria
                     if extracted_code == "S/C (Sin Código)":
-                        # Respaldo en memoria si faltara
                         b_mem = st.session_state["barcode_memory"]
                         extracted_code = clean_barcode(b_mem.get(desc.upper(), "S/C (Sin Código)"))
 
-                    desc_pct = safe_float(item.get("descuento_porcentaje") or 0)
+                    desc_pct = safe_float(item.get("descuento_porcentaje") or 0.0)
                     cant_comprada = safe_int(item.get("cantidad") or 1, 1)
                     unidad_txt = str(item.get("unidad") or "CAJA")
                     tamano_txt = str(item.get("tamano") or "12/75 CL.")
@@ -317,9 +337,10 @@ if modulo == "📄 Factura Individual":
                         "Tamaño/Empaque": tamano_txt,
                         "Empaque Num": empaque_val,
                         "Stock Total": total_unidades_linea,
+                        "Desc. %": f"{desc_pct}%",
                         "Costo Unitario": costo,
                         "Precio Venta": precio_venta,
-                        "Estado": "Directo Factura"
+                        "Estado": "OK"
                     })
 
                 calc_neto_gravado = calc_subtotal - calc_descuento_total
@@ -361,6 +382,7 @@ if modulo == "📄 Factura Individual":
                             item_dict["Empaque Num"], "No", 0, 0, None, "No", None
                         ])
                         ws_prod.cell(row=ws_prod.max_row, column=2).number_format = '@'
+                        ws_prod.cell(row=ws_prod.max_row, column=2).value = str(item_dict["Código Oficial POS"])
                     
                     output = io.BytesIO()
                     wb.save(output)
@@ -371,14 +393,14 @@ if modulo == "📄 Factura Individual":
 # ==========================================
 elif modulo == "📂 Múltiples Facturas (Lote)":
     st.markdown("<h2>📂 Procesador por <span style='color: #0284c7;'>Lotes y Consolidación Oficial</span></h2>", unsafe_allow_html=True)
-    st.markdown("<p style='color: #64748b;'>Procesa múltiples facturas consolidando empaques y códigos exactos.</p>", unsafe_allow_html=True)
+    st.markdown("<p style='color: #64748b;'>Procesa múltiples facturas con validación comercial y consolidación de stock.</p>", unsafe_allow_html=True)
     st.markdown("---")
 
     st.markdown('<div class="card-container">', unsafe_allow_html=True)
     l_col1, _ = st.columns([1, 3])
     with l_col1:
         margen_ganancia_lote = st.number_input("⚙️ Ganancia (%) Lote", min_value=0.0, max_value=500.0, value=25.0, step=1.0)
-    uploaded_files = st.file_uploader("📂 Sube tus facturas (Selección múltiple)", type=["pdf", "png", "jpg", "jpeg"], accept_multiple_files=True, key="batch_files")
+    uploaded_files = st.file_uploader("📂 Sube tu factura (Selección múltiple)", type=["pdf", "png", "jpg", "jpeg"], accept_multiple_files=True, key="batch_files")
     st.markdown('</div>', unsafe_allow_html=True)
 
     if uploaded_files:
@@ -487,7 +509,7 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
 
                 extracted_code = clean_barcode(item.get("codigo_barras"))
                 precio_lista = safe_float(item.get("precio_lista") or 0)
-                desc_pct = safe_float(item.get("descuento_porcentaje") or 0)
+                desc_pct = safe_float(item.get("descuento_porcentaje") or 0.0)
                 cant_comprada = safe_int(item.get("cantidad") or 1, 1)
                 unidad_txt = str(item.get("unidad") or "CAJA")
                 tamano_txt = str(item.get("tamano") or "12/75 CL.")
@@ -562,6 +584,7 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
                         row["Precio Especial"], row["Descuento Activo"], row["Descuento Nota"]
                     ])
                     ws_prod.cell(row=ws_prod.max_row, column=2).number_format = '@'
+                    ws_prod.cell(row=ws_prod.max_row, column=2).value = str(row["Código Barra"])
 
                 output = io.BytesIO()
                 wb.save(output)
