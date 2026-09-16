@@ -294,12 +294,12 @@ if modulo == "📄 Factura Individual":
                 multiplicador_ganancia = 1 + (margen_ganancia / 100.0)
 
                 for idx, item in enumerate(data_items, start=1):
-                    desc = str(item.get("descripcion", ""))
+                    desc = str(item.get("descripcion") or item.get("nombre") or item.get("articulo") or item.get("item") or "")
                     official_code, matched_name, status_match = match_official_barcode(desc)
 
-                    raw_costo = safe_float(item.get("costo_sin_itbis", 0))
-                    cant_comprada = safe_int(item.get("cantidad", 1), 1)
-                    empaque_val = safe_int(item.get("empaque", 1), 1)
+                    raw_costo = safe_float(item.get("costo_sin_itbis") or item.get("costo") or item.get("precio") or 0)
+                    cant_comprada = safe_int(item.get("cantidad") or item.get("cant") or 1, 1)
+                    empaque_val = safe_int(item.get("empaque") or item.get("unidad_empaque") or 1, 1)
                     
                     costo = audit_and_correct_cost(raw_costo, cant_comprada, empaque_val)
                     raw_pv = (costo * multiplicador_ganancia) * 1.18
@@ -445,7 +445,14 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
                         st.session_state["batch_audit_log"].append({
                             "Archivo": file_info["name"], "Estado": "🟢 OK"
                         })
+                        
+                        # Extracción universal flexible de ítems
                         items = parsed_data.get("items", [])
+                        if not items:
+                            for k, v in parsed_data.items():
+                                if isinstance(v, list):
+                                    items = v
+                                    break
                         if isinstance(items, list):
                             st.session_state["batch_accumulated_items"].extend(items)
                 else:
@@ -471,12 +478,17 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
             for item in raw_items:
                 if not isinstance(item, dict):
                     continue
-                desc = str(item.get("descripcion", ""))
+                
+                # Extracción flexible de descripción y costos
+                desc = str(item.get("descripcion") or item.get("nombre") or item.get("articulo") or item.get("item") or "").strip()
+                if not desc:
+                    continue
+
                 official_code, matched_name, _ = match_official_barcode(desc)
 
-                raw_costo = safe_float(item.get("costo_sin_itbis", 0))
-                cant_comprada = safe_int(item.get("cantidad", 1), 1)
-                empaque_val = safe_int(item.get("empaque", 1), 1)
+                raw_costo = safe_float(item.get("costo_sin_itbis") or item.get("costo") or item.get("precio") or 0)
+                cant_comprada = safe_int(item.get("cantidad") or item.get("cant") or 1, 1)
+                empaque_val = safe_int(item.get("empaque") or item.get("unidad_empaque") or 1, 1)
 
                 costo = audit_and_correct_cost(raw_costo, cant_comprada, empaque_val)
                 raw_pv = (costo * multiplicador_ganancia) * 1.18
@@ -507,7 +519,6 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
             if processed_rows:
                 df_temp = pd.DataFrame(processed_rows)
 
-                # BLINDAJE: Asegurar columnas obligatorias para evitar KeyError
                 if 'Código Barra' not in df_temp.columns:
                     df_temp['Código Barra'] = 'S/C (Sin Código)'
                 if 'Nombre' not in df_temp.columns:
