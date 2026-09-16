@@ -196,7 +196,8 @@ def process_invoice_with_gemini(file_obj, file_type):
     for intento in range(2):
         try:
             genai.configure(api_key=ACTIVE_GEMINI_KEY)
-            model = genai.GenerativeModel('gemini-2.5-flash')
+            # Modelo actualizado requerido por Google API
+            model = genai.GenerativeModel('gemini-3.6-flash')
             response = model.generate_content([image_input, prompt_text])
             
             if not response or not response.text:
@@ -371,7 +372,7 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
     l_col1, _ = st.columns([1, 3])
     with l_col1:
         margen_ganancia_lote = st.number_input("⚙️ Ganancia (%) Lote", min_value=0.0, max_value=500.0, value=25.0, step=1.0)
-    uploaded_files = st.file_uploader("📂 Sube tus facturas (Selección múltiple)", type=["pdf", "png", "jpg", "jpeg"], accept_multiple_files=True, key="batch_files")
+    uploaded_files = st.file_uploader("📂 Sube tu factura (Selección múltiple)", type=["pdf", "png", "jpg", "jpeg"], accept_multiple_files=True, key="batch_files")
     st.markdown('</div>', unsafe_allow_html=True)
 
     if uploaded_files:
