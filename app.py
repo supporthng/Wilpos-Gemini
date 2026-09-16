@@ -3,6 +3,7 @@ import json
 import os
 import time
 import hashlib
+import re
 import difflib
 import google.generativeai as genai
 from openai import OpenAI
@@ -223,42 +224,54 @@ def match_official_barcode(item_description):
 
     return "S/C (Sin Código)", raw_name, "⚠️ Sin Coincidencia en Maestro"
 
+def parse_empaque_from_description(item_desc, ai_empaque):
+    emp_ai = safe_int(ai_empaque, 1)
+    if emp_ai > 1:
+        return emp_ai
+        
+    d = str(item_desc).upper()
+    
+    # 1. Buscar patrón tipo "12/75", "24/12", "6/75" en la descripción de la factura
+    match_slash = re.search(r'(\d+)\s*/\s*([\d\.]+)', d)
+    if match_slash:
+        val1 = int(match_slash.group(1))
+        val2 = float(match_slash.group(2))
+        if val1 in [6, 12, 24, 20, 30, 48]:
+            return val1
+        elif val2 in [6, 12, 24, 20, 30]:
+            return int(val2)
+        return val1
+
+    # 2. Reglas por categoría / marcas si el texto indica el tipo
+    if any(b in d for b in ["PRESIDENTE", "MICHELOB", "COORS", "BRAHMA", "CORONA", "STELLA", "HEINEKEN", "BECKS"]):
+        if "22OZ" in d or "650ML" in d or "GRANDE" in d:
+            return 12
+        return 24
+        
+    if any(w in d for w in ["VINO", "WHISKY", "VODKA", "TEQUILA", "RON", "RUM", "GIN", "COGNAC", "LICOR", "FIREBALL", "CAMPARI", "AMARETTO", "KAHLUA", "MIDORI"]):
+        return 6
+
+    if any(bev in d for bev in ["GATORADE", "ALOE", "CLAMATO", "REDBULL", "MONSTER", "COCA", "PEPSI", "AGUA", "OCEANSPRAY", "FOURLOKO", "THEONE"]):
+        return 12
+
+    return 1
+
 def audit_and_correct_cost(item_desc, costo_unit, cantidad, empaque):
     c = safe_float(costo_unit)
     cant = safe_int(cantidad, 1)
-    emp = safe_int(empaque, 1)
-    d = str(item_desc).upper().replace(" ", "")
     
-    # AUDITORÍA INTELIGENTE DE CAJAS Y EMPAQUES (Soporta formatos con y sin espacios)
-    if emp <= 1:
-        # Cervezas (Cajas de 24 o 12 para presentaciones grandes de 650ml / 22oz)
-        if any(b in d for b in ["PRESIDENTE", "MICHELOB", "COORS", "BRAHMA", "CORONA", "STELLA", "HEINEKEN", "BECKS"]):
-            if c > 800:
-                if "22OZ" in d or "650ML" in d or "GRANDE" in d:
-                    return round(c / 12, 2), 12
-                else:
-                    return round(c / 24, 2), 24
-        
-        # Licores y Vinos (Cajas de 6)
-        if any(w in d for w in ["VINO", "WHISKY", "VODKA", "TEQUILA", "RON", "RUM", "GIN", "COGNAC", "LICOR", "FIREBALL", "CAMPARI", "AMARETTO", "KAHLUA", "MIDORI"]):
-            if c > 1200:
-                return round(c / 6, 2), 6
-
-        # Bebidas no alcohólicas / Energizantes / Jugos / Aloe (Cajas de 12)
-        if any(bev in d for bev in ["GATORADE", "ALOE", "CLAMATO", "REDBULL", "MONSTER", "COCA", "PEPSI", "AGUA", "OCEANSPRAY", "FOURLOKO", "THEONE"]):
-            if c > 800:
-                return round(c / 12, 2), 12
-
-        # Regla general para cualquier producto con costo total elevado (> 1500) facturado por bulto/caja
-        if c > 1500:
-            return round(c / 12, 2), 12
-            
-        return round(c, 2), 1
+    # Extraer empaque real directamente de la descripción o IA
+    emp = parse_empaque_from_description(item_desc, empaque)
     
-    if c > 800 and (c / emp) < c:
-        if (c / emp) >= 5:
+    # Si tenemos empaque > 1 y el costo es de caja/bulto, dividimos
+    if emp > 1:
+        if c > 800 and (c / emp) < c:
             return round(c / emp, 2), emp
             
+    # Si empaque era 1 pero el costo es elevado, aplicamos regla de seguridad por costo total
+    if emp <= 1 and c > 2500:
+        return round(c / 6, 2), 6
+        
     return round(c, 2), emp
 
 def process_with_openai(file_obj, file_type):
@@ -360,7 +373,7 @@ def process_invoice_with_ai(file_obj, file_type, use_openai_fallback=False):
 # ==========================================
 if modulo == "📄 Factura Individual":
     st.markdown("<h2>📊 Automatizador de Facturas <span style='color: #0284c7;'>(Individual)</span></h2>", unsafe_allow_html=True)
-    st.markdown("<p style='color: #64748b;'>Sube tu factura. Los códigos oficiales de tu maestro se asignarán automáticamente por nombre.</p>", unsafe_allow_html=True)
+    st.markdown("<p style='color: #64748b;'>Sube tu factura. El sistema analiza automáticamente el empaque y asigna los códigos de tu maestro.</p>", unsafe_allow_html=True)
     st.markdown("---")
 
     st.markdown('<div class="card-container">', unsafe_allow_html=True)
@@ -376,7 +389,7 @@ if modulo == "📄 Factura Individual":
         st.success(f"¡Archivo cargado: {uploaded_file.name}!")
         if st.button("🚀 Procesar Factura"):
             file_type = uploaded_file.type if hasattr(uploaded_file, 'type') else 'image/jpeg'
-            with st.spinner("Analizando factura..."):
+            with st.spinner("Analizando factura y empaques..."):
                 parsed_data, success_msg = process_invoice_with_ai(uploaded_file, file_type, use_openai_fallback=use_openai_single)
 
             if success_msg == "QUOTA_EXCEEDED":
@@ -454,7 +467,7 @@ if modulo == "📄 Factura Individual":
 # ==========================================
 elif modulo == "📂 Múltiples Facturas (Lote)":
     st.markdown("<h2>📂 Procesador por <span style='color: #0284c7;'>Lotes y Consolidación Oficial</span></h2>", unsafe_allow_html=True)
-    st.markdown("<p style='color: #64748b;'>Procesa múltiples facturas asignando los códigos correctos del maestro y consolidando sin duplicados.</p>", unsafe_allow_html=True)
+    st.markdown("<p style='color: #64748b;'>Procesa múltiples facturas analizando empaques y consolidando sin duplicados.</p>", unsafe_allow_html=True)
     st.markdown("---")
 
     st.markdown('<div class="card-container">', unsafe_allow_html=True)
