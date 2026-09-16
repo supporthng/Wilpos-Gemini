@@ -105,7 +105,7 @@ def normalize_text(text):
         return ""
     t = text.upper()
     
-    # Equivalencias de marcas y términos
+    # Equivalencias generales de marcas y términos
     t = t.replace('SIX EIGHT NINE', '689').replace('SIX-EIGHT-NINE', '689')
     t = t.replace('COGÑA', 'COGNAC').replace('COGÑAC', 'COGNAC').replace('CONGNAC', 'COGNAC')
     t = t.replace('VSOP', 'V.S.O.P').replace('V S O P', 'V.S.O.P')
@@ -243,7 +243,7 @@ def process_invoice_with_ai(file_obj, file_type):
         return None, ""
 
     for api_k, label in keys_to_try:
-        for intento in range(2): # Reintento automático en caso de fallo temporal
+        for intento in range(2):
             try:
                 genai.configure(api_key=api_k)
                 model = genai.GenerativeModel('gemini-3.6-flash')
@@ -423,7 +423,6 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
                 file_bytes_io = io.BytesIO(file_info["bytes"])
                 parsed_data, err_msg = process_invoice_with_ai(file_bytes_io, file_info["type"])
                 
-                # Pausa breve de seguridad para evitar saturar la API en lotes grandes
                 time.sleep(0.5)
 
                 if parsed_data and isinstance(parsed_data, dict):
@@ -470,6 +469,8 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
 
             processed_rows = []
             for item in raw_items:
+                if not isinstance(item, dict):
+                    continue
                 desc = str(item.get("descripcion", ""))
                 official_code, matched_name, _ = match_official_barcode(desc)
 
@@ -503,64 +504,73 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
                     "Descuento Nota": None
                 })
 
-            df_temp = pd.DataFrame(processed_rows)
+            if processed_rows:
+                df_temp = pd.DataFrame(processed_rows)
 
-            df_grouped = df_temp.groupby(['Código Barra', 'Nombre'], as_index=False).agg({
-                'Stock': 'sum',
-                'Costo': 'mean',
-                'Precio Venta': 'mean',
-                'Categoría': 'first',
-                'Tipo': 'first',
-                'Stock Mínimo': 'first',
-                'ITBIS': 'first',
-                'Unidad Medida': 'first',
-                'Venta Granel': 'first',
-                'Cantidad Empaque': 'first',
-                'Precio Variable': 'first',
-                'Descuento %': 'first',
-                'Descuento Monto': 'first',
-                'Precio Especial': 'first',
-                'Descuento Activo': 'first',
-                'Descuento Nota': 'first'
-            })
+                # BLINDAJE: Asegurar columnas obligatorias para evitar KeyError
+                if 'Código Barra' not in df_temp.columns:
+                    df_temp['Código Barra'] = 'S/C (Sin Código)'
+                if 'Nombre' not in df_temp.columns:
+                    df_temp['Nombre'] = 'PRODUCTO DESCONOCIDO'
 
-            df_final_preview = df_grouped.sort_values(by="Stock", ascending=False).reset_index(drop=True)
-            df_final_preview["Código Barra"] = df_final_preview["Código Barra"].astype(str)
+                df_grouped = df_temp.groupby(['Código Barra', 'Nombre'], as_index=False).agg({
+                    'Stock': 'sum',
+                    'Costo': 'mean',
+                    'Precio Venta': 'mean',
+                    'Categoría': 'first',
+                    'Tipo': 'first',
+                    'Stock Mínimo': 'first',
+                    'ITBIS': 'first',
+                    'Unidad Medida': 'first',
+                    'Venta Granel': 'first',
+                    'Cantidad Empaque': 'first',
+                    'Precio Variable': 'first',
+                    'Descuento %': 'first',
+                    'Descuento Monto': 'first',
+                    'Precio Especial': 'first',
+                    'Descuento Activo': 'first',
+                    'Descuento Nota': 'first'
+                })
 
-            st.success(f"✨ Se consolidaron **{len(df_final_preview)} productos únicos** provenientes de tus facturas.")
-            st.dataframe(df_final_preview, use_container_width=True, hide_index=True)
+                df_final_preview = df_grouped.sort_values(by="Stock", ascending=False).reset_index(drop=True)
+                df_final_preview["Código Barra"] = df_final_preview["Código Barra"].astype(str)
 
-            wb = openpyxl.Workbook()
-            ws_prod = wb.active
-            ws_prod.title = "Productos"
-            ws_prod.append(['Nombre', 'Código Barra', 'Categoría', 'Tipo', 'Precio Venta', 'Costo', 'Stock', 'Stock Mínimo', 'ITBIS', 'Unidad Medida', 'Venta Granel', 'Cantidad Empaque', 'Precio Variable', 'Descuento %', 'Descuento Monto', 'Precio Especial', 'Descuento Activo', 'Descuento Nota'])
+                st.success(f"✨ Se consolidaron **{len(df_final_preview)} productos únicos** provenientes de tus facturas.")
+                st.dataframe(df_final_preview, use_container_width=True, hide_index=True)
 
-            for _, row in df_final_preview.iterrows():
-                ws_prod.append([
-                    row["Nombre"],
-                    str(row["Código Barra"]),
-                    row["Categoría"],
-                    row["Tipo"],
-                    row["Precio Venta"],
-                    row["Costo"],
-                    row["Stock"],
-                    row["Stock Mínimo"],
-                    row["ITBIS"],
-                    row["Unidad Medida"],
-                    row["Venta Granel"],
-                    row["Cantidad Empaque"],
-                    row["Precio Variable"],
-                    row["Descuento %"],
-                    row["Descuento Monto"],
-                    row["Precio Especial"],
-                    row["Descuento Activo"],
-                    row["Descuento Nota"]
-                ])
-                ws_prod.cell(row=ws_prod.max_row, column=2).number_format = '@'
+                wb = openpyxl.Workbook()
+                ws_prod = wb.active
+                ws_prod.title = "Productos"
+                ws_prod.append(['Nombre', 'Código Barra', 'Categoría', 'Tipo', 'Precio Venta', 'Costo', 'Stock', 'Stock Mínimo', 'ITBIS', 'Unidad Medida', 'Venta Granel', 'Cantidad Empaque', 'Precio Variable', 'Descuento %', 'Descuento Monto', 'Precio Especial', 'Descuento Activo', 'Descuento Nota'])
 
-            output = io.BytesIO()
-            wb.save(output)
-            st.download_button("📥 Descargar Excel Consolidado Final", output.getvalue(), "Inventario_WilPOS_Consolidado_Corregido.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+                for _, row in df_final_preview.iterrows():
+                    ws_prod.append([
+                        row["Nombre"],
+                        str(row["Código Barra"]),
+                        row["Categoría"],
+                        row["Tipo"],
+                        row["Precio Venta"],
+                        row["Costo"],
+                        row["Stock"],
+                        row["Stock Mínimo"],
+                        row["ITBIS"],
+                        row["Unidad Medida"],
+                        row["Venta Granel"],
+                        row["Cantidad Empaque"],
+                        row["Precio Variable"],
+                        row["Descuento %"],
+                        row["Descuento Monto"],
+                        row["Precio Especial"],
+                        row["Descuento Activo"],
+                        row["Descuento Nota"]
+                    ])
+                    ws_prod.cell(row=ws_prod.max_row, column=2).number_format = '@'
+
+                output = io.BytesIO()
+                wb.save(output)
+                st.download_button("📥 Descargar Excel Consolidado Final", output.getvalue(), "Inventario_WilPOS_Consolidado_Corregido.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+            else:
+                st.warning("No se encontraron ítems válidos para consolidar.")
 
 # ==========================================
 # MÓDULO 3: VER CÓDIGOS ALMACENADOS & CARGAR MAESTRO
