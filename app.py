@@ -255,12 +255,11 @@ def process_invoice_with_ai(file_obj, file_type, use_openai_fallback=False):
         data_url = f"data:application/pdf;base64,{b64_data}" if "pdf" in file_type.lower() else f"data:image/jpeg;base64,{b64_data}"
 
         prompt_text = (
-            "Analiza esta factura COMPLETAMENTE de arriba a abajo. Extrae TODOS los renglones de la tabla sin omitir ninguno (asegúrate de incluir los 16 ítems si es una página completa). "
-            "Para cada ítem extrae estrictamente: 'descripcion', 'cantidad' (número de cajas/unidades), 'empaque', "
-            "'precio_lista' (el precio unitario o de caja indicado en la columna PRECIO antes de descuento), "
-            "y 'descuento_porcentaje' (el porcentaje indicado en COM. o DESC., ej: 10 para 10%). "
+            "Analiza esta factura COMPLETAMENTE de arriba a abajo. Extrae TODOS los renglones de la tabla (los 16 ítems de la página). "
+            "Para cada ítem extrae estrictamente: 'descripcion', 'cantidad' (número de cajas), 'empaque', "
+            "y 'importe_neto_linea' (el valor TOTAL final de la línea ya con descuento aplicado, que aparece en la columna IMPORTE de la factura, ej: 14040.0 para la primera línea). "
             "Devuelve un JSON puro con esta estructura exacta: "
-            '{"subtotal": 0.0, "descuento_total": 0.0, "itbis": 0.0, "total": 0.0, "items": [{"descripcion": "...", "cantidad": 1, "empaque": 12, "precio_lista": 0.0, "descuento_porcentaje": 10.0}]}. '
+            '{"subtotal": 0.0, "descuento_total": 0.0, "itbis": 0.0, "total": 0.0, "items": [{"descripcion": "...", "cantidad": 1, "empaque": 12, "importe_neto_linea": 0.0}]}. '
             "Respuesta JSON pura sin texto adicional ni markdown."
         )
         try:
@@ -281,12 +280,11 @@ def process_invoice_with_ai(file_obj, file_type, use_openai_fallback=False):
         return None, "Falta clave API de Gemini"
 
     prompt_text = (
-        "Analiza esta factura COMPLETAMENTE de arriba a abajo. Extrae TODOS los renglones de la tabla sin omitir ninguno (asegúrate de incluir los 16 ítems si es una página completa). "
-        "Para cada ítem extrae estrictamente: 'descripcion', 'cantidad' (número de cajas/unidades), 'empaque', "
-        "'precio_lista' (el precio unitario o de caja indicado en la columna PRECIO antes de descuento), "
-        "y 'descuento_porcentaje' (el porcentaje indicado en COM. o DESC., ej: 10 para 10%). "
+        "Analiza esta factura COMPLETAMENTE de arriba a abajo. Extrae TODOS los renglones de la tabla (los 16 ítems de la página). "
+        "Para cada ítem extrae estrictamente: 'descripcion', 'cantidad' (número de cajas), 'empaque', "
+        "y 'importe_neto_linea' (el valor TOTAL final de la línea ya con descuento aplicado, que aparece en la columna IMPORTE de la factura, ej: 14040.0 para la primera línea). "
         "Devuelve un JSON puro con esta estructura exacta: "
-        '{"subtotal": 0.0, "descuento_total": 0.0, "itbis": 0.0, "total": 0.0, "items": [{"descripcion": "...", "cantidad": 1, "empaque": 12, "precio_lista": 0.0, "descuento_porcentaje": 10.0}]}. '
+        '{"subtotal": 0.0, "descuento_total": 0.0, "itbis": 0.0, "total": 0.0, "items": [{"descripcion": "...", "cantidad": 1, "empaque": 12, "importe_neto_linea": 0.0}]}. '
         "Respuesta JSON pura sin texto adicional."
     )
 
@@ -368,32 +366,27 @@ if modulo == "📄 Factura Individual":
                         omitted_items.append({"Item #": idx, "Descripción": "(Sin descripción)", "Razón": "Línea sin descripción"})
                         continue
 
-                    precio_lista = safe_float(
-                        item.get("precio_lista") or 
-                        item.get("costo_sin_itbis") or 
-                        item.get("precio") or 0
+                    importe_neto_linea = safe_float(
+                        item.get("importe_neto_linea") or 
+                        item.get("importe") or 
+                        item.get("total") or 0
                     )
                     
-                    if precio_lista <= 0:
-                        omitted_items.append({"Item #": idx, "Descripción": desc, "Razón": "Precio de lista en 0"})
+                    if importe_neto_linea <= 0:
+                        omitted_items.append({"Item #": idx, "Descripción": desc, "Razón": "Importe neto en 0"})
                         continue
 
                     official_code, matched_name, status_match = match_official_barcode(desc)
-                    desc_pct = safe_float(item.get("descuento_porcentaje") or 0)
                     cant_comprada = safe_int(item.get("cantidad") or 1, 1)
                     empaque_ai = safe_int(item.get("empaque") or 1, 1)
                     
                     empaque_val = parse_empaque_from_description(desc, empaque_ai)
                     
-                    importe_bruto = precio_lista * cant_comprada
-                    descuento_linea = importe_bruto * (desc_pct / 100.0)
-                    neto_linea_total = importe_bruto - descuento_linea
-                    
                     total_unidades_linea = cant_comprada * empaque_val
                     if total_unidades_linea > 0:
-                        costo = round(neto_linea_total / total_unidades_linea, 2)
+                        costo = round(importe_neto_linea / total_unidades_linea, 2)
                     else:
-                        costo = round(neto_linea_total, 2)
+                        costo = round(importe_neto_linea, 2)
 
                     raw_pv = (costo * multiplicador_ganancia) * 1.18
                     precio_venta = round_to_nearest_5(raw_pv)
@@ -417,7 +410,9 @@ if modulo == "📄 Factura Individual":
                     st.markdown("### ✅ Artículos Procesados Exitosamente (Sin Agrupar para Control Físico)")
                     df_resultado = pd.DataFrame(rows_preview)
                     df_resultado["Código Oficial POS"] = df_resultado["Código Oficial POS"].astype(str)
-                    st.dataframe(df_resultado, use_container_width=True, hide_index=True, height=600)
+                    
+                    altura_tabla = min(max(len(rows_preview) * 35 + 40, 200), 850)
+                    st.dataframe(df_resultado, use_container_width=True, hide_index=True, height=altura_tabla)
                     
                     wb = openpyxl.Workbook()
                     ws_prod = wb.active
@@ -540,11 +535,11 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
                         for itm in items:
                             if isinstance(itm, dict):
                                 d_txt = str(itm.get("descripcion") or itm.get("nombre") or "").strip()
-                                p_val = safe_float(itm.get("precio_lista") or 0)
+                                p_val = safe_float(itm.get("importe_neto_linea") or 0)
                                 if d_txt and p_val > 0:
                                     st.session_state["batch_accumulated_items"].append(itm)
                                 else:
-                                    st.session_state["batch_omitted_summary"].append({"Archivo": file_info["name"], "Descripción": d_txt or "(Vacío)", "Razón": "Descripción vacía o precio 0"})
+                                    st.session_state["batch_omitted_summary"].append({"Archivo": file_info["name"], "Descripción": d_txt or "(Vacío)", "Razón": "Descripción vacía o importe 0"})
                 else:
                     st.session_state["batch_audit_log"].append({"Archivo": file_info["name"], "Estado": f"🔴 Error: {err_msg}"})
 
@@ -573,22 +568,17 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
                     continue
 
                 official_code, matched_name, _ = match_official_barcode(desc)
-                precio_lista = safe_float(item.get("precio_lista") or 0)
-                desc_pct = safe_float(item.get("descuento_porcentaje") or 0)
+                importe_neto_linea = safe_float(item.get("importe_neto_linea") or 0)
                 cant_comprada = safe_int(item.get("cantidad") or 1, 1)
                 empaque_ai = safe_int(item.get("empaque") or 1, 1)
 
                 empaque_val = parse_empaque_from_description(desc, empaque_ai)
                 
-                importe_bruto = precio_lista * cant_comprada
-                descuento_linea = importe_bruto * (desc_pct / 100.0)
-                neto_linea_total = importe_bruto - descuento_linea
-                
                 total_unidades_linea = cant_comprada * empaque_val
                 if total_unidades_linea > 0:
-                    costo = round(neto_linea_total / total_unidades_linea, 2)
+                    costo = round(importe_neto_linea / total_unidades_linea, 2)
                 else:
-                    costo = round(neto_linea_total, 2)
+                    costo = round(importe_neto_linea, 2)
 
                 raw_pv = (costo * multiplicador_ganancia) * 1.18
                 precio_venta = round_to_nearest_5(raw_pv)
@@ -630,7 +620,9 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
                 kpi4.metric("💰 Inversión Neta (Sin ITBIS)", f"RD$ {inversion_total_lote:,.2f}")
 
                 st.markdown("---")
-                st.dataframe(df_final_preview, use_container_width=True, hide_index=True, height=600)
+                
+                altura_tabla_lote = min(max(len(df_final_preview) * 35 + 40, 200), 850)
+                st.dataframe(df_final_preview, use_container_width=True, hide_index=True, height=altura_tabla_lote)
 
                 if st.session_state.get("batch_omitted_summary"):
                     with st.expander("⚠️ Ver ítems omitidos en el lote"):
@@ -666,6 +658,8 @@ elif modulo == "📋 Ver Códigos Almacenados":
     if b_mem:
         st.info(f"📊 Total de códigos oficiales almacenados: **{len(b_mem)}**")
         df_codes = pd.DataFrame([{"Código de Barras Oficial": str(code), "Nombre del Producto": name} for name, code in b_mem.items()])
-        st.dataframe(df_codes, use_container_width=True, hide_index=True, height=600)
+        
+        altura_tabla_mem = min(max(len(df_codes) * 35 + 40, 200), 850)
+        st.dataframe(df_codes, use_container_width=True, hide_index=True, height=altura_tabla_mem)
     else:
         st.warning("⚠️ La memoria está vacía.")
