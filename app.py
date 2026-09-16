@@ -152,15 +152,29 @@ def get_resolved_barcode(extracted_code, description):
     cleaned = clean_barcode(extracted_code)
     desc_upper = str(description).strip().upper()
     
+    # 1. Si el código extraído de la factura es válido, se guarda y se usa
     if cleaned != "S/C (Sin Código)":
         st.session_state["barcode_memory"][desc_upper] = cleaned
         return cleaned
     
+    # 2. Búsqueda exacta en Catálogo Maestro o Memoria
     if desc_upper in st.session_state["master_catalog"]:
         return st.session_state["master_catalog"][desc_upper]
-        
     if desc_upper in st.session_state["barcode_memory"]:
         return st.session_state["barcode_memory"][desc_upper]
+        
+    # 3. Búsqueda difusa inteligente (Fuzzy Matching) para descripciones desordenadas o abreviadas
+    master_keys = list(st.session_state["master_catalog"].keys())
+    if master_keys:
+        coincidencias = difflib.get_close_matches(desc_upper, master_keys, n=1, cutoff=0.35)
+        if coincidencias:
+            return st.session_state["master_catalog"][coincidencias[0]]
+            
+    memory_keys = list(st.session_state["barcode_memory"].keys())
+    if memory_keys:
+        coincidencias_mem = difflib.get_close_matches(desc_upper, memory_keys, n=1, cutoff=0.35)
+        if coincidencias_mem:
+            return st.session_state["barcode_memory"][coincidencias_mem[0]]
         
     return "S/C (Sin Código)"
 
@@ -200,20 +214,19 @@ def parse_empaque_from_tamano(tamano_txt, unidad_txt, descripcion_txt=""):
 
 def process_invoice_exact_18(file_obj, file_type, use_paid_gemini=False, use_openai_fallback=False):
     prompt_text = (
-        "Analiza esta factura con máxima precisión milimétrica horizontal y vertical. "
-        "Observa con sumo cuidado la primera columna numérica de la izquierda ('CANTDAD'). "
-        "En los renglones inferiores donde dice 'BOT.', lee el dígito exacto (puede ser 1, 6, etc.). "
-        "No asumas que todas las botellas sueltas son 1; si la factura dice claramente 6, extrae el número 6. "
+        "Analiza esta factura con máxima precisión horizontal y vertical. "
+        "Observa con sumo cuidado la columna de cantidades ('CANTDAD' o valores numéricos). "
+        "En los renglones donde indique botellas sueltas ('BOT.') o unidades, extrae el dígito exacto. "
         "Para cada renglón extrae exactamente: "
-        "1. 'codigo_barras': código exacto de la línea. "
+        "1. 'codigo_barras': código exacto de la línea (si no hay, déjalo vacío o S/C). "
         "2. 'descripcion': texto exacto de la descripción. "
-        "3. 'cantidad': número exacto de la columna CANTDAD. "
+        "3. 'cantidad': número exacto de la cantidad comprada. "
         "4. 'unidad': 'CAJA' o 'BOT.'. "
-        "5. 'tamano': tamaño exacto (ej: 75 CL.). "
+        "5. 'tamano': tamaño exacto (ej: 75 CL., 12/75 CL.). "
         "6. 'precio_lista': precio exacto. "
         "7. 'descuento_porcentaje': porcentaje de descuento COM. "
         "Devuelve un JSON puro bajo la clave 'items': "
-        '{"items": [{"codigo_barras": "...", "descripcion": "...", "cantidad": 6, "unidad": "BOT.", "tamano": "75 CL.", "precio_lista": 0.0, "descuento_porcentaje": 10.0}]}. '
+        '{"items": [{"codigo_barras": "...", "descripcion": "...", "cantidad": 1, "unidad": "BOT.", "tamano": "75 CL.", "precio_lista": 0.0, "descuento_porcentaje": 0.0}]}. '
         "Respuesta JSON pura sin texto adicional."
     )
 
@@ -285,7 +298,7 @@ def process_invoice_exact_18(file_obj, file_type, use_paid_gemini=False, use_ope
 # ==========================================
 if modulo == "📄 Factura Individual":
     st.markdown("<h2>📊 Automatizador de Facturas <span style='color: #0284c7;'>(Individual)</span></h2>", unsafe_allow_html=True)
-    st.markdown("<p style='color: #64748b;'>Extracción directa de códigos de barras oficiales impresos sin duplicados.</p>", unsafe_allow_html=True)
+    st.markdown("<p style='color: #64748b;'>Extracción inteligente con validación automática en Catálogo Maestro y Memoria.</p>", unsafe_allow_html=True)
     st.markdown("---")
 
     st.markdown('<div class="card-container">', unsafe_allow_html=True)
@@ -299,9 +312,9 @@ if modulo == "📄 Factura Individual":
 
     if uploaded_file is not None:
         st.success(f"¡Archivo cargado: {uploaded_file.name}!")
-        if st.button("🚀 Procesar Factura Exacta (18 Renglones)"):
+        if st.button("🚀 Procesar Factura"):
             file_type = uploaded_file.type if hasattr(uploaded_file, 'type') else 'image/jpeg'
-            with st.spinner("Leyendo códigos de barras y renglones de la factura..."):
+            with st.spinner("Leyendo y asociando códigos de barras..."):
                 parsed_data, success_msg = process_invoice_exact_18(uploaded_file, file_type, use_paid_gemini=use_gemini_paid_api, use_openai_fallback=use_openai_single)
 
             if success_msg == "QUOTA_EXCEEDED":
@@ -330,9 +343,10 @@ if modulo == "📄 Factura Individual":
                         continue
 
                     precio_lista = safe_float(item.get("precio_lista") or 0)
-                    if precio_lista <= 0:
-                        omitted_items.append({"Item #": idx, "Descripción": desc, "Razón": "Precio de lista en 0"})
-                        continue
+                    
+                    # Para tiquets simplificados que solo muestran valor total o precio unitario
+                    if precio_lista <= 0 and item.get("valor"):
+                        precio_lista = safe_float(item.get("valor"))
 
                     extracted_code = item.get("codigo_barras")
                     resolved_code = get_resolved_barcode(extracted_code, desc)
@@ -372,25 +386,25 @@ if modulo == "📄 Factura Individual":
                         "Stock Total": total_unidades_linea,
                         "Costo Unitario": costo,
                         "Precio Venta": precio_venta,
-                        "Estado": "Catálogo Maestro" if resolved_code != clean_barcode(extracted_code) else "Directo Factura"
+                        "Estado": "Catálogo Maestro / Memoria" if resolved_code != clean_barcode(extracted_code) else "Directo Factura"
                     })
 
                 calc_neto_gravado = calc_subtotal - calc_descuento_total
                 calc_itbis = calc_neto_gravado * 0.18
                 calc_total_factura = calc_neto_gravado + calc_itbis
 
-                st.markdown("### 📑 Totales Oficiales de la Factura")
+                st.markdown("### 📑 Totales de la Factura")
                 t1, t2, t3, t4 = st.columns(4)
                 t1.metric("Subtotal Gravado", f"RD$ {calc_subtotal:,.2f}")
                 t2.metric("Descuento Total", f"RD$ {calc_descuento_total:,.2f}")
                 t3.metric("ITBIS Total (18%)", f"RD$ {calc_itbis:,.2f}")
-                t4.metric("Total Neto Factura", f"RD$ {calc_total_factura:,.2f}")
+                t4.metric("Total Neto", f"RD$ {calc_total_factura:,.2f}")
                 st.markdown("---")
 
-                st.info(f"📋 **Auditoría de Lectura:** Se detectaron **{len(data_items)} ítems**. Procesados con éxito: **{len(rows_preview)}** | Omitidos: **{len(omitted_items)}**")
+                st.info(f"📋 **Auditoría:** Se detectaron **{len(data_items)} ítems**. Procesados con éxito: **{len(rows_preview)}** | Omitidos: **{len(omitted_items)}**")
 
                 if rows_preview:
-                    st.markdown("### ✅ Artículos Procesados Exitosamente (En orden original)")
+                    st.markdown("### ✅ Artículos Procesados Exitosamente")
                     df_resultado = pd.DataFrame(rows_preview)
                     df_resultado["Código Oficial POS"] = df_resultado["Código Oficial POS"].astype(str)
                     
@@ -424,7 +438,7 @@ if modulo == "📄 Factura Individual":
 # ==========================================
 elif modulo == "📂 Múltiples Facturas (Lote)":
     st.markdown("<h2>📂 Procesador por <span style='color: #0284c7;'>Lotes y Consolidación Oficial</span></h2>", unsafe_allow_html=True)
-    st.markdown("<p style='color: #64748b;'>Procesa múltiples facturas consolidando empaques y códigos exactos.</p>", unsafe_allow_html=True)
+    st.markdown("<p style='color: #64748b;'>Procesa múltiples facturas y tiquets consolidando empaques y códigos.</p>", unsafe_allow_html=True)
     st.markdown("---")
 
     st.markdown('<div class="card-container">', unsafe_allow_html=True)
@@ -457,7 +471,7 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
 
         if st.session_state.get("quota_paused", False):
             st.error("⚠️ **Límite de cuota alcanzado.**")
-            if st.button("💎 Reintentar con Gemini Paid o Activar Respaldo", type="primary"):
+            if st.button("💎 Reintentar con Gemini Paid", type="primary"):
                 st.session_state["quota_paused"] = False
                 st.session_state["is_live_processing"] = True
                 st.rerun()
@@ -506,8 +520,7 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
                         for itm in items:
                             if isinstance(itm, dict):
                                 d_txt = str(itm.get("descripcion") or "").strip()
-                                p_val = safe_float(itm.get("precio_lista") or 0)
-                                if d_txt and p_val > 0:
+                                if d_txt:
                                     st.session_state["batch_accumulated_items"].append(itm)
 
                 st.session_state["batch_processed_count"] += 1
@@ -518,7 +531,7 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
 
         if st.session_state["batch_processed_count"] > 0:
             st.markdown("---")
-            st.markdown("## 📊 Consolidado de Inventario y Totales Generales")
+            st.markdown("## 📊 Consolidado de Inventario y Totales")
 
             raw_items = st.session_state["batch_accumulated_items"]
             multiplicador_ganancia = 1 + (margen_ganancia_lote / 100.0)
@@ -538,6 +551,9 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
                 resolved_code = get_resolved_barcode(extracted_code, desc)
                 
                 precio_lista = safe_float(item.get("precio_lista") or 0)
+                if precio_lista <= 0 and item.get("valor"):
+                    precio_lista = safe_float(item.get("valor"))
+
                 desc_pct = safe_float(item.get("descuento_porcentaje") or 0)
                 cant_comprada = safe_int(item.get("cantidad") or 1, 1)
                 unidad_txt = str(item.get("unidad") or "CAJA")
@@ -589,11 +605,11 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
 
                 kpi1, kpi2, kpi3, kpi4 = st.columns(4)
                 kpi1.metric("📁 Facturas Procesadas", f"{st.session_state['batch_ok_count']}")
-                kpi2.metric("📦 Total Líneas Válidas", f"{len(raw_items)}")
+                kpi2.metric("📦 Total Líneas", f"{len(raw_items)}")
                 kpi3.metric("📦 Unidades en Stock", f"{total_unidades_inventario:,}")
                 
                 inversion_total_lote = (df_final_preview['Costo'] * df_final_preview['Stock']).sum()
-                kpi4.metric("💰 Inversión Neta (Sin ITBIS)", f"RD$ {inversion_total_lote:,.2f}")
+                kpi4.metric("💰 Inversión Neta", f"RD$ {inversion_total_lote:,.2f}")
 
                 st.markdown("---")
                 altura_tabla_lote = min(max(len(df_final_preview) * 35 + 40, 200), 850)
@@ -623,7 +639,7 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
 # ==========================================
 elif modulo == "📁 Cargar Archivo Maestro":
     st.markdown("<h2>📁 Gestión de <span style='color: #0284c7;'>Catálogo Maestro</span></h2>", unsafe_allow_html=True)
-    st.markdown("<p style='color: #64748b;'>Sube tu archivo Excel maestro para mapear automáticamente los códigos de barras de los productos.</p>", unsafe_allow_html=True)
+    st.markdown("<p style='color: #64748b;'>Sube tu archivo Excel maestro para mapear automáticamente códigos en tiquets sin código de barras.</p>", unsafe_allow_html=True)
     st.markdown("---")
 
     master_file = st.file_uploader("📂 Sube tu Catálogo Maestro (Excel .xlsx)", type=["xlsx"], key="master_upload")
@@ -660,7 +676,7 @@ elif modulo == "📁 Cargar Archivo Maestro":
         df_current_master = pd.DataFrame([{"Descripción": k, "Código de Barras": v} for k, v in st.session_state["master_catalog"].items()])
         st.dataframe(df_current_master, use_container_width=True, hide_index=True, height=400)
     else:
-        st.info("ℹ️ Aún no hay productos cargados en el catálogo maestro temporal. Sube un archivo Excel para comenzar.")
+        st.info("ℹ️ Aún no hay productos cargados en el catálogo maestro. Sube un archivo Excel para comenzar.")
 
 # ==========================================
 # MÓDULO 4: MEMORIA
