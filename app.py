@@ -244,14 +244,14 @@ def audit_and_correct_cost(item_desc, costo_unit, cantidad, empaque):
             if c > 1200:
                 return round(c / 6, 2), 6
 
-        # Bebidas no alcohólicas / Energizantes / Jugos (Cajas de 12 o 24)
-        if any(bev in d for bev in ["GATORADE", "ALOE", "CLAMATO", "REDBULL", "MONSTER", "COCA", "PEPSI", "AGUA", "OCEANSPRAY"]):
+        # Bebidas no alcohólicas / Energizantes / Jugos / Aloe (Cajas de 12)
+        if any(bev in d for bev in ["GATORADE", "ALOE", "CLAMATO", "REDBULL", "MONSTER", "COCA", "PEPSI", "AGUA", "OCEANSPRAY", "FOURLOKO", "THEONE"]):
             if c > 800:
                 return round(c / 12, 2), 12
 
-        # Regla general para cualquier producto con costo total elevado (> 2500)
-        if c > 2500:
-            return round(c / 6, 2), 6
+        # Regla general para cualquier producto con costo total elevado (> 1500) facturado por bulto/caja
+        if c > 1500:
+            return round(c / 12, 2), 12
             
         return round(c, 2), 1
     
