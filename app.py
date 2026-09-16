@@ -215,7 +215,6 @@ def match_official_barcode(item_description):
 
 def parse_empaque_and_unit(item_desc, unidad_factura, ai_empaque):
     u = str(unidad_factura).strip().upper()
-    # Si la unidad en la factura es BOT. o UNID., es una compra unitaria directa (empaque = 1)
     if any(term in u for term in ["BOT", "UNID", "UN", "PZA"]):
         return 1
         
@@ -247,7 +246,7 @@ def parse_empaque_and_unit(item_desc, unidad_factura, ai_empaque):
     if any(bev in d for bev in ["GATORADE", "ALOE", "CLAMATO", "REDBULL", "MONSTER", "COCA", "PEPSI", "AGUA", "OCEANSPRAY", "FOURLOKO", "THEONE", "SCHWEPPES", "FEVER TREE"]):
         return 12
 
-    return 12 # Por defecto en licores mayoristas es caja de 12 si no especifica unidad
+    return 12
 
 def process_invoice_with_ai(file_obj, file_type, use_openai_fallback=False):
     if use_openai_fallback:
@@ -261,12 +260,10 @@ def process_invoice_with_ai(file_obj, file_type, use_openai_fallback=False):
 
         prompt_text = (
             "Analiza esta factura rigurosamente línea por línea de arriba a abajo. Esta página contiene exactamente 18 renglones. "
-            "Para cada renglón extrae exactamente lo que dice su fila: "
-            "'descripcion', 'cantidad' (número indicado en la columna CANTDAD), 'unidad' (lo que indica la columna UNID., ej: CAJA, BOT., UNID.), "
-            "'precio_lista' (el precio exacto de la columna PRECIO correspondiente a ese renglón específico), "
-            "y 'descuento_porcentaje' (el porcentaje de la columna COM., ej: 10 para 10%). "
+            "Para cada renglón extrae exactamente: 'descripcion', 'cantidad' (número indicado en CANTDAD), 'unidad' (lo que indica UNID., ej: CAJA, BOT.), "
+            "'precio_lista' (el precio exacto de la columna PRECIO para ese renglón), y 'descuento_porcentaje' (el porcentaje de COM., ej: 10 para 10%). "
             "Devuelve un JSON puro con esta estructura exacta: "
-            '{"subtotal": 0.0, "descuento_total": 0.0, "itbis": 0.0, "total": 0.0, "items": [{"descripcion": "...", "cantidad": 1, "unidad": "CAJA", "precio_lista": 0.0, "descuento_porcentaje": 10.0}]}. '
+            '{"items": [{"descripcion": "...", "cantidad": 1, "unidad": "CAJA", "precio_lista": 0.0, "descuento_porcentaje": 10.0}]}. '
             "Respuesta JSON pura sin texto adicional ni markdown."
         )
         try:
@@ -288,12 +285,10 @@ def process_invoice_with_ai(file_obj, file_type, use_openai_fallback=False):
 
     prompt_text = (
         "Analiza esta factura rigurosamente línea por línea de arriba a abajo. Esta página contiene exactamente 18 renglones. "
-        "Para cada renglón extrae exactamente lo que dice su fila: "
-        "'descripcion', 'cantidad' (número indicado en la columna CANTDAD), 'unidad' (lo que indica la columna UNID., ej: CAJA, BOT., UNID.), "
-        "'precio_lista' (el precio exacto de la columna PRECIO correspondiente a ese renglón específico), "
-        "y 'descuento_porcentaje' (el porcentaje de la columna COM., ej: 10 para 10%). "
+        "Para cada renglón extrae exactamente: 'descripcion', 'cantidad' (número indicado en CANTDAD), 'unidad' (lo que indica UNID., ej: CAJA, BOT.), "
+        "'precio_lista' (el precio exacto de la columna PRECIO para ese renglón), y 'descuento_porcentaje' (el porcentaje de COM., ej: 10 para 10%). "
         "Devuelve un JSON puro con esta estructura exacta: "
-        '{"subtotal": 0.0, "descuento_total": 0.0, "itbis": 0.0, "total": 0.0, "items": [{"descripcion": "...", "cantidad": 1, "unidad": "CAJA", "precio_lista": 0.0, "descuento_porcentaje": 10.0}]}. '
+        '{"items": [{"descripcion": "...", "cantidad": 1, "unidad": "CAJA", "precio_lista": 0.0, "descuento_porcentaje": 10.0}]}. '
         "Respuesta JSON pura sin texto adicional."
     )
 
@@ -347,23 +342,13 @@ if modulo == "📄 Factura Individual":
             else:
                 st.success(success_msg)
                 
-                inv_subtotal = safe_float(parsed_data.get("subtotal", 0))
-                inv_descuento = safe_float(parsed_data.get("descuento_total", 0))
-                inv_itbis = safe_float(parsed_data.get("itbis", 0))
-                inv_total = safe_float(parsed_data.get("total", 0))
-
-                st.markdown("### 📑 Totales Oficiales de la Factura (Proveedor)")
-                t1, t2, t3, t4 = st.columns(4)
-                t1.metric("Subtotal Gravado", f"RD$ {inv_subtotal:,.2f}")
-                t2.metric("Descuento Total", f"RD$ {inv_descuento:,.2f}")
-                t3.metric("ITBIS Total (18%)", f"RD$ {inv_itbis:,.2f}")
-                t4.metric("Total Neto Factura", f"RD$ {inv_total:,.2f}")
-                st.markdown("---")
-
                 data_items = parsed_data.get("items", [])
                 rows_preview = []
                 omitted_items = []
                 multiplicador_ganancia = 1 + (margen_ganancia / 100.0)
+
+                calc_subtotal = 0.0
+                calc_descuento_total = 0.0
 
                 for idx, item in enumerate(data_items, start=1):
                     if not isinstance(item, dict):
@@ -387,11 +372,14 @@ if modulo == "📄 Factura Individual":
                     
                     empaque_val = parse_empaque_and_unit(desc, unidad_txt, 1)
                     
-                    # Cálculo contable exacto
+                    # Cálculos matemáticos contables exactos
                     importe_bruto = precio_lista * cant_comprada
                     descuento_linea = importe_bruto * (desc_pct / 100.0)
                     importe_neto_linea = importe_bruto - descuento_linea
                     
+                    calc_subtotal += importe_bruto
+                    calc_descuento_total += descuento_linea
+
                     if empaque_val == 1:
                         total_unidades_linea = cant_comprada
                         costo = round(importe_neto_linea / cant_comprada, 2) if cant_comprada > 0 else round(importe_neto_linea, 2)
@@ -414,6 +402,18 @@ if modulo == "📄 Factura Individual":
                         "Precio Venta": precio_venta,
                         "Estado": status_match
                     })
+
+                calc_neto_gravado = calc_subtotal - calc_descuento_total
+                calc_itbis = calc_neto_gravado * 0.18
+                calc_total_factura = calc_neto_gravado + calc_itbis
+
+                st.markdown("### 📑 Totales Oficiales de la Factura (Calculados con Precisión en Python)")
+                t1, t2, t3, t4 = st.columns(4)
+                t1.metric("Subtotal Gravado", f"RD$ {calc_subtotal:,.2f}")
+                t2.metric("Descuento Total", f"RD$ {calc_descuento_total:,.2f}")
+                t3.metric("ITBIS Total (18%)", f"RD$ {calc_itbis:,.2f}")
+                t4.metric("Total Neto Factura", f"RD$ {calc_total_factura:,.2f}")
+                st.markdown("---")
 
                 st.info(f"📋 **Auditoría de Lectura:** Se detectaron **{len(data_items)} ítems** brutos en la factura. Procesados con éxito: **{len(rows_preview)}** | Omitidos: **{len(omitted_items)}**")
 
