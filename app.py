@@ -77,17 +77,21 @@ st.markdown("""
 # ------------------------------------------
 # BÚSQUEDA UNIVERSAL DE CLAVES API
 # ------------------------------------------
-api_key_candidates = [
+gemini_paid_candidates = [
+    st.secrets.get("GEMINI_API_KEY_PAID"),
+    os.environ.get("GEMINI_API_KEY_PAID")
+]
+ACTIVE_GEMINI_PAID_KEY = next((k for k in gemini_paid_candidates if k and str(k).strip()), None)
+
+gemini_free_candidates = [
     st.secrets.get("GEMINI_API_KEY"),
     st.secrets.get("GOOGLE_API_KEY"),
-    st.secrets.get("GEMINI_API_KEY_PAID"),
     st.secrets.get("GEMINI_API_KEY_1"),
     os.environ.get("GEMINI_API_KEY"),
     os.environ.get("GOOGLE_API_KEY"),
-    os.environ.get("GEMINI_API_KEY_PAID"),
     os.environ.get("GEMINI_API_KEY_1")
 ]
-ACTIVE_GEMINI_KEY = next((k for k in api_key_candidates if k and str(k).strip()), None)
+ACTIVE_GEMINI_FREE_KEY = next((k for k in gemini_free_candidates if k and str(k).strip()), None)
 
 openai_key_candidates = [
     st.secrets.get("OPENAI_API_KEY"),
@@ -152,6 +156,10 @@ modulo = st.sidebar.radio(
     ["📄 Factura Individual", "📂 Múltiples Facturas (Lote)", "📋 Ver Códigos Almacenados"]
 )
 
+st.sidebar.markdown("---")
+st.sidebar.markdown("### ⚙️ Configuración de API")
+use_gemini_paid_api = st.sidebar.checkbox("💎 Usar Gemini Paid (API de Pago)", value=bool(ACTIVE_GEMINI_PAID_KEY))
+
 def parse_empaque_from_tamano(tamano_txt, unidad_txt):
     u = str(unidad_txt).strip().upper()
     if "BOT" in u:
@@ -162,7 +170,7 @@ def parse_empaque_from_tamano(tamano_txt, unidad_txt):
         return int(match_t.group(1))
     return 12
 
-def process_invoice_exact_18(file_obj, file_type, use_openai_fallback=False):
+def process_invoice_exact_18(file_obj, file_type, use_paid_gemini=False, use_openai_fallback=False):
     prompt_text = (
         "Analiza esta factura de Álvarez & Sánchez con absoluta precisión. La tabla contiene exactamente 18 renglones numerados del 1 al 18 de arriba a abajo. "
         "Debes extraer CADA UNO DE LOS 18 RENGLONES uno por uno en estricto orden, sin omitir ni duplicar ninguno. "
@@ -179,9 +187,17 @@ def process_invoice_exact_18(file_obj, file_type, use_openai_fallback=False):
         "Respuesta JSON pura sin texto adicional ni markdown."
     )
 
-    if use_openai_fallback:
+    # Selección de Clave Gemini (Pago vs Gratis)
+    active_key = ACTIVE_GEMINI_PAID_KEY if use_paid_gemini else ACTIVE_GEMINI_FREE_KEY
+    if not active_key and use_paid_gemini:
+        active_key = ACTIVE_GEMINI_FREE_KEY # Respaldo si no hay clave pago configurada
+
+    if not active_key and use_openai_fallback:
+        use_openai_fallback = True
+
+    if use_openai_fallback and not active_key:
         if not ACTIVE_OPENAI_KEY:
-            return None, "Falta clave API de OpenAI"
+            return None, "Faltan claves API válidas (Gemini / OpenAI)"
         import base64
         file_obj.seek(0)
         file_bytes = file_obj.read()
@@ -201,12 +217,9 @@ def process_invoice_exact_18(file_obj, file_type, use_openai_fallback=False):
         except Exception as e:
             return None, str(e)
 
-    if not ACTIVE_GEMINI_KEY:
-        return None, "Falta clave API de Gemini"
-
     for intento in range(2):
         try:
-            genai.configure(api_key=ACTIVE_GEMINI_KEY)
+            genai.configure(api_key=active_key)
             model = genai.GenerativeModel('gemini-3.6-flash')
             file_obj.seek(0)
             file_bytes = file_obj.read()
@@ -219,8 +232,34 @@ def process_invoice_exact_18(file_obj, file_type, use_openai_fallback=False):
         except Exception as e:
             last_err = str(e)
             if "429" in last_err or "quota" in last_err.lower():
+                # Si se agotó la gratuita y tenemos clave de pago configurada, intentamos con la de pago automáticamente
+                if not use_paid_gemini and ACTIVE_GEMINI_PAID_KEY:
+                    active_key = ACTIVE_GEMINI_PAID_KEY
+                    continue
                 return None, "QUOTA_EXCEEDED"
             time.sleep(1)
+            
+    # Si falló Gemini y se permite OpenAI como respaldo final
+    if use_openai_fallback and ACTIVE_OPENAI_KEY:
+        import base64
+        file_obj.seek(0)
+        file_bytes = file_obj.read()
+        b64_data = base64.b64encode(file_bytes).decode('utf-8')
+        data_url = f"data:application/pdf;base64,{b64_data}" if "pdf" in file_type.lower() else f"data:image/jpeg;base64,{b64_data}"
+        try:
+            client = OpenAI(api_key=ACTIVE_OPENAI_KEY)
+            response = client.chat.completions.create(
+                model="gpt-4o",
+                messages=[{"role": "user", "content": [{"type": "text", "text": prompt_text}, {"type": "image_url", "image_url": {"url": data_url}}]}],
+                max_tokens=4000
+            )
+            raw_text = response.choices[0].message.content.strip()
+            if raw_text.startswith("```json"): raw_text = raw_text[7:]
+            if raw_text.endswith("```"): raw_text = raw_text[:-3]
+            return json.loads(raw_text.strip()), "✅ Éxito (OpenAI Respaldo)"
+        except Exception as e:
+            return None, str(e)
+
     return None, last_err
 
 # ==========================================
@@ -236,7 +275,7 @@ if modulo == "📄 Factura Individual":
     with c_col1:
         margen_ganancia = st.number_input("⚙️ Ganancia (%)", min_value=0.0, max_value=500.0, value=25.0, step=1.0)
     
-    use_openai_single = st.checkbox("🤖 Usar OpenAI (GPT-4o) para máxima precisión", value=True)
+    use_openai_single = st.checkbox("🤖 Permitir OpenAI como respaldo final si falla Gemini", value=False)
     uploaded_file = st.file_uploader("📂 Sube tu factura (PDF o Imagen)", type=["pdf", "png", "jpg", "jpeg"], key="single_file")
     st.markdown('</div>', unsafe_allow_html=True)
 
@@ -245,10 +284,10 @@ if modulo == "📄 Factura Individual":
         if st.button("🚀 Procesar Factura Exacta (18 Renglones)"):
             file_type = uploaded_file.type if hasattr(uploaded_file, 'type') else 'image/jpeg'
             with st.spinner("Leyendo códigos de barras y renglones de la factura..."):
-                parsed_data, success_msg = process_invoice_exact_18(uploaded_file, file_type, use_openai_fallback=use_openai_single)
+                parsed_data, success_msg = process_invoice_exact_18(uploaded_file, file_type, use_paid_gemini=use_gemini_paid_api, use_openai_fallback=use_openai_single)
 
             if success_msg == "QUOTA_EXCEEDED":
-                st.error("⚠️ **Límite de cuota gratuita alcanzado en Gemini (Error 429).** Activa la casilla de OpenAI.")
+                st.error("⚠️ **Límite de cuota alcanzado.** Activa la casilla de 'Gemini Paid (API de Pago)' en la barra lateral o habilita el respaldo de OpenAI.")
             elif not parsed_data or not isinstance(parsed_data, dict):
                 st.error(f"⚠️ Error al procesar la factura con la IA: {success_msg}")
             else:
@@ -401,10 +440,9 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
         processed_so_far = st.session_state["batch_processed_count"]
 
         if st.session_state.get("quota_paused", False):
-            st.error("⚠️ **Límite de cuota gratuita alcanzado.**")
-            if st.button("🤖 Continuar con Respaldo OpenAI", type="primary"):
+            st.error("⚠️ **Límite de cuota alcanzado.**")
+            if st.button("💎 Reintentar con Gemini Paid o Activar Respaldo", type="primary"):
                 st.session_state["quota_paused"] = False
-                st.session_state["use_openai_batch"] = True
                 st.session_state["is_live_processing"] = True
                 st.rerun()
         else:
@@ -419,18 +457,15 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
                 st.session_state["batch_ok_count"] = 0
                 st.session_state["is_live_processing"] = False
                 st.session_state["quota_paused"] = False
-                st.session_state["use_openai_batch"] = False
                 if "cached_uploaded_files" in st.session_state:
                     del st.session_state["cached_uploaded_files"]
                 st.rerun()
 
             if iniciar_btn:
-                st.session_state["use_openai_batch"] = True
                 st.session_state["is_live_processing"] = True
                 st.rerun()
 
         is_live = st.session_state.get("is_live_processing", False)
-        use_openai_flag = st.session_state.get("use_openai_batch", False)
 
         if is_live and not st.session_state.get("quota_paused", False):
             if processed_so_far < total_files:
@@ -439,7 +474,7 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
                 st.progress(processed_so_far / total_files)
 
                 file_bytes_io = io.BytesIO(file_info["bytes"])
-                parsed_data, err_msg = process_invoice_exact_18(file_bytes_io, file_info["type"], use_openai_fallback=use_openai_flag)
+                parsed_data, err_msg = process_invoice_exact_18(file_bytes_io, file_info["type"], use_paid_gemini=use_gemini_paid_api, use_openai_fallback=False)
                 time.sleep(1.0)
 
                 if err_msg == "QUOTA_EXCEEDED":
