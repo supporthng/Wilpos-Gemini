@@ -213,40 +213,16 @@ def match_official_barcode(item_description):
 
     return "S/C (Sin Código)", raw_name, "⚠️ Sin Coincidencia"
 
-def parse_empaque_and_unit(item_desc, unidad_factura, ai_empaque):
-    u = str(unidad_factura).strip().upper()
-    # Si la unidad es BOT., UNID., etc., el empaque unitario es 1
-    if any(term in u for term in ["BOT", "UNID", "UN", "PZA"]):
+def parse_empaque_from_tamano(tamano_txt, unidad_txt):
+    u = str(unidad_txt).strip().upper()
+    if "BOT" in u:
         return 1
         
-    emp_ai = safe_int(ai_empaque, 1)
-    if emp_ai > 1:
-        return emp_ai
+    t = str(tamano_txt).strip()
+    match_t = re.search(r'^(\d+)\s*/', t)
+    if match_t:
+        return int(match_t.group(1))
         
-    d = str(item_desc).upper()
-    match_slash = re.search(r'(\d+)\s*(?:/|X|x)\s*([\d\.]+)', d)
-    if match_slash:
-        val1 = int(match_slash.group(1))
-        val2 = float(match_slash.group(2))
-        if val1 in [6, 12, 24, 20, 30, 48]:
-            return val1
-        elif val2 in [6, 12, 24, 20, 30]:
-            return int(val2)
-        return val1
-
-    if any(b in d for b in ["PRESIDENTE", "MICHELOB", "COORS", "BRAHMA", "CORONA", "STELLA", "HEINEKEN", "BECKS", "ESTRELLA", "PERONI"]):
-        if "22OZ" in d or "650ML" in d or "GRANDE" in d:
-            return 12
-        return 24
-        
-    if any(w in d for w in ["VINO", "WHISKY", "VODKA", "TEQUILA", "RON", "RUM", "GIN", "COGNAC", "LICOR", "FIREBALL", "CAMPARI", "AMARETTO", "KAHLUA", "MIDORI", "STOLICHNAYA", "JOSH", "JUAN GIL", "TARAPACA", "GLENLIVET", "BUCHANAN", "OLD PARR"]):
-        if "6" in d or "6/" in d:
-            return 6
-        return 12
-
-    if any(bev in d for bev in ["GATORADE", "ALOE", "CLAMATO", "REDBULL", "MONSTER", "COCA", "PEPSI", "AGUA", "OCEANSPRAY", "FOURLOKO", "THEONE", "SCHWEPPES", "FEVER TREE"]):
-        return 12
-
     return 12
 
 def process_invoice_with_ai(file_obj, file_type, use_openai_fallback=False):
@@ -260,12 +236,12 @@ def process_invoice_with_ai(file_obj, file_type, use_openai_fallback=False):
         data_url = f"data:application/pdf;base64,{b64_data}" if "pdf" in file_type.lower() else f"data:image/jpeg;base64,{b64_data}"
 
         prompt_text = (
-            "Analiza esta factura rigurosamente línea por línea de arriba a abajo. Esta página contiene exactamente 18 renglones. "
-            "Presta especial atención a la columna UNID. (que puede decir CAJA o BOT.). "
-            "Para cada renglón extrae exactamente: 'descripcion', 'cantidad' (el número de la columna CANTDAD), 'unidad' (lo que dice la columna UNID., ej: CAJA o BOT.), "
+            "Analiza esta factura rigurosamente línea por línea de arriba a abajo, en el orden exacto del 1 al 18. "
+            "Para cada renglón extrae estrictamente: 'descripcion', 'cantidad' (el número exacto de la columna CANTDAD), 'unidad' (lo que dice la columna UNID., CAJA o BOT.), "
+            "'tamano' (lo que indica exactamente la columna TAMAÑO, ej: 12/75 CL. o 75 CL.), "
             "'precio_lista' (el precio exacto de la columna PRECIO para ese renglón), y 'descuento_porcentaje' (el porcentaje de la columna COM., ej: 10 para 10%). "
-            "Devuelve un JSON puro con esta estructura exacta: "
-            '{"items": [{"descripcion": "...", "cantidad": 1, "unidad": "CAJA", "precio_lista": 0.0, "descuento_porcentaje": 10.0}]}. '
+            "Devuelve un JSON puro con esta estructura exacta y en orden estricto: "
+            '{"items": [{"descripcion": "...", "cantidad": 1, "unidad": "CAJA", "tamano": "12/75 CL.", "precio_lista": 0.0, "descuento_porcentaje": 10.0}]}. '
             "Respuesta JSON pura sin texto adicional ni markdown."
         )
         try:
@@ -286,12 +262,12 @@ def process_invoice_with_ai(file_obj, file_type, use_openai_fallback=False):
         return None, "Falta clave API de Gemini"
 
     prompt_text = (
-        "Analiza esta factura rigurosamente línea por línea de arriba a abajo. Esta página contiene exactamente 18 renglones. "
-        "Presta especial atención a la columna UNID. (que puede decir CAJA o BOT.). "
-        "Para cada renglón extrae exactamente: 'descripcion', 'cantidad' (el número de la columna CANTDAD), 'unidad' (lo que dice la columna UNID., ej: CAJA o BOT.), "
+        "Analiza esta factura rigurosamente línea por línea de arriba a abajo, en el orden exacto del 1 al 18. "
+        "Para cada renglón extrae estrictamente: 'descripcion', 'cantidad' (el número exacto de la columna CANTDAD), 'unidad' (lo que dice la columna UNID., CAJA o BOT.), "
+        "'tamano' (lo que indica exactamente la columna TAMAÑO, ej: 12/75 CL. o 75 CL.), "
         "'precio_lista' (el precio exacto de la columna PRECIO para ese renglón), y 'descuento_porcentaje' (el porcentaje de la columna COM., ej: 10 para 10%). "
-        "Devuelve un JSON puro con esta estructura exacta: "
-        '{"items": [{"descripcion": "...", "cantidad": 1, "unidad": "CAJA", "precio_lista": 0.0, "descuento_porcentaje": 10.0}]}. '
+        "Devuelve un JSON puro con esta estructura exacta y en orden estricto: "
+        '{"items": [{"descripcion": "...", "cantidad": 1, "unidad": "CAJA", "tamano": "12/75 CL.", "precio_lista": 0.0, "descuento_porcentaje": 10.0}]}. '
         "Respuesta JSON pura sin texto adicional."
     )
 
@@ -319,7 +295,7 @@ def process_invoice_with_ai(file_obj, file_type, use_openai_fallback=False):
 # ==========================================
 if modulo == "📄 Factura Individual":
     st.markdown("<h2>📊 Automatizador de Facturas <span style='color: #0284c7;'>(Individual)</span></h2>", unsafe_allow_html=True)
-    st.markdown("<p style='color: #64748b;'>Sube tu factura. El sistema procesa exactamente las 15 cajas y 3 botellas unitarias con precisión.</p>", unsafe_allow_html=True)
+    st.markdown("<p style='color: #64748b;'>Sube tu factura. Lectura exacta de empaques desde la columna TAMAÑO en orden original.</p>", unsafe_allow_html=True)
     st.markdown("---")
 
     st.markdown('<div class="card-container">', unsafe_allow_html=True)
@@ -335,7 +311,7 @@ if modulo == "📄 Factura Individual":
         st.success(f"¡Archivo cargado: {uploaded_file.name}!")
         if st.button("🚀 Procesar Factura"):
             file_type = uploaded_file.type if hasattr(uploaded_file, 'type') else 'image/jpeg'
-            with st.spinner("Analizando 18 renglones (cajas y botellas)..."):
+            with st.spinner("Analizando 18 renglones y empaques..."):
                 parsed_data, success_msg = process_invoice_with_ai(uploaded_file, file_type, use_openai_fallback=use_openai_single)
 
             if success_msg == "QUOTA_EXCEEDED":
@@ -372,8 +348,9 @@ if modulo == "📄 Factura Individual":
                     desc_pct = safe_float(item.get("descuento_porcentaje") or 0)
                     cant_comprada = safe_int(item.get("cantidad") or 1, 1)
                     unidad_txt = str(item.get("unidad") or "CAJA")
+                    tamano_txt = str(item.get("tamano") or "12/75 CL.")
                     
-                    empaque_val = parse_empaque_and_unit(desc, unidad_txt, 1)
+                    empaque_val = parse_empaque_from_tamano(tamano_txt, unidad_txt)
                     
                     # Cálculos contables exactos
                     importe_bruto = precio_lista * cant_comprada
@@ -399,7 +376,8 @@ if modulo == "📄 Factura Individual":
                         "Nombre Maestro / Artículo": matched_name,
                         "Cant. Compra": cant_comprada,
                         "Unidad": unidad_txt,
-                        "Empaque": empaque_val,
+                        "Tamaño/Empaque": tamano_txt,
+                        "Empaque Num": empaque_val,
                         "Stock Total": total_unidades_linea,
                         "Costo Unitario": costo,
                         "Precio Venta": precio_venta,
@@ -421,7 +399,7 @@ if modulo == "📄 Factura Individual":
                 st.info(f"📋 **Auditoría de Lectura:** Se detectaron **{len(data_items)} ítems** brutos en la factura. Procesados con éxito: **{len(rows_preview)}** | Omitidos: **{len(omitted_items)}**")
 
                 if rows_preview:
-                    st.markdown("### ✅ Artículos Procesados Exitosamente")
+                    st.markdown("### ✅ Artículos Procesados Exitosamente (En orden original)")
                     df_resultado = pd.DataFrame(rows_preview)
                     df_resultado["Código Oficial POS"] = df_resultado["Código Oficial POS"].astype(str)
                     
@@ -442,7 +420,7 @@ if modulo == "📄 Factura Individual":
                             item_dict["Costo Unitario"],
                             item_dict["Stock Total"],
                             5, 0.18, "unidad", "No",
-                            item_dict["Empaque"], "No", 0, 0, None, "No", None
+                            item_dict["Empaque Num"], "No", 0, 0, None, "No", None
                         ])
                         ws_prod.cell(row=ws_prod.max_row, column=2).number_format = '@'
                     
@@ -459,7 +437,7 @@ if modulo == "📄 Factura Individual":
 # ==========================================
 elif modulo == "📂 Múltiples Facturas (Lote)":
     st.markdown("<h2>📂 Procesador por <span style='color: #0284c7;'>Lotes y Consolidación Oficial</span></h2>", unsafe_allow_html=True)
-    st.markdown("<p style='color: #64748b;'>Procesa múltiples facturas analizando unidades y consolidando sin duplicados.</p>", unsafe_allow_html=True)
+    st.markdown("<p style='color: #64748b;'>Procesa múltiples facturas consolidando empaques y cantidades exactas.</p>", unsafe_allow_html=True)
     st.markdown("---")
 
     st.markdown('<div class="card-container">', unsafe_allow_html=True)
@@ -586,8 +564,9 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
                 desc_pct = safe_float(item.get("descuento_porcentaje") or 0)
                 cant_comprada = safe_int(item.get("cantidad") or 1, 1)
                 unidad_txt = str(item.get("unidad") or "CAJA")
+                tamano_txt = str(item.get("tamano") or "12/75 CL.")
 
-                empaque_val = parse_empaque_and_unit(desc, unidad_txt, 1)
+                empaque_val = parse_empaque_from_tamano(tamano_txt, unidad_txt)
                 
                 importe_bruto = precio_lista * cant_comprada
                 descuento_linea = importe_bruto * (desc_pct / 100.0)
