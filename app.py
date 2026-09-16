@@ -4,7 +4,6 @@ import os
 import time
 import re
 import google.generativeai as genai
-from openai import OpenAI
 from PIL import Image
 import streamlit as st
 import openpyxl
@@ -161,7 +160,7 @@ def parse_empaque_exact(desc, unidad_txt):
 
 def process_invoice_gemini_flash(file_obj, file_type):
     if not ACTIVE_GEMINI_KEY:
-        return None, "Falta clave API de Gemini"
+        return None, "Falta clave API de Gemini (Configura GEMINI_API_KEY en st.secrets)"
 
     prompt_text = (
         "Analiza esta factura con precisión milimétrica. "
@@ -177,10 +176,12 @@ def process_invoice_gemini_flash(file_obj, file_type):
         "Respuesta JSON pura sin texto adicional ni markdown."
     )
 
-    for intento in range(3):
+    for intento in range(2):
         try:
             genai.configure(api_key=ACTIVE_GEMINI_KEY)
-            model = genai.GenerativeModel('gemini-2.5-flash')
+            # Usar gemini-1.5-flash que es el modelo estándar y altamente estable en la capa gratuita
+            model = genai.GenerativeModel('gemini-1.5-flash')
+            
             file_obj.seek(0)
             file_bytes = file_obj.read()
             image_input = file_bytes if "pdf" in file_type.lower() else Image.open(io.BytesIO(file_bytes))
@@ -188,23 +189,22 @@ def process_invoice_gemini_flash(file_obj, file_type):
             response = model.generate_content([image_input, prompt_text])
             
             if not response or not response.text:
-                raise ValueError("La IA devolvió una respuesta vacía.")
+                raise ValueError("La API de Gemini devolvió una respuesta vacía.")
                 
             raw_text = response.text.strip()
             if raw_text.startswith("```json"): raw_text = raw_text[7:]
             if raw_text.endswith("```"): raw_text = raw_text[:-3]
             
-            # Pausa de seguridad obligatoria para respetar el límite de la capa gratuita (15 RPM)
-            time.sleep(4.0)
+            time.sleep(4.0) # Pausa de seguridad 15 RPM
             return json.loads(raw_text.strip()), "✅ Éxito (Gemini Flash Gratuito)"
         except Exception as e:
             err_str = str(e)
             if "429" in err_str or "quota" in err_str.lower():
-                if intento < 2:
-                    time.sleep(6.0 * (intento + 1)) # Espera progresiva si hay saturación temporal
+                if intento < 1:
+                    time.sleep(8.0)
                     continue
                 return None, "QUOTA_EXCEEDED"
-            time.sleep(2)
+            return None, f"Error técnico API: {err_str}"
     return None, "Error desconocido en API"
 
 # ==========================================
@@ -212,7 +212,7 @@ def process_invoice_gemini_flash(file_obj, file_type):
 # ==========================================
 if modulo == "📄 Factura Individual":
     st.markdown("<h2>📊 Automatizador de Facturas <span style='color: #0284c7;'>(Individual - Flash Gratuito)</span></h2>", unsafe_allow_html=True)
-    st.markdown("<p style='color: #64748b;'>Procesamiento optimizado con Gemini 2.5 Flash y control de tasa integrado.</p>", unsafe_allow_html=True)
+    st.markdown("<p style='color: #64748b;'>Procesamiento optimizado con Gemini Flash y control de tasa integrado.</p>", unsafe_allow_html=True)
     st.markdown("---")
 
     st.markdown('<div class="card-container">', unsafe_allow_html=True)
@@ -227,13 +227,13 @@ if modulo == "📄 Factura Individual":
         st.success(f"¡Archivo cargado: {uploaded_file.name}!")
         if st.button("🚀 Procesar con Gemini Flash (Gratis)"):
             file_type = uploaded_file.type if hasattr(uploaded_file, 'type') else 'image/jpeg'
-            with st.spinner("Procesando con Gemini Flash (respetando límite gratuito)..."):
+            with st.spinner("Procesando con Gemini Flash..."):
                 parsed_data, success_msg = process_invoice_gemini_flash(uploaded_file, file_type)
 
             if success_msg == "QUOTA_EXCEEDED":
-                st.error("⚠️ **Límite de la capa gratuita alcanzado temporalmente.** Espera un minuto y vuelve a intentar.")
+                st.error("⚠️ **Límite de la capa gratuita alcanzado (15 peticiones por minuto).** Espera 30 segundos y vuelve a intentar.")
             elif not parsed_data or not isinstance(parsed_data, dict):
-                st.error(f"⚠️ Error al procesar: {success_msg}")
+                st.error(f"⚠️ {success_msg}")
             else:
                 st.success(success_msg)
                 
@@ -350,7 +350,7 @@ if modulo == "📄 Factura Individual":
 # ==========================================
 elif modulo == "📂 Múltiples Facturas (Lote)":
     st.markdown("<h2>📂 Procesador por <span style='color: #0284c7;'>Lotes (Flash Free)</span></h2>", unsafe_allow_html=True)
-    st.markdown("<p style='color: #64748b;'>Procesa lotes aplicando pausas de seguridad de 4s entre facturas para evitar bloqueos.</p>", unsafe_allow_html=True)
+    st.markdown("<p style='color: #64748b;'>Procesa múltiples facturas aplicando pausas de seguridad de 4s entre facturas.</p>", unsafe_allow_html=True)
     st.markdown("---")
 
     st.markdown('<div class="card-container">', unsafe_allow_html=True)
@@ -399,15 +399,19 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
         if st.session_state.get("is_live_processing", False):
             if processed_so_far < total_files:
                 file_info = cached_files[processed_so_far]
-                st.info(f"⚡ Procesando archivo {processed_so_far + 1} de {total_files}: `{file_info['name']}` (Pausa de seguridad de 4s)...")
+                st.info(f"⚡ Procesando archivo {processed_so_far + 1} de {total_files}: `{file_info['name']}`...")
                 st.progress(processed_so_far / total_files)
 
                 file_bytes_io = io.BytesIO(file_info["bytes"])
                 parsed_data, err_msg = process_invoice_gemini_flash(file_bytes_io, file_info["type"])
 
                 if err_msg == "QUOTA_EXCEEDED":
-                    st.warning("⚠️ Pausa por límite temporal. Esperando 10 segundos antes de reintentar...")
-                    time.sleep(10)
+                    st.warning("⚠️ Límite temporal alcanzado. Pausando 15 segundos...")
+                    time.sleep(15)
+                    st.rerun()
+                elif "Error técnico" in err_msg:
+                    st.error(f"⚠️ {err_msg}")
+                    st.session_state["is_live_processing"] = False
                     st.rerun()
 
                 if parsed_data and isinstance(parsed_data, dict):
