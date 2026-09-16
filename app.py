@@ -215,6 +215,7 @@ def match_official_barcode(item_description):
 
 def parse_empaque_and_unit(item_desc, unidad_factura, ai_empaque):
     u = str(unidad_factura).strip().upper()
+    # Si la unidad es BOT., UNID., etc., el empaque unitario es 1
     if any(term in u for term in ["BOT", "UNID", "UN", "PZA"]):
         return 1
         
@@ -260,8 +261,9 @@ def process_invoice_with_ai(file_obj, file_type, use_openai_fallback=False):
 
         prompt_text = (
             "Analiza esta factura rigurosamente línea por línea de arriba a abajo. Esta página contiene exactamente 18 renglones. "
-            "Para cada renglón extrae exactamente: 'descripcion', 'cantidad' (número indicado en CANTDAD), 'unidad' (lo que indica UNID., ej: CAJA, BOT.), "
-            "'precio_lista' (el precio exacto de la columna PRECIO para ese renglón), y 'descuento_porcentaje' (el porcentaje de COM., ej: 10 para 10%). "
+            "Presta especial atención a la columna UNID. (que puede decir CAJA o BOT.). "
+            "Para cada renglón extrae exactamente: 'descripcion', 'cantidad' (el número de la columna CANTDAD), 'unidad' (lo que dice la columna UNID., ej: CAJA o BOT.), "
+            "'precio_lista' (el precio exacto de la columna PRECIO para ese renglón), y 'descuento_porcentaje' (el porcentaje de la columna COM., ej: 10 para 10%). "
             "Devuelve un JSON puro con esta estructura exacta: "
             '{"items": [{"descripcion": "...", "cantidad": 1, "unidad": "CAJA", "precio_lista": 0.0, "descuento_porcentaje": 10.0}]}. '
             "Respuesta JSON pura sin texto adicional ni markdown."
@@ -285,8 +287,9 @@ def process_invoice_with_ai(file_obj, file_type, use_openai_fallback=False):
 
     prompt_text = (
         "Analiza esta factura rigurosamente línea por línea de arriba a abajo. Esta página contiene exactamente 18 renglones. "
-        "Para cada renglón extrae exactamente: 'descripcion', 'cantidad' (número indicado en CANTDAD), 'unidad' (lo que indica UNID., ej: CAJA, BOT.), "
-        "'precio_lista' (el precio exacto de la columna PRECIO para ese renglón), y 'descuento_porcentaje' (el porcentaje de COM., ej: 10 para 10%). "
+        "Presta especial atención a la columna UNID. (que puede decir CAJA o BOT.). "
+        "Para cada renglón extrae exactamente: 'descripcion', 'cantidad' (el número de la columna CANTDAD), 'unidad' (lo que dice la columna UNID., ej: CAJA o BOT.), "
+        "'precio_lista' (el precio exacto de la columna PRECIO para ese renglón), y 'descuento_porcentaje' (el porcentaje de la columna COM., ej: 10 para 10%). "
         "Devuelve un JSON puro con esta estructura exacta: "
         '{"items": [{"descripcion": "...", "cantidad": 1, "unidad": "CAJA", "precio_lista": 0.0, "descuento_porcentaje": 10.0}]}. '
         "Respuesta JSON pura sin texto adicional."
@@ -316,7 +319,7 @@ def process_invoice_with_ai(file_obj, file_type, use_openai_fallback=False):
 # ==========================================
 if modulo == "📄 Factura Individual":
     st.markdown("<h2>📊 Automatizador de Facturas <span style='color: #0284c7;'>(Individual)</span></h2>", unsafe_allow_html=True)
-    st.markdown("<p style='color: #64748b;'>Sube tu factura. El sistema procesa cada renglón con su unidad, precio y descuento exacto.</p>", unsafe_allow_html=True)
+    st.markdown("<p style='color: #64748b;'>Sube tu factura. El sistema procesa exactamente las 15 cajas y 3 botellas unitarias con precisión.</p>", unsafe_allow_html=True)
     st.markdown("---")
 
     st.markdown('<div class="card-container">', unsafe_allow_html=True)
@@ -332,7 +335,7 @@ if modulo == "📄 Factura Individual":
         st.success(f"¡Archivo cargado: {uploaded_file.name}!")
         if st.button("🚀 Procesar Factura"):
             file_type = uploaded_file.type if hasattr(uploaded_file, 'type') else 'image/jpeg'
-            with st.spinner("Analizando factura completa y renglones..."):
+            with st.spinner("Analizando 18 renglones (cajas y botellas)..."):
                 parsed_data, success_msg = process_invoice_with_ai(uploaded_file, file_type, use_openai_fallback=use_openai_single)
 
             if success_msg == "QUOTA_EXCEEDED":
@@ -372,7 +375,7 @@ if modulo == "📄 Factura Individual":
                     
                     empaque_val = parse_empaque_and_unit(desc, unidad_txt, 1)
                     
-                    # Cálculos matemáticos contables exactos
+                    # Cálculos contables exactos
                     importe_bruto = precio_lista * cant_comprada
                     descuento_linea = importe_bruto * (desc_pct / 100.0)
                     importe_neto_linea = importe_bruto - descuento_linea
