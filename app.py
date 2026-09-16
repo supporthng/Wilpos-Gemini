@@ -227,14 +227,14 @@ def audit_and_correct_cost(item_desc, costo_unit, cantidad, empaque):
     c = safe_float(costo_unit)
     cant = safe_int(cantidad, 1)
     emp = safe_int(empaque, 1)
-    d = str(item_desc).upper()
+    d = str(item_desc).upper().replace(" ", "")
     
-    # AUDITORÍA INTELIGENTE DE CAJAS Y EMPAQUES
+    # AUDITORÍA INTELIGENTE DE CAJAS Y EMPAQUES (Soporta formatos con y sin espacios)
     if emp <= 1:
-        # Cervezas (Cajas de 24 o 12 para presentaciones grandes)
+        # Cervezas (Cajas de 24 o 12 para presentaciones grandes de 650ml / 22oz)
         if any(b in d for b in ["PRESIDENTE", "MICHELOB", "COORS", "BRAHMA", "CORONA", "STELLA", "HEINEKEN", "BECKS"]):
             if c > 800:
-                if "22OZ" in d or "650 ML" in d or "GRANDE" in d:
+                if "22OZ" in d or "650ML" in d or "GRANDE" in d:
                     return round(c / 12, 2), 12
                 else:
                     return round(c / 24, 2), 24
@@ -245,7 +245,7 @@ def audit_and_correct_cost(item_desc, costo_unit, cantidad, empaque):
                 return round(c / 6, 2), 6
 
         # Bebidas no alcohólicas / Energizantes / Jugos (Cajas de 12 o 24)
-        if any(bev in d for bev in ["GATORADE", "ALOE", "CLAMATO", "RED BULL", "MONSTER", "COCA", "PEPSI", "AGUA", "OCEAN SPRAY"]):
+        if any(bev in d for bev in ["GATORADE", "ALOE", "CLAMATO", "REDBULL", "MONSTER", "COCA", "PEPSI", "AGUA", "OCEANSPRAY"]):
             if c > 800:
                 return round(c / 12, 2), 12
 
