@@ -148,6 +148,11 @@ def clean_barcode(code_val):
         return "S/C (Sin Código)"
     return s_val
 
+def extract_size_token(text):
+    """Extrae patrones de tamaño/volumen como 5CL, 75CL, 1L, etc."""
+    match = re.search(r'\b\d+\s*(?:CL|ML|L|LT|OZ)\b', str(text).upper())
+    return match.group(0).replace(" ", "") if match else None
+
 def get_resolved_barcode(extracted_code, description):
     cleaned = clean_barcode(extracted_code)
     desc_upper = str(description).strip().upper()
@@ -163,14 +168,24 @@ def get_resolved_barcode(extracted_code, description):
     if desc_upper in st.session_state["barcode_memory"]:
         return st.session_state["barcode_memory"][desc_upper]
         
-    # 3. Búsqueda difusa inteligente (Fuzzy Matching) para descripciones desordenadas o abreviadas
-    master_keys = list(st.session_state["master_catalog"].keys())
+    # Extraer el tamaño/presentación del ítem actual (ej: '5CL', '75CL')
+    target_size = extract_size_token(desc_upper)
+
+    # Función auxiliar para filtrar candidatos por tamaño si el ítem lo especifica
+    def filter_by_size(keys_list):
+        if not target_size:
+            return keys_list
+        filtered = [k for k in keys_list if target_size in k.replace(" ", "")]
+        return filtered if filtered else keys_list # Si no hay coincidencia exacta de tamaño, relaja el filtro
+
+    # 3. Búsqueda difusa inteligente (Fuzzy Matching) respetando el tamaño/presentación
+    master_keys = filter_by_size(list(st.session_state["master_catalog"].keys()))
     if master_keys:
         coincidencias = difflib.get_close_matches(desc_upper, master_keys, n=1, cutoff=0.35)
         if coincidencias:
             return st.session_state["master_catalog"][coincidencias[0]]
             
-    memory_keys = list(st.session_state["barcode_memory"].keys())
+    memory_keys = filter_by_size(list(st.session_state["barcode_memory"].keys()))
     if memory_keys:
         coincidencias_mem = difflib.get_close_matches(desc_upper, memory_keys, n=1, cutoff=0.35)
         if coincidencias_mem:
@@ -214,19 +229,18 @@ def parse_empaque_from_tamano(tamano_txt, unidad_txt, descripcion_txt=""):
 
 def process_invoice_exact_18(file_obj, file_type, use_paid_gemini=False, use_openai_fallback=False):
     prompt_text = (
-        "Analiza esta factura con máxima precisión horizontal y vertical. "
-        "Observa con sumo cuidado la columna de cantidades ('CANTDAD' o valores numéricos). "
-        "En los renglones donde indique botellas sueltas ('BOT.') o unidades, extrae el dígito exacto. "
-        "Para cada renglón extrae exactamente: "
-        "1. 'codigo_barras': código exacto de la línea (si no hay, déjalo vacío o S/C). "
-        "2. 'descripcion': texto exacto de la descripción. "
-        "3. 'cantidad': número exacto de la cantidad comprada. "
-        "4. 'unidad': 'CAJA' o 'BOT.'. "
-        "5. 'tamano': tamaño exacto (ej: 75 CL., 12/75 CL.). "
-        "6. 'precio_lista': precio exacto. "
-        "7. 'descuento_porcentaje': porcentaje de descuento COM. "
+        "Analiza esta factura o tiquet con máxima precisión horizontal y vertical. "
+        "Extrae cada renglón de producto detallando: "
+        "1. 'codigo_barras': código de barras oficial si lo trae impreso, de lo contrario déjalo vacío o S/C. "
+        "2. 'descripcion': texto completo de la descripción (incluyendo tamaño o volumen como 5CL, 75CL, etc.). "
+        "3. 'cantidad': número exacto de unidades o cantidad comprada. "
+        "4. 'unidad': 'CAJA' o 'BOT.' o 'UNIDAD'. "
+        "5. 'tamano': presentación o tamaño exacto (ej: 5 CL., 75 CL.). "
+        "6. 'precio_lista': precio unitario o precio base. "
+        "7. 'valor': monto total de la línea si no hay precio unitario explícito. "
+        "8. 'descuento_porcentaje': porcentaje de descuento si aplica. "
         "Devuelve un JSON puro bajo la clave 'items': "
-        '{"items": [{"codigo_barras": "...", "descripcion": "...", "cantidad": 1, "unidad": "BOT.", "tamano": "75 CL.", "precio_lista": 0.0, "descuento_porcentaje": 0.0}]}. '
+        '{"items": [{"codigo_barras": "...", "descripcion": "...", "cantidad": 1, "unidad": "BOT.", "tamano": "75 CL.", "precio_lista": 0.0, "valor": 0.0, "descuento_porcentaje": 0.0}]}. '
         "Respuesta JSON pura sin texto adicional."
     )
 
@@ -255,12 +269,7 @@ def process_invoice_exact_18(file_obj, file_type, use_paid_gemini=False, use_ope
             raw_text = response.choices[0].message.content.strip()
             if raw_text.startswith("```json"): raw_text = raw_text[7:]
             if raw_text.endswith("```"): raw_text = raw_text[:-3]
-            data_json = json.loads(raw_text.strip())
-            
-            for itm in data_json.get("items", []):
-                if "INFUSIONS CITRUS" in str(itm.get("descripcion")).upper() and safe_int(itm.get("cantidad")) == 1:
-                    itm["cantidad"] = 6
-            return data_json, "✅ Éxito (OpenAI gpt-4o)"
+            return json.loads(raw_text.strip()), "✅ Éxito (OpenAI gpt-4o)"
         except Exception as e:
             return None, str(e)
 
@@ -275,13 +284,7 @@ def process_invoice_exact_18(file_obj, file_type, use_paid_gemini=False, use_ope
             raw_text = response.text.strip()
             if raw_text.startswith("```json"): raw_text = raw_text[7:]
             if raw_text.endswith("```"): raw_text = raw_text[:-3]
-            data_json = json.loads(raw_text.strip())
-            
-            for itm in data_json.get("items", []):
-                if "INFUSIONS CITRUS" in str(itm.get("descripcion")).upper() and safe_int(itm.get("cantidad")) == 1:
-                    itm["cantidad"] = 6
-                    
-            return data_json, "✅ Éxito"
+            return json.loads(raw_text.strip()), "✅ Éxito"
         except Exception as e:
             last_err = str(e)
             if "429" in last_err or "quota" in last_err.lower():
@@ -298,7 +301,7 @@ def process_invoice_exact_18(file_obj, file_type, use_paid_gemini=False, use_ope
 # ==========================================
 if modulo == "📄 Factura Individual":
     st.markdown("<h2>📊 Automatizador de Facturas <span style='color: #0284c7;'>(Individual)</span></h2>", unsafe_allow_html=True)
-    st.markdown("<p style='color: #64748b;'>Extracción inteligente con validación automática en Catálogo Maestro y Memoria.</p>", unsafe_allow_html=True)
+    st.markdown("<p style='color: #64748b;'>Extracción inteligente con validación estricta de tamaño/presentación.</p>", unsafe_allow_html=True)
     st.markdown("---")
 
     st.markdown('<div class="card-container">', unsafe_allow_html=True)
@@ -307,20 +310,20 @@ if modulo == "📄 Factura Individual":
         margen_ganancia = st.number_input("⚙️ Ganancia (%)", min_value=0.0, max_value=500.0, value=25.0, step=1.0)
     
     use_openai_single = st.checkbox("🤖 Permitir OpenAI como respaldo final si falla Gemini", value=False)
-    uploaded_file = st.file_uploader("📂 Sube tu factura (PDF o Imagen)", type=["pdf", "png", "jpg", "jpeg"], key="single_file")
+    uploaded_file = st.file_uploader("📂 Sube tu factura o tiquet (PDF o Imagen)", type=["pdf", "png", "jpg", "jpeg"], key="single_file")
     st.markdown('</div>', unsafe_allow_html=True)
 
     if uploaded_file is not None:
         st.success(f"¡Archivo cargado: {uploaded_file.name}!")
-        if st.button("🚀 Procesar Factura"):
+        if st.button("🚀 Procesar Documento"):
             file_type = uploaded_file.type if hasattr(uploaded_file, 'type') else 'image/jpeg'
-            with st.spinner("Leyendo y asociando códigos de barras..."):
+            with st.spinner("Procesando y validando presentaciones..."):
                 parsed_data, success_msg = process_invoice_exact_18(uploaded_file, file_type, use_paid_gemini=use_gemini_paid_api, use_openai_fallback=use_openai_single)
 
             if success_msg == "QUOTA_EXCEEDED":
-                st.error("⚠️ **Límite de cuota alcanzado.** Activa la casilla de 'Gemini Paid (API de Pago)' en la barra lateral o habilita el respaldo de OpenAI.")
+                st.error("⚠️ **Límite de cuota alcanzado.** Activa la casilla de 'Gemini Paid (API de Pago)' en la barra lateral.")
             elif not parsed_data or not isinstance(parsed_data, dict):
-                st.error(f"⚠️ Error al procesar la factura con la IA: {success_msg}")
+                st.error(f"⚠️ Error al procesar el documento con la IA: {success_msg}")
             else:
                 st.success(success_msg)
                 
@@ -343,18 +346,17 @@ if modulo == "📄 Factura Individual":
                         continue
 
                     precio_lista = safe_float(item.get("precio_lista") or 0)
-                    
-                    # Para tiquets simplificados que solo muestran valor total o precio unitario
                     if precio_lista <= 0 and item.get("valor"):
-                        precio_lista = safe_float(item.get("valor"))
+                        cant_c = safe_int(item.get("cantidad") or 1, 1)
+                        precio_lista = safe_float(item.get("valor")) / cant_c if cant_c > 0 else safe_float(item.get("valor"))
 
                     extracted_code = item.get("codigo_barras")
                     resolved_code = get_resolved_barcode(extracted_code, desc)
 
                     desc_pct = safe_float(item.get("descuento_porcentaje") or 0)
                     cant_comprada = safe_int(item.get("cantidad") or 1, 1)
-                    unidad_txt = str(item.get("unidad") or "CAJA")
-                    tamano_txt = str(item.get("tamano") or "12/75 CL.")
+                    unidad_txt = str(item.get("unidad") or "BOT.")
+                    tamano_txt = str(item.get("tamano") or "75 CL.")
                     
                     empaque_val = parse_empaque_from_tamano(tamano_txt, unidad_txt, desc)
                     
@@ -393,7 +395,7 @@ if modulo == "📄 Factura Individual":
                 calc_itbis = calc_neto_gravado * 0.18
                 calc_total_factura = calc_neto_gravado + calc_itbis
 
-                st.markdown("### 📑 Totales de la Factura")
+                st.markdown("### 📑 Totales del Documento")
                 t1, t2, t3, t4 = st.columns(4)
                 t1.metric("Subtotal Gravado", f"RD$ {calc_subtotal:,.2f}")
                 t2.metric("Descuento Total", f"RD$ {calc_descuento_total:,.2f}")
@@ -438,7 +440,7 @@ if modulo == "📄 Factura Individual":
 # ==========================================
 elif modulo == "📂 Múltiples Facturas (Lote)":
     st.markdown("<h2>📂 Procesador por <span style='color: #0284c7;'>Lotes y Consolidación Oficial</span></h2>", unsafe_allow_html=True)
-    st.markdown("<p style='color: #64748b;'>Procesa múltiples facturas y tiquets consolidando empaques y códigos.</p>", unsafe_allow_html=True)
+    st.markdown("<p style='color: #64748b;'>Procesa múltiples facturas y tiquets con validación de presentaciones.</p>", unsafe_allow_html=True)
     st.markdown("---")
 
     st.markdown('<div class="card-container">', unsafe_allow_html=True)
@@ -552,12 +554,13 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
                 
                 precio_lista = safe_float(item.get("precio_lista") or 0)
                 if precio_lista <= 0 and item.get("valor"):
-                    precio_lista = safe_float(item.get("valor"))
+                    cant_c = safe_int(item.get("cantidad") or 1, 1)
+                    precio_lista = safe_float(item.get("valor")) / cant_c if cant_c > 0 else safe_float(item.get("valor"))
 
                 desc_pct = safe_float(item.get("descuento_porcentaje") or 0)
                 cant_comprada = safe_int(item.get("cantidad") or 1, 1)
-                unidad_txt = str(item.get("unidad") or "CAJA")
-                tamano_txt = str(item.get("tamano") or "12/75 CL.")
+                unidad_txt = str(item.get("unidad") or "BOT.")
+                tamano_txt = str(item.get("tamano") or "75 CL.")
 
                 empaque_val = parse_empaque_from_tamano(tamano_txt, unidad_txt, desc)
                 
@@ -639,7 +642,7 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
 # ==========================================
 elif modulo == "📁 Cargar Archivo Maestro":
     st.markdown("<h2>📁 Gestión de <span style='color: #0284c7;'>Catálogo Maestro</span></h2>", unsafe_allow_html=True)
-    st.markdown("<p style='color: #64748b;'>Sube tu archivo Excel maestro para mapear automáticamente códigos en tiquets sin código de barras.</p>", unsafe_allow_html=True)
+    st.markdown("<p style='color: #64748b;'>Sube tu archivo Excel maestro con presentaciones y códigos oficiales.</p>", unsafe_allow_html=True)
     st.markdown("---")
 
     master_file = st.file_uploader("📂 Sube tu Catálogo Maestro (Excel .xlsx)", type=["xlsx"], key="master_upload")
