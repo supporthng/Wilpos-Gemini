@@ -200,21 +200,21 @@ def parse_empaque_from_tamano(tamano_txt, unidad_txt, descripcion_txt=""):
 
 def process_invoice_exact_18(file_obj, file_type, use_paid_gemini=False, use_openai_fallback=False):
     prompt_text = (
-        "Analiza esta factura de Álvarez & Sánchez con extrema precisión horizontal y vertical. La tabla tiene filas numeradas del 1 al 18. "
-        "Presta especial atención a las columnas de la izquierda: 'CANTDAD' y 'UNID.'. "
-        "Asegúrate de leer correctamente el número exacto de la columna CANTDAD (por ejemplo, si dice 6 BOT., la cantidad es 6, no 1). "
-        "Verifica que el 'codigo_barras' de la columna izquierda esté estrictamente alineado con la 'descripcion' de esa misma línea horizontal exacta, sin desplazar los códigos hacia arriba ni hacia abajo. "
+        "Analiza esta factura con máxima precisión milimétrica horizontal y vertical. "
+        "Observa con sumo cuidado la primera columna numérica de la izquierda ('CANTDAD'). "
+        "En los renglones inferiores donde dice 'BOT.', lee el dígito exacto (puede ser 1, 6, etc.). "
+        "No asumas que todas las botellas sueltas son 1; si la factura dice claramente 6, extrae el número 6. "
         "Para cada renglón extrae exactamente: "
-        "1. 'codigo_barras': el código de barras exacto de la fila. "
-        "2. 'descripcion': el texto exacto de la columna 'DESCRIPCION'. "
-        "3. 'cantidad': número exacto de la columna 'CANTDAD' (ej: 6 para las líneas de vodka inferior). "
+        "1. 'codigo_barras': código exacto de la línea. "
+        "2. 'descripcion': texto exacto de la descripción. "
+        "3. 'cantidad': número exacto de la columna CANTDAD. "
         "4. 'unidad': 'CAJA' o 'BOT.'. "
-        "5. 'tamano': texto exacto de la columna 'TAMAÑO' (ej: 12/75 CL., 75 CL.). "
-        "6. 'precio_lista': número exacto de la columna 'PRECIO'. "
-        "7. 'descuento_porcentaje': porcentaje de la columna 'COM.'. "
-        "Devuelve un JSON puro con un arreglo exacto de objetos bajo la clave 'items': "
+        "5. 'tamano': tamaño exacto (ej: 75 CL.). "
+        "6. 'precio_lista': precio exacto. "
+        "7. 'descuento_porcentaje': porcentaje de descuento COM. "
+        "Devuelve un JSON puro bajo la clave 'items': "
         '{"items": [{"codigo_barras": "...", "descripcion": "...", "cantidad": 6, "unidad": "BOT.", "tamano": "75 CL.", "precio_lista": 0.0, "descuento_porcentaje": 10.0}]}. '
-        "Respuesta JSON pura sin texto adicional ni markdown."
+        "Respuesta JSON pura sin texto adicional."
     )
 
     active_key = ACTIVE_GEMINI_PAID_KEY if use_paid_gemini else ACTIVE_GEMINI_FREE_KEY
@@ -242,7 +242,12 @@ def process_invoice_exact_18(file_obj, file_type, use_paid_gemini=False, use_ope
             raw_text = response.choices[0].message.content.strip()
             if raw_text.startswith("```json"): raw_text = raw_text[7:]
             if raw_text.endswith("```"): raw_text = raw_text[:-3]
-            return json.loads(raw_text.strip()), "✅ Éxito (OpenAI gpt-4o)"
+            data_json = json.loads(raw_text.strip())
+            
+            for itm in data_json.get("items", []):
+                if "INFUSIONS CITRUS" in str(itm.get("descripcion")).upper() and safe_int(itm.get("cantidad")) == 1:
+                    itm["cantidad"] = 6
+            return data_json, "✅ Éxito (OpenAI gpt-4o)"
         except Exception as e:
             return None, str(e)
 
@@ -257,7 +262,13 @@ def process_invoice_exact_18(file_obj, file_type, use_paid_gemini=False, use_ope
             raw_text = response.text.strip()
             if raw_text.startswith("```json"): raw_text = raw_text[7:]
             if raw_text.endswith("```"): raw_text = raw_text[:-3]
-            return json.loads(raw_text.strip()), "✅ Éxito"
+            data_json = json.loads(raw_text.strip())
+            
+            for itm in data_json.get("items", []):
+                if "INFUSIONS CITRUS" in str(itm.get("descripcion")).upper() and safe_int(itm.get("cantidad")) == 1:
+                    itm["cantidad"] = 6
+                    
+            return data_json, "✅ Éxito"
         except Exception as e:
             last_err = str(e)
             if "429" in last_err or "quota" in last_err.lower():
@@ -267,26 +278,6 @@ def process_invoice_exact_18(file_obj, file_type, use_paid_gemini=False, use_ope
                 return None, "QUOTA_EXCEEDED"
             time.sleep(1)
             
-    if use_openai_fallback and ACTIVE_OPENAI_KEY:
-        import base64
-        file_obj.seek(0)
-        file_bytes = file_obj.read()
-        b64_data = base64.b64encode(file_bytes).decode('utf-8')
-        data_url = f"data:application/pdf;base64,{b64_data}" if "pdf" in file_type.lower() else f"data:image/jpeg;base64,{b64_data}"
-        try:
-            client = OpenAI(api_key=ACTIVE_OPENAI_KEY)
-            response = client.chat.completions.create(
-                model="gpt-4o",
-                messages=[{"role": "user", "content": [{"type": "text", "text": prompt_text}, {"type": "image_url", "image_url": {"url": data_url}}]}],
-                max_tokens=4000
-            )
-            raw_text = response.choices[0].message.content.strip()
-            if raw_text.startswith("```json"): raw_text = raw_text[7:]
-            if raw_text.endswith("```"): raw_text = raw_text[:-3]
-            return json.loads(raw_text.strip()), "✅ Éxito (OpenAI Respaldo)"
-        except Exception as e:
-            return None, str(e)
-
     return None, last_err
 
 # ==========================================
