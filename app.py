@@ -1,23 +1,27 @@
 import io
+import json
 import os
+import time
 import re
+from PIL import Image
 import streamlit as st
 import openpyxl
 import pandas as pd
-from PIL import Image
 
-# Intento de carga de pytesseract para OCR local
+# Importación segura de la librería oficial moderna de Google GenAI
 try:
-    import pytesseract
-    OCR_AVAILABLE = True
+    from google import genai
+    from google.genai import types
+    NEW_GOOGLE_SDK = True
 except ImportError:
-    OCR_AVAILABLE = False
+    import google.generativeai as genai
+    NEW_GOOGLE_SDK = False
 
 # ==========================================
 # CONFIGURACIÓN DE LA PÁGINA Y ESTILOS CSS
 # ==========================================
 st.set_page_config(
-    page_title="WilPOS - Automatizador Local Offline", 
+    page_title="WilPOS - Automatizador Inteligente", 
     page_icon="⚡", 
     layout="wide",
     initial_sidebar_state="expanded"
@@ -76,6 +80,21 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
+# ------------------------------------------
+# BÚSQUEDA UNIVERSAL DE CLAVES API
+# ------------------------------------------
+api_key_candidates = [
+    st.secrets.get("GEMINI_API_KEY"),
+    st.secrets.get("GOOGLE_API_KEY"),
+    st.secrets.get("GEMINI_API_KEY_PAID"),
+    st.secrets.get("GEMINI_API_KEY_1"),
+    os.environ.get("GEMINI_API_KEY"),
+    os.environ.get("GOOGLE_API_KEY"),
+    os.environ.get("GEMINI_API_KEY_PAID"),
+    os.environ.get("GEMINI_API_KEY_1")
+]
+ACTIVE_GEMINI_KEY = next((k for k in api_key_candidates if k and str(k).strip()), None)
+
 # Diccionario maestro blindado para Álvarez & Sánchez
 MASTER_ALVAREZ_SANCHEZ = {
     "VINO TINTO RESERVA CUNE (D.O.RIOJA)": "8410591003045",
@@ -124,16 +143,29 @@ def clean_barcode(code_val):
         return "S/C (Sin Código)"
     return digits
 
+def run_visual_countdown(total_seconds=25, text_msg="Límite temporal alcanzado (15 peticiones por minuto). Pausa de seguridad activa:"):
+    st.warning(f"⚠️ {text_msg}")
+    bar = st.progress(0)
+    status_text = st.empty()
+    for i in range(total_seconds):
+        rem = total_seconds - i
+        pct = float((i + 1) / total_seconds)
+        bar.progress(pct)
+        status_text.text(f"⏳ Faltan {rem} segundos para reintentar automáticamente...")
+        time.sleep(1)
+    bar.empty()
+    status_text.empty()
+
 # ==========================================
 # MENÚ Y CONFIGURACIÓN LATERAL
 # ==========================================
-st.sidebar.markdown("<h3 style='color: #0284c7; text-align: center;'>⚡ WilPOS Local</h3>", unsafe_allow_html=True)
-st.sidebar.markdown("<p style='text-align: center; color: #64748b; font-size: 0.8rem;'>Modo Offline (Cero Costos)</p>", unsafe_allow_html=True)
+st.sidebar.markdown("<h3 style='color: #0284c7; text-align: center;'>⚡ WilPOS</h3>", unsafe_allow_html=True)
+st.sidebar.markdown("<p style='text-align: center; color: #64748b; font-size: 0.8rem;'>Automatizador Inteligente (Flash Free)</p>", unsafe_allow_html=True)
 st.sidebar.markdown("---")
 
 modulo = st.sidebar.radio(
     "Menú de Navegación",
-    ["📄 Factura Individual (Local)", "📂 Múltiples Facturas (Lote Local)"]
+    ["📄 Factura Individual", "📂 Múltiples Facturas (Lote)"]
 )
 
 def parse_empaque_exact(desc, unidad_txt):
@@ -147,65 +179,68 @@ def parse_empaque_exact(desc, unidad_txt):
         return 12 if "JOSH" in d or "CUNE" in d or "TARAPACA" in d else 6
     return 12
 
-def process_invoice_local_ocr(file_obj, file_type):
-    if not OCR_AVAILABLE:
-        return None, "Falta la librería pytesseract en el entorno."
-    
-    try:
-        file_obj.seek(0)
-        file_bytes = file_obj.read()
-        image = Image.open(io.BytesIO(file_bytes))
-        
-        # Extracción de texto local mediante OCR
-        extracted_text = pytesseract.image_to_string(image)
-        lines = extracted_text.split('\n')
-        
-        parsed_items = []
-        # Análisis inteligente local buscando coincidencias con el diccionario maestro
-        for line in lines:
-            upper_line = line.upper()
-            for m_key in MASTER_ALVAREZ_SANCHEZ.keys():
-                # Si encuentra palabras clave del maestro en la línea leída
-                key_words = [w for w in m_key.split() if len(w) > 4]
-                matches = sum(1 for w in key_words if w in upper_line)
-                if matches >= 2 or m_key in upper_line:
-                    # Intentar extraer números de la línea (cantidad y precio estimado)
-                    nums = re.findall(r'\d+(?:\.\d+)?', line)
-                    cant = safe_int(nums[0]) if len(nums) > 0 else 1
-                    precio = safe_float(nums[1]) if len(nums) > 1 else 1500.0 # Valor por defecto seguro si no lo lee exacto
-                    
-                    parsed_items.append({
-                        "descripcion": m_key,
-                        "cantidad": cant if cant < 100 else 1,
-                        "unidad": "CAJA",
-                        "tamano": "12/75 CL.",
-                        "precio_lista": precio if precio > 50 else 1500.0,
-                        "descuento_porcentaje": 10.0
-                    })
-                    break
-        
-        # Si el OCR no detecta líneas automáticas por formato de imagen, cargamos el maestro base para asegurar operación inmediata
-        if not parsed_items:
-            for m_key in list(MASTER_ALVAREZ_SANCHEZ.keys())[:5]: # Carga de respaldo garantizada
-                parsed_items.append({
-                    "descripcion": m_key,
-                    "cantidad": 1,
-                    "unidad": "CAJA",
-                    "tamano": "12/75 CL.",
-                    "precio_lista": 2500.0,
-                    "descuento_porcentaje": 10.0
-                })
+def process_invoice_with_gemini(file_obj, file_type):
+    if not ACTIVE_GEMINI_KEY:
+        return None, "Falta clave API de Gemini (Configura GEMINI_API_KEY en st.secrets)"
 
-        return {"items": parsed_items}, "✅ Éxito (Procesamiento Local Offline)"
-    except Exception as e:
-        return None, f"Error local OCR: {str(e)}"
+    prompt_text = (
+        "Analiza esta factura con precisión milimétrica. "
+        "Extrae cada renglón de la tabla con: "
+        "1. 'descripcion': texto exacto de la columna 'DESCRIPCION'. "
+        "2. 'cantidad': número de la columna 'CANTIDAD'. "
+        "3. 'unidad': 'CAJA' o 'BOT.'. "
+        "4. 'tamano': texto exacto de la columna 'TAMAÑO'. "
+        "5. 'precio_lista': número exacto de la columna 'PRECIO'. "
+        "6. 'descuento_porcentaje': porcentaje exacto de la columna 'COM.'. "
+        "Devuelve un JSON puro bajo la clave 'items': "
+        '{"items": [{"descripcion": "...", "cantidad": 1, "unidad": "CAJA", "tamano": "12/75 CL.", "precio_lista": 0.0, "descuento_porcentaje": 10.0}]}. '
+        "Respuesta JSON pura sin texto adicional ni markdown."
+    )
+
+    file_obj.seek(0)
+    file_bytes = file_obj.read()
+    image_input = Image.open(io.BytesIO(file_bytes)) if "pdf" not in file_type.lower() else file_bytes
+
+    for intento in range(3):
+        try:
+            if NEW_GOOGLE_SDK:
+                client = genai.Client(api_key=ACTIVE_GEMINI_KEY)
+                # Uso del SDK moderno oficial
+                response = client.models.generate_content(
+                    model='gemini-2.5-flash',
+                    contents=[image_input, prompt_text]
+                )
+                raw_text = response.text.strip()
+            else:
+                genai.configure(api_key=ACTIVE_GEMINI_KEY)
+                model = genai.GenerativeModel('gemini-1.5-flash')
+                response = model.generate_content([image_input, prompt_text])
+                raw_text = response.text.strip()
+
+            if not raw_text:
+                raise ValueError("Respuesta vacía de la API.")
+
+            if raw_text.startswith("```json"): raw_text = raw_text[7:]
+            if raw_text.endswith("```"): raw_text = raw_text[:-3]
+
+            time.sleep(3.5) # Pausa preventiva para proteger la cuota gratuita
+            return json.loads(raw_text.strip()), "✅ Éxito (Gemini Flash)"
+        except Exception as e:
+            err_str = str(e)
+            if "429" in err_str or "quota" in err_str.lower() or "RESOURCE_EXHAUSTED" in err_str:
+                if intento < 2:
+                    run_visual_countdown(25, f"Límite de peticiones alcanzado (Intento {intento+1}/3). Esperando reintento automático:")
+                    continue
+                return None, "QUOTA_EXCEEDED"
+            return None, f"Error técnico API: {err_str}"
+    return None, "Error desconocido en API"
 
 # ==========================================
-# MÓDULO 1: FACTURA INDIVIDUAL (LOCAL)
+# MÓDULO 1: FACTURA INDIVIDUAL
 # ==========================================
-if modulo == "📄 Factura Individual (Local)":
-    st.markdown("<h2>📊 Automatizador Local <span style='color: #0284c7;'>(Sin Internet ni Costos)</span></h2>", unsafe_allow_html=True)
-    st.markdown("<p style='color: #64748b;'>Procesamiento local ultrarrápido con motor OCR integrado.</p>", unsafe_allow_html=True)
+if modulo == "📄 Factura Individual":
+    st.markdown("<h2>📊 Automatizador de Facturas <span style='color: #0284c7;'>(Individual)</span></h2>", unsafe_allow_html=True)
+    st.markdown("<p style='color: #64748b;'>Procesamiento con control inteligente de cuota y reintentos automáticos.</p>", unsafe_allow_html=True)
     st.markdown("---")
 
     st.markdown('<div class="card-container">', unsafe_allow_html=True)
@@ -213,17 +248,19 @@ if modulo == "📄 Factura Individual (Local)":
     with c_col1:
         margen_ganancia = st.number_input("⚙️ Ganancia (%)", min_value=0.0, max_value=500.0, value=25.0, step=1.0)
     
-    uploaded_file = st.file_uploader("📂 Sube tu factura (Imagen o PDF)", type=["pdf", "png", "jpg", "jpeg"], key="single_file_local")
+    uploaded_file = st.file_uploader("📂 Sube tu factura (PDF o Imagen)", type=["pdf", "png", "jpg", "jpeg"], key="single_file")
     st.markdown('</div>', unsafe_allow_html=True)
 
     if uploaded_file is not None:
         st.success(f"¡Archivo cargado: {uploaded_file.name}!")
-        if st.button("🚀 Procesar Localmente (0 Costo)"):
+        if st.button("🚀 Procesar Factura"):
             file_type = uploaded_file.type if hasattr(uploaded_file, 'type') else 'image/jpeg'
-            with st.spinner("Procesando de manera local..."):
-                parsed_data, success_msg = process_invoice_local_ocr(uploaded_file, file_type)
+            with st.spinner("Procesando con Gemini..."):
+                parsed_data, success_msg = process_invoice_with_gemini(uploaded_file, file_type)
 
-            if not parsed_data or not isinstance(parsed_data, dict):
+            if success_msg == "QUOTA_EXCEEDED":
+                st.error("⚠️ **Límite de la capa gratuita alcanzado temporalmente.** Vuelve a presionar el botón en un momento.")
+            elif not parsed_data or not isinstance(parsed_data, dict):
                 st.error(f"⚠️ {success_msg}")
             else:
                 st.success(success_msg)
@@ -236,12 +273,25 @@ if modulo == "📄 Factura Individual (Local)":
                 calc_descuento_total = 0.0
 
                 for idx, item in enumerate(data_items, start=1):
+                    if not isinstance(item, dict):
+                        continue
+                    
                     desc = str(item.get("descripcion") or "").strip()
+                    if not desc:
+                        continue
+
                     precio_lista = safe_float(item.get("precio_lista") or 0)
-                    
-                    extracted_code = MASTER_ALVAREZ_SANCHEZ.get(desc, "S/C (Sin Código)")
+                    if precio_lista <= 0:
+                        continue
+
+                    upper_desc = desc.upper()
+                    extracted_code = "S/C (Sin Código)"
+                    for m_key, m_code in MASTER_ALVAREZ_SANCHEZ.items():
+                        if m_key in upper_desc or upper_desc in m_key or any(w in upper_desc for w in m_key.split() if len(w) > 5 and w in upper_desc):
+                            extracted_code = m_code
+                            break
+
                     extracted_code = clean_barcode(extracted_code)
-                    
                     desc_pct = safe_float(item.get("descuento_porcentaje") or 0.0)
                     cant_comprada = safe_int(item.get("cantidad") or 1, 1)
                     unidad_txt = str(item.get("unidad") or "CAJA")
@@ -293,13 +343,15 @@ if modulo == "📄 Factura Individual (Local)":
                 t4.metric("Total Neto Factura", f"RD$ {calc_total_factura:,.2f}")
                 st.markdown("---")
 
-                st.info(f"📋 **Auditoría Local:** Ítems detectados y cruzados con Diccionario Maestro: **{len(rows_preview)}**")
+                st.info(f"📋 **Auditoría de Lectura:** Se detectaron **{len(data_items)} ítems** en la factura. Procesados y listos: **{len(rows_preview)}**")
 
                 if rows_preview:
                     st.markdown("### ✅ Artículos Procesados Exitosamente")
                     df_resultado = pd.DataFrame(rows_preview)
                     df_resultado["Código Oficial POS"] = df_resultado["Código Oficial POS"].astype(str)
-                    st.dataframe(df_resultado, use_container_width=True, hide_index=True)
+                    
+                    altura_tabla = min(max(len(rows_preview) * 35 + 40, 200), 850)
+                    st.dataframe(df_resultado, use_container_width=True, hide_index=True, height=altura_tabla)
                     
                     wb = openpyxl.Workbook()
                     ws_prod = wb.active
@@ -322,79 +374,156 @@ if modulo == "📄 Factura Individual (Local)":
                     
                     output = io.BytesIO()
                     wb.save(output)
-                    st.download_button("📥 Descargar Excel WilPOS Oficial", output.getvalue(), "Inventario_WilPOS_Local.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+                    st.download_button("📥 Descargar Excel WilPOS Oficial", output.getvalue(), "Inventario_WilPOS_Actualizado.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
 # ==========================================
-# MÓDULO 2: MÚLTIPLES FACTURAS (LOTE LOCAL)
+# MÓDULO 2: MÚLTIPLES FACTURAS (LOTE)
 # ==========================================
-elif modulo == "📂 Múltiples Facturas (Lote Local)":
-    st.markdown("<h2>📂 Procesador por Lotes <span style='color: #0284c7;'>(Modo Masivo Local)</span></h2>", unsafe_allow_html=True)
-    st.markdown("<p style='color: #64748b;'>Procesa lotes enteros de facturas de forma local sin bloqueos.</p>", unsafe_allow_html=True)
+elif modulo == "📂 Múltiples Facturas (Lote)":
+    st.markdown("<h2>📂 Procesador por <span style='color: #0284c7;'>Lotes</span></h2>", unsafe_allow_html=True)
+    st.markdown("<p style='color: #64748b;'>Procesa múltiples facturas con manejo automático de pausas y reintentos.</p>", unsafe_allow_html=True)
     st.markdown("---")
 
     st.markdown('<div class="card-container">', unsafe_allow_html=True)
     l_col1, _ = st.columns([1, 3])
     with l_col1:
         margen_ganancia_lote = st.number_input("⚙️ Ganancia (%) Lote", min_value=0.0, max_value=500.0, value=25.0, step=1.0)
-    uploaded_files = st.file_uploader("📂 Sube tus facturas en lote", type=["pdf", "png", "jpg", "jpeg"], accept_multiple_files=True, key="batch_files_local")
+    uploaded_files = st.file_uploader("📂 Sube tus facturas (Selección múltiple)", type=["pdf", "png", "jpg", "jpeg"], accept_multiple_files=True, key="batch_files")
     st.markdown('</div>', unsafe_allow_html=True)
 
     if uploaded_files:
-        if st.button("🚀 Procesar Lote Masivo Local"):
-            all_batch_items = []
-            with st.spinner("Procesando lote completo de forma local..."):
-                for f in uploaded_files:
-                    f_bytes = io.BytesIO(f.read())
-                    parsed, _ = process_invoice_local_ocr(f_bytes, getattr(f, 'type', 'image/jpeg'))
-                    if parsed and "items" in parsed:
-                        all_batch_items.extend(parsed["items"])
-            
-            if all_batch_items:
-                st.success(f"¡Lote procesado con éxito! Total de líneas extraídas: {len(all_batch_items)}")
+        if "cached_uploaded_files" not in st.session_state or len(st.session_state["cached_uploaded_files"]) != len(uploaded_files):
+            st.session_state["cached_uploaded_files"] = [
+                {"name": f.name, "type": getattr(f, "type", "image/jpeg"), "bytes": f.read()}
+                for f in uploaded_files
+            ]
+
+    if "cached_uploaded_files" in st.session_state and st.session_state["cached_uploaded_files"]:
+        cached_files = st.session_state["cached_uploaded_files"]
+        total_files = len(cached_files)
+
+        if "batch_accumulated_items" not in st.session_state:
+            st.session_state["batch_accumulated_items"] = []
+            st.session_state["batch_processed_count"] = 0
+            st.session_state["batch_ok_count"] = 0
+            st.session_state["is_live_processing"] = False
+
+        processed_so_far = st.session_state["batch_processed_count"]
+
+        b_col1, b_col2 = st.columns(2)
+        iniciar_btn = b_col1.button("🚀 Iniciar Lote Seguro", type="primary")
+        reiniciar_lote = b_col2.button("🔄 Reiniciar Lote")
+
+        if reiniciar_lote:
+            st.session_state["batch_accumulated_items"] = []
+            st.session_state["batch_processed_count"] = 0
+            st.session_state["batch_ok_count"] = 0
+            st.session_state["is_live_processing"] = False
+            if "cached_uploaded_files" in st.session_state:
+                del st.session_state["cached_uploaded_files"]
+            st.rerun()
+
+        if iniciar_btn:
+            st.session_state["is_live_processing"] = True
+            st.rerun()
+
+        if st.session_state.get("is_live_processing", False):
+            if processed_so_far < total_files:
+                file_info = cached_files[processed_so_far]
+                st.info(f"⚡ Procesando archivo {processed_so_far + 1} de {total_files}: `{file_info['name']}`...")
+                st.progress(processed_so_far / total_files)
+
+                file_bytes_io = io.BytesIO(file_info["bytes"])
+                parsed_data, err_msg = process_invoice_with_gemini(file_bytes_io, file_info["type"])
+
+                if err_msg == "QUOTA_EXCEEDED":
+                    run_visual_countdown(25, "Límite temporal alcanzado en lote. Conteo regresivo visual para reanudar:")
+                    st.rerun()
+                elif "Error técnico" in err_msg:
+                    st.error(f"⚠️ {err_msg}")
+                    st.session_state["is_live_processing"] = False
+                    st.rerun()
+
+                if parsed_data and isinstance(parsed_data, dict):
+                    st.session_state["batch_ok_count"] += 1
+                    items = parsed_data.get("items", [])
+                    if isinstance(items, list):
+                        for itm in items:
+                            if isinstance(itm, dict):
+                                d_txt = str(itm.get("descripcion") or "").strip()
+                                p_val = safe_float(itm.get("precio_lista") or 0)
+                                if d_txt and p_val > 0:
+                                    st.session_state["batch_accumulated_items"].append(itm)
+
+                st.session_state["batch_processed_count"] += 1
+                st.rerun()
+            else:
+                st.session_state["is_live_processing"] = False
+                st.rerun()
+
+        if st.session_state["batch_processed_count"] > 0:
+            st.markdown("---")
+            st.markdown("## 📊 Consolidado de Inventario y Totales")
+
+            raw_items = st.session_state["batch_accumulated_items"]
+            multiplicador_ganancia = 1 + (margen_ganancia_lote / 100.0)
+
+            processed_rows = []
+            total_unidades_inventario = 0
+
+            for item in raw_items:
+                if not isinstance(item, dict):
+                    continue
                 
-                processed_rows = []
-                total_unidades_inventario = 0
-                multiplicador_ganancia = 1 + (margen_ganancia_lote / 100.0)
+                desc = str(item.get("descripcion") or "").strip()
+                if not desc:
+                    continue
 
-                for item in all_batch_items:
-                    desc = str(item.get("descripcion") or "").strip()
-                    extracted_code = MASTER_ALVAREZ_SANCHEZ.get(desc, "S/C (Sin Código)")
-                    extracted_code = clean_barcode(extracted_code)
-                    
-                    precio_lista = safe_float(item.get("precio_lista") or 0)
-                    desc_pct = safe_float(item.get("descuento_porcentaje") or 0.0)
-                    cant_comprada = safe_int(item.get("cantidad") or 1, 1)
-                    unidad_txt = str(item.get("unidad") or "CAJA")
-                    
-                    empaque_val = parse_empaque_exact(desc, unidad_txt)
-                    
-                    importe_bruto = precio_lista * cant_comprada
-                    descuento_linea = importe_bruto * (desc_pct / 100.0)
-                    importe_neto_linea = importe_bruto - descuento_linea
-                    
-                    if empaque_val == 1:
-                        total_unidades_linea = cant_comprada
-                        costo = round(importe_neto_linea / cant_comprada, 2) if cant_comprada > 0 else round(importe_neto_linea, 2)
-                    else:
-                        total_unidades_linea = cant_comprada * empaque_val
-                        costo = round(importe_neto_linea / total_unidades_linea, 2) if total_unidades_linea > 0 else round(importe_neto_linea, 2)
+                upper_desc = desc.upper()
+                extracted_code = "S/C (Sin Código)"
+                for m_key, m_code in MASTER_ALVAREZ_SANCHEZ.items():
+                    if m_key in upper_desc or upper_desc in m_key or any(w in upper_desc for w in m_key.split() if len(w) > 5 and w in upper_desc):
+                        extracted_code = m_code
+                        break
 
-                    raw_pv = (costo * multiplicador_ganancia) * 1.18
-                    precio_venta = round_to_nearest_5(raw_pv)
-                    total_unidades_inventario += total_unidades_linea
+                extracted_code = clean_barcode(extracted_code)
+                precio_lista = safe_float(item.get("precio_lista") or 0)
+                desc_pct = safe_float(item.get("descuento_porcentaje") or 0.0)
+                cant_comprada = safe_int(item.get("cantidad") or 1, 1)
+                unidad_txt = str(item.get("unidad") or "CAJA")
+                tamano_txt = str(item.get("tamano") or "12/75 CL.")
 
-                    processed_rows.append({
-                        "Nombre": desc,
-                        "Código Barra": str(extracted_code),
-                        "Categoría": "General", "Tipo": "producto",
-                        "Precio Venta": precio_venta, "Costo": costo,
-                        "Stock": total_unidades_linea, "Stock Mínimo": 5, "ITBIS": 0.18,
-                        "Unidad Medida": "unidad", "Venta Granel": "No",
-                        "Cantidad Empaque": empaque_val, "Precio Variable": "No",
-                        "Descuento %": 0, "Descuento Monto": 0, "Precio Especial": None,
-                        "Descuento Activo": "No", "Descuento Nota": None
-                    })
+                empaque_val = parse_empaque_exact(desc, unidad_txt)
+                
+                importe_bruto = precio_lista * cant_comprada
+                descuento_linea = importe_bruto * (desc_pct / 100.0)
+                importe_neto_linea = importe_bruto - descuento_linea
+                
+                if empaque_val == 1:
+                    total_unidades_linea = cant_comprada
+                    costo = round(importe_neto_linea / cant_comprada, 2) if cant_comprada > 0 else round(importe_neto_linea, 2)
+                else:
+                    total_unidades_linea = cant_comprada * empaque_val
+                    costo = round(importe_neto_linea / total_unidades_linea, 2) if total_unidades_linea > 0 else round(importe_neto_linea, 2)
 
+                raw_pv = (costo * multiplicador_ganancia) * 1.18
+                precio_venta = round_to_nearest_5(raw_pv)
+                stock_val = total_unidades_linea
+                total_unidades_inventario += stock_val
+
+                processed_rows.append({
+                    "Nombre": desc,
+                    "Código Barra": str(extracted_code),
+                    "Categoría": "General", "Tipo": "producto",
+                    "Precio Venta": precio_venta, "Costo": costo,
+                    "Stock": stock_val, "Stock Mínimo": 5, "ITBIS": 0.18,
+                    "Unidad Medida": "unidad", "Venta Granel": "No",
+                    "Cantidad Empaque": empaque_val, "Precio Variable": "No",
+                    "Descuento %": 0, "Descuento Monto": 0, "Precio Especial": None,
+                    "Descuento Activo": "No", "Descuento Nota": None
+                })
+
+            if processed_rows:
                 df_temp = pd.DataFrame(processed_rows)
                 df_grouped = df_temp.groupby(['Código Barra', 'Nombre'], as_index=False).agg({
                     'Stock': 'sum', 'Costo': 'mean', 'Precio Venta': 'mean',
@@ -408,11 +537,13 @@ elif modulo == "📂 Múltiples Facturas (Lote Local)":
                 df_final_preview = df_grouped.sort_values(by="Stock", ascending=False).reset_index(drop=True)
                 df_final_preview["Código Barra"] = df_final_preview["Código Barra"].astype(str)
 
-                k1, k2, k3 = st.columns(3)
-                k1.metric("📁 Facturas en Lote", f"{len(uploaded_files)}")
-                k2.metric("📦 Unidades Totales", f"{total_unidades_inventario:,}")
-                inversion_lote = (df_final_preview['Costo'] * df_final_preview['Stock']).sum()
-                k3.metric("💰 Inversión Total", f"RD$ {inversion_lote:,.2f}")
+                kpi1, kpi2, kpi3, kpi4 = st.columns(4)
+                kpi1.metric("📁 Facturas Procesadas", f"{st.session_state['batch_ok_count']}")
+                kpi2.metric("📦 Total Líneas Válidas", f"{len(raw_items)}")
+                kpi3.metric("📦 Unidades en Stock", f"{total_unidades_inventario:,}")
+                
+                inversion_total_lote = (df_final_preview['Costo'] * df_final_preview['Stock']).sum()
+                kpi4.metric("💰 Inversión Neta", f"RD$ {inversion_total_lote:,.2f}")
 
                 st.markdown("---")
                 st.dataframe(df_final_preview, use_container_width=True, hide_index=True)
@@ -435,4 +566,4 @@ elif modulo == "📂 Múltiples Facturas (Lote Local)":
 
                 output = io.BytesIO()
                 wb.save(output)
-                st.download_button("📥 Descargar Excel Consolidado Local", output.getvalue(), "Inventario_WilPOS_Consolidado_Local.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+                st.download_button("📥 Descargar Excel Consolidado Final", output.getvalue(), "Inventario_WilPOS_Consolidado.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
