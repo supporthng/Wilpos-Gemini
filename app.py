@@ -248,17 +248,24 @@ def process_invoice_with_ai(file_obj, file_type):
         try:
             genai.configure(api_key=ACTIVE_GEMINI_KEY)
             model = genai.GenerativeModel('gemini-1.5-flash')
+            
             file_obj.seek(0)
             file_bytes = file_obj.read()
-            response = model.generate_content([
-                {'mime_type': file_type, 'data': file_bytes},
-                prompt_text
-            ])
+            
+            # Carga robusta usando PIL Image para evitar errores de formato en SDK
+            if "pdf" in file_type.lower():
+                image_input = file_bytes # PDF bytes directos
+            else:
+                image_input = Image.open(io.BytesIO(file_bytes))
+
+            response = model.generate_content([image_input, prompt_text])
             raw_text = response.text.strip()
+            
             if raw_text.startswith("```json"):
                 raw_text = raw_text[7:]
             if raw_text.endswith("```"):
                 raw_text = raw_text[:-3]
+                
             parsed_data = json.loads(raw_text.strip())
             return parsed_data, "✅ Éxito"
         except Exception as e:
@@ -425,7 +432,7 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
                 file_bytes_io = io.BytesIO(file_info["bytes"])
                 parsed_data, err_msg = process_invoice_with_ai(file_bytes_io, file_info["type"])
                 
-                time.sleep(0.3)
+                time.sleep(0.4)
 
                 if parsed_data and isinstance(parsed_data, dict):
                     rnc_emisor = str(parsed_data.get("emisor_rnc", "")).strip()
@@ -467,7 +474,6 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
                 st.success("🎉 ¡Lote finalizado con éxito!")
                 st.rerun()
 
-        # Mostrar registro de auditoría en tiempo real de cada archivo procesado
         if st.session_state["batch_audit_log"]:
             with st.expander("📋 Ver Registro de Auditoría del Lote (Detalle por Archivo)", expanded=False):
                 st.dataframe(pd.DataFrame(st.session_state["batch_audit_log"]), use_container_width=True, hide_index=True)
@@ -585,7 +591,7 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
                 wb.save(output)
                 st.download_button("📥 Descargar Excel Consolidado Final", output.getvalue(), "Inventario_WilPOS_Consolidado_Corregido.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
             else:
-                st.warning("No se encontraron ítems válidos para consolidar (revisa el registro de auditoría arriba para ver si las facturas dieron error de IA).")
+                st.warning("No se encontraron ítems válidos para consolidar.")
 
 # ==========================================
 # MÓDULO 3: VER CÓDIGOS ALMACENADOS & CARGAR MAESTRO
