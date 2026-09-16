@@ -268,7 +268,7 @@ def process_invoice_with_ai(file_obj, file_type, use_openai_fallback=False):
             response = client.chat.completions.create(
                 model="gpt-4o-mini",
                 messages=[{"role": "user", "content": [{"type": "text", "text": prompt_text}, {"type": "image_url", "image_url": {"url": data_url}}]}],
-                max_tokens=3000
+                max_tokens=4000
             )
             raw_text = response.choices[0].message.content.strip()
             if raw_text.startswith("```json"): raw_text = raw_text[7:]
@@ -340,16 +340,27 @@ if modulo == "📄 Factura Individual":
             else:
                 st.success(success_msg)
                 data_items = parsed_data.get("items", [])
+                
                 rows_preview = []
+                omitted_items = []
                 multiplicador_ganancia = 1 + (margen_ganancia / 100.0)
 
                 for idx, item in enumerate(data_items, start=1):
                     if not isinstance(item, dict):
+                        omitted_items.append({"Item #": idx, "Descripción": str(item), "Razón": "Estructura de datos inválida (no es un diccionario)"})
                         continue
-                    desc = str(item.get("descripcion") or item.get("nombre") or item.get("articulo") or "")
-                    official_code, matched_name, status_match = match_official_barcode(desc)
+                    
+                    desc = str(item.get("descripcion") or item.get("nombre") or item.get("articulo") or "").strip()
+                    if not desc:
+                        omitted_items.append({"Item #": idx, "Descripción": "(Sin descripción)", "Razón": "Línea sin descripción o texto en blanco"})
+                        continue
 
                     precio_lista = safe_float(item.get("precio_lista") or item.get("costo_sin_itbis") or item.get("precio") or 0)
+                    if precio_lista <= 0:
+                        omitted_items.append({"Item #": idx, "Descripción": desc, "Razón": "Precio de lista en 0 o inválido"})
+                        continue
+
+                    official_code, matched_name, status_match = match_official_barcode(desc)
                     desc_pct = safe_float(item.get("descuento_porcentaje") or 0)
                     cant_comprada = safe_int(item.get("cantidad") or 1, 1)
                     empaque_ai = safe_int(item.get("empaque") or 1, 1)
@@ -378,7 +389,11 @@ if modulo == "📄 Factura Individual":
                         "Estado": status_match
                     })
 
+                # Métrica de conteo
+                st.info(f"📋 **Auditoría de Lectura:** Se detectaron **{len(data_items)} ítems** brutos en la factura. Procesados con éxito: **{len(rows_preview)}** | Omitidos: **{len(omitted_items)}**")
+
                 if rows_preview:
+                    st.markdown("### ✅ Artículos Procesados Exitosamente")
                     df_resultado = pd.DataFrame(rows_preview)
                     df_resultado["Código Oficial POS"] = df_resultado["Código Oficial POS"].astype(str)
                     st.dataframe(df_resultado, use_container_width=True, hide_index=True)
@@ -404,8 +419,10 @@ if modulo == "📄 Factura Individual":
                     output = io.BytesIO()
                     wb.save(output)
                     st.download_button("📥 Descargar Excel WilPOS Oficial", output.getvalue(), "Inventario_WilPOS_Actualizado.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-                else:
-                    st.warning("No se detectaron ítems válidos en la factura.")
+                
+                if omitted_items:
+                    st.markdown("### ⚠️ Artículos Omitidos / Descartados")
+                    st.dataframe(pd.DataFrame(omitted_items), use_container_width=True, hide_index=True)
 
 # ==========================================
 # MÓDULO 2: MÚLTIPLES FACTURAS (LOTE)
@@ -439,6 +456,7 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
             st.session_state["batch_signatures"] = set()
             st.session_state["batch_processed_count"] = 0
             st.session_state["batch_ok_count"] = 0
+            st.session_state["batch_omitted_summary"] = []
             st.session_state["is_live_processing"] = False
             st.session_state["quota_paused"] = False
 
@@ -462,6 +480,7 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
                 st.session_state["batch_signatures"] = set()
                 st.session_state["batch_processed_count"] = 0
                 st.session_state["batch_ok_count"] = 0
+                st.session_state["batch_omitted_summary"] = []
                 st.session_state["is_live_processing"] = False
                 st.session_state["quota_paused"] = False
                 st.session_state["use_openai_batch"] = False
@@ -497,7 +516,14 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
                     st.session_state["batch_audit_log"].append({"Archivo": file_info["name"], "Estado": "🟢 OK"})
                     items = parsed_data.get("items", [])
                     if isinstance(items, list):
-                        st.session_state["batch_accumulated_items"].extend(items)
+                        for itm in items:
+                            if isinstance(itm, dict):
+                                d_txt = str(itm.get("descripcion") or itm.get("nombre") or "").strip()
+                                p_val = safe_float(itm.get("precio_lista") or itm.get("costo_sin_itbis") or 0)
+                                if d_txt and p_val > 0:
+                                    st.session_state["batch_accumulated_items"].append(itm)
+                                else:
+                                    st.session_state["batch_omitted_summary"].append({"Archivo": file_info["name"], "Descripción": d_txt or "(Vacío)", "Razón": "Descripción vacía o precio 0"})
                 else:
                     st.session_state["batch_audit_log"].append({"Archivo": file_info["name"], "Estado": f"🔴 Error: {err_msg}"})
 
@@ -521,12 +547,12 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
                 if not isinstance(item, dict):
                     continue
                 
-                desc = str(item.get("descripcion") or item.get("nombre") or item.get("articulo") or "").strip()
+                desc = str(item.get("descripcion") or item.get("nombre") or "").strip()
                 if not desc:
                     continue
 
                 official_code, matched_name, _ = match_official_barcode(desc)
-                precio_lista = safe_float(item.get("precio_lista") or item.get("costo_sin_itbis") or item.get("precio") or 0)
+                precio_lista = safe_float(item.get("precio_lista") or item.get("costo_sin_itbis") or 0)
                 desc_pct = safe_float(item.get("descuento_porcentaje") or 0)
                 cant_comprada = safe_int(item.get("cantidad") or 1, 1)
                 empaque_ai = safe_int(item.get("empaque") or 1, 1)
@@ -570,15 +596,20 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
                 df_final_preview = df_grouped.sort_values(by="Stock", ascending=False).reset_index(drop=True)
                 df_final_preview["Código Barra"] = df_final_preview["Código Barra"].astype(str)
 
-                kpi1, kpi2, kpi3 = st.columns(3)
+                kpi1, kpi2, kpi3, kpi4 = st.columns(4)
                 kpi1.metric("📁 Facturas Procesadas", f"{st.session_state['batch_ok_count']}")
-                kpi2.metric("📦 Total Unidades en Stock", f"{total_unidades_inventario:,}")
+                kpi2.metric("📦 Total Líneas Válidas", f"{len(raw_items)}")
+                kpi3.metric("📦 Unidades en Stock", f"{total_unidades_inventario:,}")
                 
                 inversion_total_lote = (df_final_preview['Costo'] * df_final_preview['Stock']).sum()
-                kpi3.metric("💰 Inversión Neta Total (Sin ITBIS)", f"RD$ {inversion_total_lote:,.2f}")
+                kpi4.metric("💰 Inversión Neta (Sin ITBIS)", f"RD$ {inversion_total_lote:,.2f}")
 
                 st.markdown("---")
                 st.dataframe(df_final_preview, use_container_width=True, hide_index=True)
+
+                if st.session_state["batch_omitted_summary"]:
+                    with st.expander("⚠️ Ver ítems omitidos en el lote"):
+                        st.dataframe(pd.DataFrame(st.session_state["batch_omitted_summary"]), use_container_width=True, hide_index=True)
 
                 wb = openpyxl.Workbook()
                 ws_prod = wb.active
@@ -597,7 +628,7 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
 
                 output = io.BytesIO()
                 wb.save(output)
-                st.download_button("📥 Descargar Excel Consolidado Final", output.getvalue(), "Inventario_WilPOS_Consolidado_Corregido.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+                st.download_button("📥 Descargar Excel Consolidado Final", output.getvalue(), "Inventario_WilPOS_Consolidado_Corregido.xlsx", "application/vnd.openxmlformats-spreadsheetml.sheet")
             else:
                 st.warning("No se encontraron ítems válidos para consolidar.")
 
