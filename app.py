@@ -246,7 +246,7 @@ def process_invoice_with_ai(file_obj, file_type):
         for intento in range(2):
             try:
                 genai.configure(api_key=api_k)
-                model = genai.GenerativeModel('gemini-3.6-flash')
+                model = genai.GenerativeModel('gemini-1.5-flash')
                 file_obj.seek(0)
                 file_bytes = file_obj.read()
                 response = model.generate_content([
@@ -446,7 +446,6 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
                             "Archivo": file_info["name"], "Estado": "🟢 OK"
                         })
                         
-                        # Extracción universal flexible de ítems
                         items = parsed_data.get("items", [])
                         if not items:
                             for k, v in parsed_data.items():
@@ -479,7 +478,6 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
                 if not isinstance(item, dict):
                     continue
                 
-                # Extracción flexible de descripción y costos
                 desc = str(item.get("descripcion") or item.get("nombre") or item.get("articulo") or item.get("item") or "").strip()
                 if not desc:
                     continue
