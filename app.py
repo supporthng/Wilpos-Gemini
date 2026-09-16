@@ -222,7 +222,6 @@ def audit_and_correct_cost(costo_unit, cantidad, empaque):
     cant = safe_int(cantidad, 1)
     emp = safe_int(empaque, 1)
     
-    # AUDITORÍA INTELIGENTE DE COSTOS / CAJAS
     if emp <= 1:
         if c > 3000:
             return c / 6, 6
@@ -272,6 +271,9 @@ def process_invoice_with_ai(file_obj, file_type):
             return parsed_data, "✅ Éxito"
         except Exception as e:
             last_err = str(e)
+            # Detectar error 429 de cuota excedida
+            if "429" in last_err or "quota" in last_err.lower():
+                return None, "QUOTA_EXCEEDED"
             time.sleep(1)
             continue
     return None, last_err
@@ -298,7 +300,10 @@ if modulo == "📄 Factura Individual":
             with st.spinner("Analizando factura y asignando códigos oficiales del maestro..."):
                 parsed_data, success_msg = process_invoice_with_ai(uploaded_file, file_type)
 
-            if parsed_data:
+            if success_msg == "QUOTA_EXCEEDED":
+                st.error("⚠️ **Límite de cuota gratuita alcanzado (Error 429).** El sistema se ha detenido para evitar cobros automáticos.")
+                st.warning("Por favor, espere unos minutos o active manualmente el uso de API de pago si lo desea.")
+            elif parsed_data:
                 st.success(success_msg)
                 data_items = parsed_data.get("items", [])
                 rows_preview = []
@@ -399,31 +404,43 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
             st.session_state["batch_processed_count"] = 0
             st.session_state["batch_ok_count"] = 0
             st.session_state["is_live_processing"] = False
+            st.session_state["quota_paused"] = False
 
         processed_so_far = st.session_state["batch_processed_count"]
 
-        b_col1, b_col2 = st.columns(2)
-        iniciar_btn = b_col1.button("🚀 Iniciar Lote y Consolidar", type="primary")
-        reiniciar_lote = b_col2.button("🔄 Reiniciar Lote")
+        # Si el lote se pausó por cuota, mostramos la notificación y el botón de confirmación manual
+        if st.session_state.get("quota_paused", False):
+            st.error("⚠️ **Límite de cuota gratuita alcanzado (Error 429).** El proceso de lotes se ha detenido automáticamente para proteger tu cuenta de cobros no deseados.")
+            st.info("Para continuar procesando las facturas restantes utilizando una clave o saldo de pago, haz clic en el botón de confirmación a continuación:")
+            
+            if st.button("✅ Confirmar y continuar usando API de Pago / Cuota Extendida", type="primary"):
+                st.session_state["quota_paused"] = False
+                st.session_state["is_live_processing"] = True
+                st.rerun()
+        else:
+            b_col1, b_col2 = st.columns(2)
+            iniciar_btn = b_col1.button("🚀 Iniciar Lote y Consolidar", type="primary")
+            reiniciar_lote = b_col2.button("🔄 Reiniciar Lote")
 
-        if reiniciar_lote:
-            st.session_state["batch_accumulated_items"] = []
-            st.session_state["batch_audit_log"] = []
-            st.session_state["batch_signatures"] = set()
-            st.session_state["batch_processed_count"] = 0
-            st.session_state["batch_ok_count"] = 0
-            st.session_state["is_live_processing"] = False
-            if "cached_uploaded_files" in st.session_state:
-                del st.session_state["cached_uploaded_files"]
-            st.success("¡Lote reiniciado!")
-            st.rerun()
+            if reiniciar_lote:
+                st.session_state["batch_accumulated_items"] = []
+                st.session_state["batch_audit_log"] = []
+                st.session_state["batch_signatures"] = set()
+                st.session_state["batch_processed_count"] = 0
+                st.session_state["batch_ok_count"] = 0
+                st.session_state["is_live_processing"] = False
+                st.session_state["quota_paused"] = False
+                if "cached_uploaded_files" in st.session_state:
+                    del st.session_state["cached_uploaded_files"]
+                st.success("¡Lote reiniciado!")
+                st.rerun()
 
-        if iniciar_btn:
-            st.session_state["is_live_processing"] = True
-            st.rerun()
+            if iniciar_btn:
+                st.session_state["is_live_processing"] = True
+                st.rerun()
 
         is_live = st.session_state.get("is_live_processing", False)
-        if is_live:
+        if is_live and not st.session_state.get("quota_paused", False):
             if processed_so_far < total_files:
                 file_info = cached_files[processed_so_far]
                 current_num = processed_so_far + 1
@@ -434,7 +451,14 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
                 file_bytes_io = io.BytesIO(file_info["bytes"])
                 parsed_data, err_msg = process_invoice_with_ai(file_bytes_io, file_info["type"])
                 
-                time.sleep(0.3)
+                # Pausa anti-saturación de 3 segundos
+                time.sleep(3.0)
+
+                if err_msg == "QUOTA_EXCEEDED":
+                    # PAUSAR EL PROCESO Y PEDIR CONFIRMACIÓN MANUAL
+                    st.session_state["is_live_processing"] = False
+                    st.session_state["quota_paused"] = True
+                    st.rerun()
 
                 if parsed_data and isinstance(parsed_data, dict):
                     rnc_emisor = str(parsed_data.get("emisor_rnc", "")).strip()
