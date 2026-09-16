@@ -179,8 +179,8 @@ def process_invoice_gemini_flash(file_obj, file_type):
     for intento in range(2):
         try:
             genai.configure(api_key=ACTIVE_GEMINI_KEY)
-            # Modelo corregido y actualizado a gemini-2.5-flash
-            model = genai.GenerativeModel('gemini-2.5-flash')
+            # Modelo actualizado requerido por la API: gemini-3.6-flash
+            model = genai.GenerativeModel('gemini-3.6-flash')
             
             file_obj.seek(0)
             file_bytes = file_obj.read()
@@ -212,7 +212,7 @@ def process_invoice_gemini_flash(file_obj, file_type):
 # ==========================================
 if modulo == "📄 Factura Individual":
     st.markdown("<h2>📊 Automatizador de Facturas <span style='color: #0284c7;'>(Individual - Flash Gratuito)</span></h2>", unsafe_allow_html=True)
-    st.markdown("<p style='color: #64748b;'>Procesamiento optimizado con Gemini Flash y control de tasa integrado.</p>", unsafe_allow_html=True)
+    st.markdown("<p style='color: #64748b;'>Procesamiento optimizado con Gemini 3.6 Flash y control de tasa integrado.</p>", unsafe_allow_html=True)
     st.markdown("---")
 
     st.markdown('<div class="card-container">', unsafe_allow_html=True)
