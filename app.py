@@ -247,14 +247,14 @@ def process_invoice_with_ai(file_obj, file_type):
     for intento in range(2):
         try:
             genai.configure(api_key=ACTIVE_GEMINI_KEY)
-            model = genai.GenerativeModel('gemini-1.5-flash')
+            # Versión vigente y estable del modelo Flash
+            model = genai.GenerativeModel('gemini-2.5-flash')
             
             file_obj.seek(0)
             file_bytes = file_obj.read()
             
-            # Carga robusta usando PIL Image para evitar errores de formato en SDK
             if "pdf" in file_type.lower():
-                image_input = file_bytes # PDF bytes directos
+                image_input = file_bytes
             else:
                 image_input = Image.open(io.BytesIO(file_bytes))
 
@@ -432,7 +432,7 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
                 file_bytes_io = io.BytesIO(file_info["bytes"])
                 parsed_data, err_msg = process_invoice_with_ai(file_bytes_io, file_info["type"])
                 
-                time.sleep(0.4)
+                time.sleep(0.3)
 
                 if parsed_data and isinstance(parsed_data, dict):
                     rnc_emisor = str(parsed_data.get("emisor_rnc", "")).strip()
