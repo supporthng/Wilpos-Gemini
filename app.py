@@ -151,8 +151,8 @@ def clean_barcode(code_val):
     return s_val
 
 def extract_size_token(text):
-    """Extrae patrones de tamaño/volumen como 5CL, 50ML, 750ML, etc."""
-    match = re.search(r'\b\d+\s*(?:CL|ML|L|LT|OZ)\b', str(text).upper())
+    """Extrae patrones de tamaño/volumen como 5CL, 50ML, 750ML, GALON, etc."""
+    match = re.search(r'\b(?:\d+\s*(?:CL|ML|L|LT|OZ)|GALON)\b', str(text).upper())
     return match.group(0).replace(" ", "") if match else None
 
 def get_resolved_barcode(extracted_code, description):
@@ -170,27 +170,40 @@ def get_resolved_barcode(extracted_code, description):
     if desc_upper in st.session_state["barcode_memory"]:
         return st.session_state["barcode_memory"][desc_upper]
         
-    # Extraer el tamaño/presentación del ítem actual (ej: '5CL', '50ML', '750ML')
+    # Extraer tamaño y palabras clave principales (excluyendo conectores genéricos)
     target_size = extract_size_token(desc_upper)
+    palabras_desc = set(w for w in re.findall(r'\b\w+\b', desc_upper) if len(w) > 2 and w not in ['GALON', 'MIN', 'CON', 'LOS', 'LAS', 'DEL'])
 
-    def filter_by_size(keys_list):
-        if not target_size:
-            return keys_list
-        # Normalizar unidades equivalentes comunes (ej: 5CL == 50ML)
-        norm_target = target_size.replace("5CL", "50ML")
-        filtered = [k for k in keys_list if norm_target in k.replace(" ", "").replace("5CL", "50ML")]
-        return filtered if filtered else keys_list
+    def strict_match_filter(keys_list):
+        validos = []
+        for k in keys_list:
+            k_upper = k.upper()
+            
+            # Filtro estricto por tamaño si está presente
+            if target_size:
+                norm_target = target_size.replace("5CL", "50ML")
+                norm_k = k_upper.replace("5CL", "50ML")
+                if norm_target not in norm_k:
+                    continue
+            
+            # Validar coincidencia de al menos una palabra clave principal y significativa
+            palabras_k = set(w for w in re.findall(r'\b\w+\b', k_upper) if len(w) > 2)
+            interseccion = palabras_desc.intersection(palabras_k)
+            
+            if len(interseccion) > 0:
+                validos.append(k)
+        return validos
 
-    # 3. Búsqueda difusa inteligente respetando estrictamente el tamaño/presentación
-    master_keys = filter_by_size(list(st.session_state["master_catalog"].keys()))
+    # 3. Búsqueda difusa altamente restrictiva (cutoff elevado a 0.55 para evitar falsos positivos)
+    master_keys = strict_match_filter(list(st.session_state["master_catalog"].keys()))
     if master_keys:
-        coincidencias = difflib.get_close_matches(desc_upper, master_keys, n=1, cutoff=0.35)
+        coincidencias = difflib.get_close_matches(desc_upper, master_keys, n=1, cutoff=0.55)
         if coincidencias:
             return st.session_state["master_catalog"][coincidencias[0]]
             
-    memory_keys = filter_by_size(list(st.session_state["barcode_memory"].keys()))
+    memory_keys = strict_match_filter(list(st.session_state["barcode_memory"].keys()))
     if memory_keys:
-        coincidencias_mem = difflib.get_close_matches(desc_upper, memory_keys, n=1, cutoff=0.35)
+        coincidencias_mem = difflib.get_close_matches(desc_upper, memory_keys, n=1, cutoff=0.55)
         if coincidencias_mem:
             return st.session_state["barcode_memory"][coincidencias_mem[0]]
         
@@ -235,10 +248,10 @@ def process_invoice_exact_18(file_obj, file_type, use_paid_gemini=False, use_ope
         "Analiza esta factura o tiquet con máxima precisión horizontal y vertical. "
         "Extrae cada renglón de producto detallando: "
         "1. 'codigo_barras': código de barras oficial si lo trae impreso, de lo contrario déjalo vacío o S/C. "
-        "2. 'descripcion': texto completo de la descripción (incluyendo tamaño o volumen como 5CL, 50ML, 750ML, etc.). "
+        "2. 'descripcion': texto completo de la descripción (incluyendo tamaño o volumen como 5CL, 50ML, 750ML, GALON, etc.). "
         "3. 'cantidad': número exacto de unidades o cantidad comprada. "
         "4. 'unidad': 'CAJA' o 'BOT.' o 'UNIDAD'. "
-        "5. 'tamano': presentación o tamaño exacto (ej: 5 CL., 50 ML., 750 ML.). "
+        "5. 'tamano': presentación o tamaño exacto (ej: 5 CL., 50 ML., 750 ML., GALON). "
         "6. 'precio_lista': precio unitario o precio base. "
         "7. 'valor': monto total de la línea si no hay precio unitario explícito. "
         "8. 'descuento_porcentaje': porcentaje de descuento si aplica. "
@@ -304,7 +317,7 @@ def process_invoice_exact_18(file_obj, file_type, use_paid_gemini=False, use_ope
 # ==========================================
 if modulo == "📄 Factura Individual":
     st.markdown("<h2>📊 Automatizador de Facturas <span style='color: #0284c7;'>(Individual)</span></h2>", unsafe_allow_html=True)
-    st.markdown("<p style='color: #64748b;'>Extracción inteligente con validación estricta de tamaño/presentación.</p>", unsafe_allow_html=True)
+    st.markdown("<p style='color: #64748b;'>Extracción inteligente con validación estricta y segura de códigos.</p>", unsafe_allow_html=True)
     st.markdown("---")
 
     st.markdown('<div class="card-container">', unsafe_allow_html=True)
@@ -320,7 +333,7 @@ if modulo == "📄 Factura Individual":
         st.success(f"¡Archivo cargado: {uploaded_file.name}!")
         if st.button("🚀 Procesar Documento"):
             file_type = uploaded_file.type if hasattr(uploaded_file, 'type') else 'image/jpeg'
-            with st.spinner("Procesando y validando presentaciones..."):
+            with st.spinner("Procesando y validando códigos..."):
                 parsed_data, success_msg = process_invoice_exact_18(uploaded_file, file_type, use_paid_gemini=use_gemini_paid_api, use_openai_fallback=use_openai_single)
 
             if success_msg == "QUOTA_EXCEEDED":
@@ -443,7 +456,7 @@ if modulo == "📄 Factura Individual":
 # ==========================================
 elif modulo == "📂 Múltiples Facturas (Lote)":
     st.markdown("<h2>📂 Procesador por <span style='color: #0284c7;'>Lotes y Consolidación Oficial</span></h2>", unsafe_allow_html=True)
-    st.markdown("<p style='color: #64748b;'>Procesa múltiples facturas y tiquets con validación de presentaciones.</p>", unsafe_allow_html=True)
+    st.markdown("<p style='color: #64748b;'>Procesa múltiples facturas y tiquets con validación estricta de códigos.</p>", unsafe_allow_html=True)
     st.markdown("---")
 
     st.markdown('<div class="card-container">', unsafe_allow_html=True)
