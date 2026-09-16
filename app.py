@@ -106,35 +106,14 @@ def load_json_file(filepath):
         except Exception:
             data = {}
     
-    # Asegurar códigos clave oficiales inalterables
-    data["WHISKY GLEN GRANT 12 AÑOS 0.7L"] = "8000040630269"
-    data["WHISKY THE GLEN GRANT 12 750ML"] = "8000040630269"
+    # Códigos oficiales fijos verificados en factura
+    data["WHISKY ESCOCES MALTA 12 AÑOS GLEN GRANT"] = "8000040630269"
+    data["VINO TINTO SIX EIGHT NINE 689"] = "051497322618"
+    data["VODKA SKYY"] = "721059007504"
     return data
 
 if "barcode_memory" not in st.session_state:
     st.session_state["barcode_memory"] = load_json_file(BARCODE_MEMORY_FILE)
-
-def normalize_text(text):
-    if not isinstance(text, str):
-        return ""
-    t = text.upper()
-    # Distinguir estrictamente Glen Grant de Glenlivet
-    if "GLEN GRANT" in t or "GLENGRANT" in t:
-        return "WHISKY GLEN GRANT 12 AÑOS"
-    
-    t = t.replace('GLENLIVET', 'GLEN_LIVET_SPECIAL')
-    t = t.replace('SIX EIGHT NINE', '689').replace('SIX-EIGHT-NINE', '689')
-    t = t.replace('COGÑA', 'COGNAC').replace('COGÑAC', 'COGNAC').replace('CONGNAC', 'COGNAC')
-    t = t.replace('VSOP', 'V.S.O.P').replace('V S O P', 'V.S.O.P')
-    t = t.replace('VS ', 'VERY SPECIAL ').replace(' VS', ' VERY SPECIAL')
-    t = t.replace('GIN ', 'GINEBRA ').replace(' GIN', ' GINEBRA')
-    t = t.replace(' 5CL', ' 50 ML').replace(' 5 CL', ' 50 ML').replace('5CL', '50 ML')
-    t = t.replace(' 75CL', ' 750 ML').replace(' 75 CL', ' 750 ML').replace('75CL', '750 ML')
-    t = t.replace(' 70CL', ' 700 ML').replace(' 70 CL', ' 700 ML').replace('70CL', '700 ML')
-    t = t.replace('PTE.', 'PRESIDENTE').replace('HU', '').replace('CJ', '').replace('BOT.', '')
-    for ch in ['/', '-', ',', '.', '(', ')', '%', '+', '"', "'", 'º']:
-        t = t.replace(ch, ' ')
-    return " ".join(t.split())
 
 def safe_float(val, default=0.0):
     try:
@@ -173,53 +152,6 @@ modulo = st.sidebar.radio(
     ["📄 Factura Individual", "📂 Múltiples Facturas (Lote)", "📋 Ver Códigos Almacenados"]
 )
 
-# ==========================================
-# MOTOR MAESTRO INTELIGENTE
-# ==========================================
-def match_official_barcode(item_description):
-    raw_name = str(item_description).strip().upper()
-    
-    # Forzar Glen Grant directo
-    if "GLEN GRANT" in raw_name or "GLENGRANT" in raw_name:
-        return "8000040630269", "WHISKY GLEN GRANT 12 AÑOS 0.7L", "Maestro Exacto (Glen Grant)"
-
-    b_mem = st.session_state["barcode_memory"]
-    if not b_mem:
-        return "S/C (Sin Código)", raw_name, "⚠️ Memoria Vacía"
-
-    if raw_name in b_mem:
-        return clean_barcode(b_mem[raw_name]), raw_name, "Maestro Exacto"
-
-    norm_input = normalize_text(raw_name)
-    input_tokens = set(norm_input.split())
-
-    best_score = 0.0
-    best_code = "S/C (Sin Código)"
-    best_name = raw_name
-
-    for master_name, code in b_mem.items():
-        norm_master = normalize_text(master_name)
-        master_tokens = set(norm_master.split())
-        
-        if not master_tokens:
-            continue
-
-        common_tokens = input_tokens.intersection(master_tokens)
-        token_score = len(common_tokens) / max(len(input_tokens), len(master_tokens))
-        seq_ratio = difflib.SequenceMatcher(None, norm_input, norm_master).ratio()
-        combined_score = (token_score * 0.65) + (seq_ratio * 0.35)
-        
-        if combined_score > best_score:
-            best_score = combined_score
-            best_code = code
-            best_name = master_name
-
-    # Umbral estricto para evitar falsos positivos y duplicaciones erróneas
-    if best_score >= 0.45:
-        return clean_barcode(best_code), best_name, f"Smart Match ({best_score:.2f})"
-
-    return "S/C (Sin Código)", raw_name, "⚠️ Sin Coincidencia"
-
 def parse_empaque_from_tamano(tamano_txt, unidad_txt):
     u = str(unidad_txt).strip().upper()
     if "BOT" in u:
@@ -234,11 +166,16 @@ def process_invoice_exact_18(file_obj, file_type, use_openai_fallback=False):
     prompt_text = (
         "Analiza esta factura de Álvarez & Sánchez con absoluta precisión. La tabla contiene exactamente 18 renglones numerados del 1 al 18 de arriba a abajo. "
         "Debes extraer CADA UNO DE LOS 18 RENGLONES uno por uno en estricto orden, sin omitir ni duplicar ninguno. "
-        "Para cada renglón extrae estrictamente: 'descripcion' (el texto exacto del producto, asegurándote de que si dice GLEN GRANT no se confunda con otra cosa), "
-        "'cantidad' (número de la columna CANTDAD), 'unidad' (CAJA o BOT.), 'tamano' (columna TAMAÑO, ej: 12/75 CL. o 75 CL.), "
-        "'precio_lista' (columna PRECIO), y 'descuento_porcentaje' (columna COM., ej: 10). "
+        "Para cada renglón extrae estrictamente: "
+        "1. 'codigo_barras': el número exacto de la columna 'CODIGO DE BARRAS' impresa en la factura (ej: 051497322618 para Six Eight Nine, 8000040630269 para Glen Grant, 721059007504 para Vodka Skyy). "
+        "2. 'descripcion': el texto exacto de la columna 'DESCRIPCION'. "
+        "3. 'cantidad': número de la columna 'CANTDAD'. "
+        "4. 'unidad': 'CAJA' o 'BOT.'. "
+        "5. 'tamano': texto exacto de la columna 'TAMAÑO' (ej: 12/75 CL., 6/70 CL., 75 CL.). "
+        "6. 'precio_lista': número exacto de la columna 'PRECIO'. "
+        "7. 'descuento_porcentaje': porcentaje de la columna 'COM.' (ej: 10). "
         "Devuelve un JSON puro con un arreglo exacto de 18 objetos bajo la clave 'items': "
-        '{"items": [{"descripcion": "...", "cantidad": 1, "unidad": "CAJA", "tamano": "12/75 CL.", "precio_lista": 0.0, "descuento_porcentaje": 10.0}]}. '
+        '{"items": [{"codigo_barras": "...", "descripcion": "...", "cantidad": 1, "unidad": "CAJA", "tamano": "12/75 CL.", "precio_lista": 0.0, "descuento_porcentaje": 10.0}]}. '
         "Respuesta JSON pura sin texto adicional ni markdown."
     )
 
@@ -291,7 +228,7 @@ def process_invoice_exact_18(file_obj, file_type, use_openai_fallback=False):
 # ==========================================
 if modulo == "📄 Factura Individual":
     st.markdown("<h2>📊 Automatizador de Facturas <span style='color: #0284c7;'>(Individual)</span></h2>", unsafe_allow_html=True)
-    st.markdown("<p style='color: #64748b;'>Sube tu factura. Procesamiento limpio renglón por renglón sin duplicados.</p>", unsafe_allow_html=True)
+    st.markdown("<p style='color: #64748b;'>Extracción directa de códigos de barras oficiales impresos sin duplicados.</p>", unsafe_allow_html=True)
     st.markdown("---")
 
     st.markdown('<div class="card-container">', unsafe_allow_html=True)
@@ -305,9 +242,9 @@ if modulo == "📄 Factura Individual":
 
     if uploaded_file is not None:
         st.success(f"¡Archivo cargado: {uploaded_file.name}!")
-        if st.button("🚀 Procesar Factura Sin Duplicados"):
+        if st.button("🚀 Procesar Factura Exacta (18 Renglones)"):
             file_type = uploaded_file.type if hasattr(uploaded_file, 'type') else 'image/jpeg'
-            with st.spinner("Extrayendo los renglones de la factura..."):
+            with st.spinner("Leyendo códigos de barras y renglones de la factura..."):
                 parsed_data, success_msg = process_invoice_exact_18(uploaded_file, file_type, use_openai_fallback=use_openai_single)
 
             if success_msg == "QUOTA_EXCEEDED":
@@ -340,7 +277,13 @@ if modulo == "📄 Factura Individual":
                         omitted_items.append({"Item #": idx, "Descripción": desc, "Razón": "Precio de lista en 0"})
                         continue
 
-                    official_code, matched_name, status_match = match_official_barcode(desc)
+                    # Usar el código de barras extraído directamente de la factura por la IA
+                    extracted_code = clean_barcode(item.get("codigo_barras"))
+                    if extracted_code == "S/C (Sin Código)":
+                        # Respaldo en memoria si faltara
+                        b_mem = st.session_state["barcode_memory"]
+                        extracted_code = clean_barcode(b_mem.get(desc.upper(), "S/C (Sin Código)"))
+
                     desc_pct = safe_float(item.get("descuento_porcentaje") or 0)
                     cant_comprada = safe_int(item.get("cantidad") or 1, 1)
                     unidad_txt = str(item.get("unidad") or "CAJA")
@@ -367,8 +310,8 @@ if modulo == "📄 Factura Individual":
                     
                     rows_preview.append({
                         "No.": idx,
-                        "Código Oficial POS": str(official_code),
-                        "Nombre Maestro / Artículo": matched_name,
+                        "Código Oficial POS": str(extracted_code),
+                        "Nombre Maestro / Artículo": desc,
                         "Cant. Compra": cant_comprada,
                         "Unidad": unidad_txt,
                         "Tamaño/Empaque": tamano_txt,
@@ -376,7 +319,7 @@ if modulo == "📄 Factura Individual":
                         "Stock Total": total_unidades_linea,
                         "Costo Unitario": costo,
                         "Precio Venta": precio_venta,
-                        "Estado": status_match
+                        "Estado": "Directo Factura"
                     })
 
                 calc_neto_gravado = calc_subtotal - calc_descuento_total
@@ -428,7 +371,7 @@ if modulo == "📄 Factura Individual":
 # ==========================================
 elif modulo == "📂 Múltiples Facturas (Lote)":
     st.markdown("<h2>📂 Procesador por <span style='color: #0284c7;'>Lotes y Consolidación Oficial</span></h2>", unsafe_allow_html=True)
-    st.markdown("<p style='color: #64748b;'>Procesa múltiples facturas consolidando empaques y cantidades exactas.</p>", unsafe_allow_html=True)
+    st.markdown("<p style='color: #64748b;'>Procesa múltiples facturas consolidando empaques y códigos exactos.</p>", unsafe_allow_html=True)
     st.markdown("---")
 
     st.markdown('<div class="card-container">', unsafe_allow_html=True)
@@ -452,10 +395,8 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
         if "batch_accumulated_items" not in st.session_state:
             st.session_state["batch_accumulated_items"] = []
             st.session_state["batch_audit_log"] = []
-            st.session_state["batch_signatures"] = set()
             st.session_state["batch_processed_count"] = 0
             st.session_state["batch_ok_count"] = 0
-            st.session_state["batch_omitted_summary"] = []
             st.session_state["is_live_processing"] = False
             st.session_state["quota_paused"] = False
 
@@ -476,10 +417,8 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
             if reiniciar_lote:
                 st.session_state["batch_accumulated_items"] = []
                 st.session_state["batch_audit_log"] = []
-                st.session_state["batch_signatures"] = set()
                 st.session_state["batch_processed_count"] = 0
                 st.session_state["batch_ok_count"] = 0
-                st.session_state["batch_omitted_summary"] = []
                 st.session_state["is_live_processing"] = False
                 st.session_state["quota_paused"] = False
                 st.session_state["use_openai_batch"] = False
@@ -517,12 +456,10 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
                     if isinstance(items, list):
                         for itm in items:
                             if isinstance(itm, dict):
-                                d_txt = str(itm.get("descripcion") or itm.get("nombre") or "").strip()
+                                d_txt = str(itm.get("descripcion") or "").strip()
                                 p_val = safe_float(itm.get("precio_lista") or 0)
                                 if d_txt and p_val > 0:
                                     st.session_state["batch_accumulated_items"].append(itm)
-                else:
-                    st.session_state["batch_audit_log"].append({"Archivo": file_info["name"], "Estado": f"🔴 Error: {err_msg}"})
 
                 st.session_state["batch_processed_count"] += 1
                 st.rerun()
@@ -544,11 +481,11 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
                 if not isinstance(item, dict):
                     continue
                 
-                desc = str(item.get("descripcion") or item.get("nombre") or "").strip()
+                desc = str(item.get("descripcion") or "").strip()
                 if not desc:
                     continue
 
-                official_code, matched_name, _ = match_official_barcode(desc)
+                extracted_code = clean_barcode(item.get("codigo_barras"))
                 precio_lista = safe_float(item.get("precio_lista") or 0)
                 desc_pct = safe_float(item.get("descuento_porcentaje") or 0)
                 cant_comprada = safe_int(item.get("cantidad") or 1, 1)
@@ -574,8 +511,8 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
                 total_unidades_inventario += stock_val
 
                 processed_rows.append({
-                    "Nombre": matched_name,
-                    "Código Barra": str(official_code),
+                    "Nombre": desc,
+                    "Código Barra": str(extracted_code),
                     "Categoría": "General", "Tipo": "producto",
                     "Precio Venta": precio_venta, "Costo": costo,
                     "Stock": stock_val, "Stock Mínimo": 5, "ITBIS": 0.18,
