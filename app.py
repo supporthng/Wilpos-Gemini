@@ -184,11 +184,9 @@ def parse_empaque_from_tamano(tamano_txt, unidad_txt, descripcion_txt=""):
     u = str(unidad_txt).strip().upper()
     d = str(descripcion_txt).strip().upper()
     
-    # Si la unidad es botella suelta explícita
     if "BOT" in u and "CAJA" not in u:
         return 1
         
-    # Reglas específicas solicitadas
     if "INFUSIONS" in d:
         return 6
     if "GLEN GRANT" in d:
@@ -202,18 +200,20 @@ def parse_empaque_from_tamano(tamano_txt, unidad_txt, descripcion_txt=""):
 
 def process_invoice_exact_18(file_obj, file_type, use_paid_gemini=False, use_openai_fallback=False):
     prompt_text = (
-        "Analiza esta factura de Álvarez & Sánchez con extrema precisión horizontal. La tabla tiene filas numeradas. "
-        "Debes asegurar que el 'codigo_barras' de la columna izquierda esté estrictamente alineado con la 'descripcion' de esa misma línea horizontal exacta, sin desplazar los códigos hacia arriba ni hacia abajo. "
+        "Analiza esta factura de Álvarez & Sánchez con extrema precisión horizontal y vertical. La tabla tiene filas numeradas del 1 al 18. "
+        "Presta especial atención a las columnas de la izquierda: 'CANTDAD' y 'UNID.'. "
+        "Asegúrate de leer correctamente el número exacto de la columna CANTDAD (por ejemplo, si dice 6 BOT., la cantidad es 6, no 1). "
+        "Verifica que el 'codigo_barras' de la columna izquierda esté estrictamente alineado con la 'descripcion' de esa misma línea horizontal exacta, sin desplazar los códigos hacia arriba ni hacia abajo. "
         "Para cada renglón extrae exactamente: "
-        "1. 'codigo_barras': el número exacto de la columna 'CODIGO DE BARRAS' que se encuentra en la misma fila horizontal de la descripción. "
+        "1. 'codigo_barras': el código de barras exacto de la fila. "
         "2. 'descripcion': el texto exacto de la columna 'DESCRIPCION'. "
-        "3. 'cantidad': número de la columna 'CANTDAD'. "
+        "3. 'cantidad': número exacto de la columna 'CANTDAD' (ej: 6 para las líneas de vodka inferior). "
         "4. 'unidad': 'CAJA' o 'BOT.'. "
-        "5. 'tamano': texto exacto de la columna 'TAMAÑO' (ej: 12/75 CL., 6/70 CL., 75 CL.). "
+        "5. 'tamano': texto exacto de la columna 'TAMAÑO' (ej: 12/75 CL., 75 CL.). "
         "6. 'precio_lista': número exacto de la columna 'PRECIO'. "
-        "7. 'descuento_porcentaje': porcentaje de la columna 'COM.' (ej: 10). "
+        "7. 'descuento_porcentaje': porcentaje de la columna 'COM.'. "
         "Devuelve un JSON puro con un arreglo exacto de objetos bajo la clave 'items': "
-        '{"items": [{"codigo_barras": "...", "descripcion": "...", "cantidad": 1, "unidad": "CAJA", "tamano": "12/75 CL.", "precio_lista": 0.0, "descuento_porcentaje": 10.0}]}. '
+        '{"items": [{"codigo_barras": "...", "descripcion": "...", "cantidad": 6, "unidad": "BOT.", "tamano": "75 CL.", "precio_lista": 0.0, "descuento_porcentaje": 10.0}]}. '
         "Respuesta JSON pura sin texto adicional ni markdown."
     )
 
