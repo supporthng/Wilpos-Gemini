@@ -223,21 +223,43 @@ def match_official_barcode(item_description):
 
     return "S/C (Sin Código)", raw_name, "⚠️ Sin Coincidencia en Maestro"
 
-def audit_and_correct_cost(costo_unit, cantidad, empaque):
+def audit_and_correct_cost(item_desc, costo_unit, cantidad, empaque):
     c = safe_float(costo_unit)
     cant = safe_int(cantidad, 1)
     emp = safe_int(empaque, 1)
+    d = str(item_desc).upper()
     
+    # AUDITORÍA INTELIGENTE DE CAJAS Y EMPAQUES
     if emp <= 1:
-        if c > 3000:
-            return c / 6, 6
-        return c, 1
+        # Cervezas (Cajas de 24 o 12 para presentaciones grandes)
+        if any(b in d for b in ["PRESIDENTE", "MICHELOB", "COORS", "BRAHMA", "CORONA", "STELLA", "HEINEKEN", "BECKS"]):
+            if c > 800:
+                if "22OZ" in d or "650 ML" in d or "GRANDE" in d:
+                    return round(c / 12, 2), 12
+                else:
+                    return round(c / 24, 2), 24
+        
+        # Licores y Vinos (Cajas de 6)
+        if any(w in d for w in ["VINO", "WHISKY", "VODKA", "TEQUILA", "RON", "RUM", "GIN", "COGNAC", "LICOR", "FIREBALL", "CAMPARI", "AMARETTO", "KAHLUA", "MIDORI"]):
+            if c > 1200:
+                return round(c / 6, 2), 6
+
+        # Bebidas no alcohólicas / Energizantes / Jugos (Cajas de 12 o 24)
+        if any(bev in d for bev in ["GATORADE", "ALOE", "CLAMATO", "RED BULL", "MONSTER", "COCA", "PEPSI", "AGUA", "OCEAN SPRAY"]):
+            if c > 800:
+                return round(c / 12, 2), 12
+
+        # Regla general para cualquier producto con costo total elevado (> 2500)
+        if c > 2500:
+            return round(c / 6, 2), 6
+            
+        return round(c, 2), 1
     
     if c > 800 and (c / emp) < c:
         if (c / emp) >= 5:
-            return c / emp, emp
+            return round(c / emp, 2), emp
             
-    return c, emp
+    return round(c, 2), emp
 
 def process_with_openai(file_obj, file_type):
     if not ACTIVE_OPENAI_KEY:
@@ -373,7 +395,7 @@ if modulo == "📄 Factura Individual":
                     cant_comprada = safe_int(item.get("cantidad") or item.get("cant") or 1, 1)
                     empaque_val = safe_int(item.get("empaque") or item.get("unidad_empaque") or 1, 1)
                     
-                    costo, empaque_val = audit_and_correct_cost(raw_costo, cant_comprada, empaque_val)
+                    costo, empaque_val = audit_and_correct_cost(desc, raw_costo, cant_comprada, empaque_val)
                     raw_pv = (costo * multiplicador_ganancia) * 1.18
                     precio_venta = round_to_nearest_5(raw_pv)
                     stock_val = cant_comprada * empaque_val
@@ -599,7 +621,7 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
                 cant_comprada = safe_int(item.get("cantidad") or item.get("cant") or 1, 1)
                 empaque_val = safe_int(item.get("empaque") or item.get("unidad_empaque") or 1, 1)
 
-                costo, empaque_val = audit_and_correct_cost(raw_costo, cant_comprada, empaque_val)
+                costo, empaque_val = audit_and_correct_cost(desc, raw_costo, cant_comprada, empaque_val)
                 raw_pv = (costo * multiplicador_ganancia) * 1.18
                 precio_venta = round_to_nearest_5(raw_pv)
                 stock_val = cant_comprada * empaque_val
