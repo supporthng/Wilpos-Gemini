@@ -222,14 +222,20 @@ def audit_and_correct_cost(costo_unit, cantidad, empaque):
     cant = safe_int(cantidad, 1)
     emp = safe_int(empaque, 1)
     
+    # AUDITORÍA INTELIGENTE DE COSTOS / CAJAS
     if emp <= 1:
-        return c
-        
+        # Si el empaque detectado es 1 pero el costo unitario es extremadamente alto (> 3000 DOP),
+        # es un costo total de caja/pack. Lo ajustamos dividiendo entre 6 (estándar de caja de licores).
+        if c > 3000:
+            return c / 6, 6
+        return c, 1
+    
+    # Si empaque > 1 pero el costo por unidad empaque sigue siendo mayor al costo total o desproporcionado
     if c > 800 and (c / emp) < c:
         if (c / emp) >= 5:
-            return c / emp
+            return c / emp, emp
             
-    return c
+    return c, emp
 
 def process_invoice_with_ai(file_obj, file_type):
     if not ACTIVE_GEMINI_KEY:
@@ -247,7 +253,6 @@ def process_invoice_with_ai(file_obj, file_type):
     for intento in range(2):
         try:
             genai.configure(api_key=ACTIVE_GEMINI_KEY)
-            # Modelo actualizado requerido por la API
             model = genai.GenerativeModel('gemini-3.6-flash')
             
             file_obj.seek(0)
@@ -310,7 +315,7 @@ if modulo == "📄 Factura Individual":
                     cant_comprada = safe_int(item.get("cantidad") or item.get("cant") or 1, 1)
                     empaque_val = safe_int(item.get("empaque") or item.get("unidad_empaque") or 1, 1)
                     
-                    costo = audit_and_correct_cost(raw_costo, cant_comprada, empaque_val)
+                    costo, empaque_val = audit_and_correct_cost(raw_costo, cant_comprada, empaque_val)
                     raw_pv = (costo * multiplicador_ganancia) * 1.18
                     precio_venta = round_to_nearest_5(raw_pv)
                     stock_val = cant_comprada * empaque_val
@@ -500,7 +505,7 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
                 cant_comprada = safe_int(item.get("cantidad") or item.get("cant") or 1, 1)
                 empaque_val = safe_int(item.get("empaque") or item.get("unidad_empaque") or 1, 1)
 
-                costo = audit_and_correct_cost(raw_costo, cant_comprada, empaque_val)
+                costo, empaque_val = audit_and_correct_cost(raw_costo, cant_comprada, empaque_val)
                 raw_pv = (costo * multiplicador_ganancia) * 1.18
                 precio_venta = round_to_nearest_5(raw_pv)
                 stock_val = cant_comprada * empaque_val
