@@ -213,7 +213,12 @@ def match_official_barcode(item_description):
 
     return "S/C (Sin Código)", raw_name, "⚠️ Sin Coincidencia"
 
-def parse_empaque_from_description(item_desc, ai_empaque):
+def parse_empaque_and_unit(item_desc, unidad_factura, ai_empaque):
+    u = str(unidad_factura).strip().upper()
+    # Si la unidad en la factura es BOT. o UNID., es una compra unitaria directa (empaque = 1)
+    if any(term in u for term in ["BOT", "UNID", "UN", "PZA"]):
+        return 1
+        
     emp_ai = safe_int(ai_empaque, 1)
     if emp_ai > 1:
         return emp_ai
@@ -242,7 +247,7 @@ def parse_empaque_from_description(item_desc, ai_empaque):
     if any(bev in d for bev in ["GATORADE", "ALOE", "CLAMATO", "REDBULL", "MONSTER", "COCA", "PEPSI", "AGUA", "OCEANSPRAY", "FOURLOKO", "THEONE", "SCHWEPPES", "FEVER TREE"]):
         return 12
 
-    return 1
+    return 12 # Por defecto en licores mayoristas es caja de 12 si no especifica unidad
 
 def process_invoice_with_ai(file_obj, file_type, use_openai_fallback=False):
     if use_openai_fallback:
@@ -255,13 +260,13 @@ def process_invoice_with_ai(file_obj, file_type, use_openai_fallback=False):
         data_url = f"data:application/pdf;base64,{b64_data}" if "pdf" in file_type.lower() else f"data:image/jpeg;base64,{b64_data}"
 
         prompt_text = (
-            "Analiza esta factura rigurosamente línea por línea de arriba a abajo. Esta página contiene exactamente 18 renglones de productos. "
-            "NO omitas ninguno ni compactes filas. Para cada renglón extrae estrictamente: "
-            "'descripcion', 'cantidad' (número de cajas), 'empaque', "
-            "'precio_lista' (el precio unitario o de caja indicado en la columna PRECIO antes de descuento, ej: 15600.0 para el Cune), "
-            "y 'descuento_porcentaje' (el porcentaje indicado en la columna COM. o DESC., ej: 10 para 10%). "
+            "Analiza esta factura rigurosamente línea por línea de arriba a abajo. Esta página contiene exactamente 18 renglones. "
+            "Para cada renglón extrae exactamente lo que dice su fila: "
+            "'descripcion', 'cantidad' (número indicado en la columna CANTDAD), 'unidad' (lo que indica la columna UNID., ej: CAJA, BOT., UNID.), "
+            "'precio_lista' (el precio exacto de la columna PRECIO correspondiente a ese renglón específico), "
+            "y 'descuento_porcentaje' (el porcentaje de la columna COM., ej: 10 para 10%). "
             "Devuelve un JSON puro con esta estructura exacta: "
-            '{"subtotal": 0.0, "descuento_total": 0.0, "itbis": 0.0, "total": 0.0, "items": [{"descripcion": "...", "cantidad": 1, "empaque": 12, "precio_lista": 0.0, "descuento_porcentaje": 10.0}]}. '
+            '{"subtotal": 0.0, "descuento_total": 0.0, "itbis": 0.0, "total": 0.0, "items": [{"descripcion": "...", "cantidad": 1, "unidad": "CAJA", "precio_lista": 0.0, "descuento_porcentaje": 10.0}]}. '
             "Respuesta JSON pura sin texto adicional ni markdown."
         )
         try:
@@ -282,13 +287,13 @@ def process_invoice_with_ai(file_obj, file_type, use_openai_fallback=False):
         return None, "Falta clave API de Gemini"
 
     prompt_text = (
-        "Analiza esta factura rigurosamente línea por línea de arriba a abajo. Esta página contiene exactamente 18 renglones de productos. "
-        "NO omitas ninguno ni compactes filas. Para cada renglón extrae estrictamente: "
-        "'descripcion', 'cantidad' (número de cajas), 'empaque', "
-        "'precio_lista' (el precio unitario o de caja indicado en la columna PRECIO antes de descuento, ej: 15600.0 para el Cune), "
-        "y 'descuento_porcentaje' (el porcentaje indicado en la columna COM. o DESC., ej: 10 para 10%). "
+        "Analiza esta factura rigurosamente línea por línea de arriba a abajo. Esta página contiene exactamente 18 renglones. "
+        "Para cada renglón extrae exactamente lo que dice su fila: "
+        "'descripcion', 'cantidad' (número indicado en la columna CANTDAD), 'unidad' (lo que indica la columna UNID., ej: CAJA, BOT., UNID.), "
+        "'precio_lista' (el precio exacto de la columna PRECIO correspondiente a ese renglón específico), "
+        "y 'descuento_porcentaje' (el porcentaje de la columna COM., ej: 10 para 10%). "
         "Devuelve un JSON puro con esta estructura exacta: "
-        '{"subtotal": 0.0, "descuento_total": 0.0, "itbis": 0.0, "total": 0.0, "items": [{"descripcion": "...", "cantidad": 1, "empaque": 12, "precio_lista": 0.0, "descuento_porcentaje": 10.0}]}. '
+        '{"subtotal": 0.0, "descuento_total": 0.0, "itbis": 0.0, "total": 0.0, "items": [{"descripcion": "...", "cantidad": 1, "unidad": "CAJA", "precio_lista": 0.0, "descuento_porcentaje": 10.0}]}. '
         "Respuesta JSON pura sin texto adicional."
     )
 
@@ -316,7 +321,7 @@ def process_invoice_with_ai(file_obj, file_type, use_openai_fallback=False):
 # ==========================================
 if modulo == "📄 Factura Individual":
     st.markdown("<h2>📊 Automatizador de Facturas <span style='color: #0284c7;'>(Individual)</span></h2>", unsafe_allow_html=True)
-    st.markdown("<p style='color: #64748b;'>Sube tu factura. El sistema muestra absolutamente todos los renglones uno por uno para tu control físico.</p>", unsafe_allow_html=True)
+    st.markdown("<p style='color: #64748b;'>Sube tu factura. El sistema procesa cada renglón con su unidad, precio y descuento exacto.</p>", unsafe_allow_html=True)
     st.markdown("---")
 
     st.markdown('<div class="card-container">', unsafe_allow_html=True)
@@ -370,11 +375,7 @@ if modulo == "📄 Factura Individual":
                         omitted_items.append({"Item #": idx, "Descripción": "(Sin descripción)", "Razón": "Línea sin descripción"})
                         continue
 
-                    precio_lista = safe_float(
-                        item.get("precio_lista") or 
-                        item.get("precio") or 0
-                    )
-                    
+                    precio_lista = safe_float(item.get("precio_lista") or 0)
                     if precio_lista <= 0:
                         omitted_items.append({"Item #": idx, "Descripción": desc, "Razón": "Precio de lista en 0"})
                         continue
@@ -382,32 +383,33 @@ if modulo == "📄 Factura Individual":
                     official_code, matched_name, status_match = match_official_barcode(desc)
                     desc_pct = safe_float(item.get("descuento_porcentaje") or 0)
                     cant_comprada = safe_int(item.get("cantidad") or 1, 1)
-                    empaque_ai = safe_int(item.get("empaque") or 1, 1)
+                    unidad_txt = str(item.get("unidad") or "CAJA")
                     
-                    empaque_val = parse_empaque_from_description(desc, empaque_ai)
+                    empaque_val = parse_empaque_and_unit(desc, unidad_txt, 1)
                     
-                    # Cálculo matemático exacto contable
+                    # Cálculo contable exacto
                     importe_bruto = precio_lista * cant_comprada
                     descuento_linea = importe_bruto * (desc_pct / 100.0)
                     importe_neto_linea = importe_bruto - descuento_linea
                     
-                    total_unidades_linea = cant_comprada * empaque_val
-                    if total_unidades_linea > 0:
-                        costo = round(importe_neto_linea / total_unidades_linea, 2)
+                    if empaque_val == 1:
+                        total_unidades_linea = cant_comprada
+                        costo = round(importe_neto_linea / cant_comprada, 2) if cant_comprada > 0 else round(importe_neto_linea, 2)
                     else:
-                        costo = round(importe_neto_linea, 2)
+                        total_unidades_linea = cant_comprada * empaque_val
+                        costo = round(importe_neto_linea / total_unidades_linea, 2) if total_unidades_linea > 0 else round(importe_neto_linea, 2)
 
                     raw_pv = (costo * multiplicador_ganancia) * 1.18
                     precio_venta = round_to_nearest_5(raw_pv)
-                    stock_val = total_unidades_linea
                     
                     rows_preview.append({
                         "No.": idx,
                         "Código Oficial POS": str(official_code),
                         "Nombre Maestro / Artículo": matched_name,
                         "Cant. Compra": cant_comprada,
+                        "Unidad": unidad_txt,
                         "Empaque": empaque_val,
-                        "Stock Total": stock_val,
+                        "Stock Total": total_unidades_linea,
                         "Costo Unitario": costo,
                         "Precio Venta": precio_venta,
                         "Estado": status_match
@@ -416,7 +418,7 @@ if modulo == "📄 Factura Individual":
                 st.info(f"📋 **Auditoría de Lectura:** Se detectaron **{len(data_items)} ítems** brutos en la factura. Procesados con éxito: **{len(rows_preview)}** | Omitidos: **{len(omitted_items)}**")
 
                 if rows_preview:
-                    st.markdown("### ✅ Artículos Procesados Exitosamente (Sin Agrupar para Control Físico)")
+                    st.markdown("### ✅ Artículos Procesados Exitosamente")
                     df_resultado = pd.DataFrame(rows_preview)
                     df_resultado["Código Oficial POS"] = df_resultado["Código Oficial POS"].astype(str)
                     
@@ -454,7 +456,7 @@ if modulo == "📄 Factura Individual":
 # ==========================================
 elif modulo == "📂 Múltiples Facturas (Lote)":
     st.markdown("<h2>📂 Procesador por <span style='color: #0284c7;'>Lotes y Consolidación Oficial</span></h2>", unsafe_allow_html=True)
-    st.markdown("<p style='color: #64748b;'>Procesa múltiples facturas analizando empaques y consolidando sin duplicados.</p>", unsafe_allow_html=True)
+    st.markdown("<p style='color: #64748b;'>Procesa múltiples facturas analizando unidades y consolidando sin duplicados.</p>", unsafe_allow_html=True)
     st.markdown("---")
 
     st.markdown('<div class="card-container">', unsafe_allow_html=True)
@@ -580,19 +582,20 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
                 precio_lista = safe_float(item.get("precio_lista") or 0)
                 desc_pct = safe_float(item.get("descuento_porcentaje") or 0)
                 cant_comprada = safe_int(item.get("cantidad") or 1, 1)
-                empaque_ai = safe_int(item.get("empaque") or 1, 1)
+                unidad_txt = str(item.get("unidad") or "CAJA")
 
-                empaque_val = parse_empaque_from_description(desc, empaque_ai)
+                empaque_val = parse_empaque_and_unit(desc, unidad_txt, 1)
                 
                 importe_bruto = precio_lista * cant_comprada
                 descuento_linea = importe_bruto * (desc_pct / 100.0)
                 importe_neto_linea = importe_bruto - descuento_linea
                 
-                total_unidades_linea = cant_comprada * empaque_val
-                if total_unidades_linea > 0:
-                    costo = round(importe_neto_linea / total_unidades_linea, 2)
+                if empaque_val == 1:
+                    total_unidades_linea = cant_comprada
+                    costo = round(importe_neto_linea / cant_comprada, 2) if cant_comprada > 0 else round(importe_neto_linea, 2)
                 else:
-                    costo = round(importe_neto_linea, 2)
+                    total_unidades_linea = cant_comprada * empaque_val
+                    costo = round(importe_neto_linea / total_unidades_linea, 2) if total_unidades_linea > 0 else round(importe_neto_linea, 2)
 
                 raw_pv = (costo * multiplicador_ganancia) * 1.18
                 precio_venta = round_to_nearest_5(raw_pv)
