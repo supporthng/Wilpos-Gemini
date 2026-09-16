@@ -233,7 +233,7 @@ def audit_and_correct_cost(costo_unit, cantidad, empaque):
 
 def process_invoice_with_ai(file_obj, file_type):
     if not ACTIVE_GEMINI_KEY:
-        return None, "❌ Error: No se encontró ninguna clave API de Gemini configurada en st.secrets o variables de entorno."
+        return None, "Falta clave API"
 
     prompt_text = (
         "Analiza esta factura detalladamente. Extrae los datos de cabecera: 'emisor_rnc', 'emisor_nombre', 'numero_documento', 'fecha', 'subtotal', 'itbis', 'total'. "
@@ -243,6 +243,7 @@ def process_invoice_with_ai(file_obj, file_type):
         "Respuesta JSON pura sin texto adicional."
     )
 
+    last_err = ""
     for intento in range(2):
         try:
             genai.configure(api_key=ACTIVE_GEMINI_KEY)
@@ -259,11 +260,12 @@ def process_invoice_with_ai(file_obj, file_type):
             if raw_text.endswith("```"):
                 raw_text = raw_text[:-3]
             parsed_data = json.loads(raw_text.strip())
-            return parsed_data, f"✅ Éxito"
+            return parsed_data, "✅ Éxito"
         except Exception as e:
-            time.sleep(1.5)
+            last_err = str(e)
+            time.sleep(1)
             continue
-    return None, "❌ Error de conexión o formato con la IA"
+    return None, last_err
 
 # ==========================================
 # MÓDULO 1: FACTURA INDIVIDUAL
@@ -423,11 +425,10 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
                 file_bytes_io = io.BytesIO(file_info["bytes"])
                 parsed_data, err_msg = process_invoice_with_ai(file_bytes_io, file_info["type"])
                 
-                time.sleep(0.5)
+                time.sleep(0.3)
 
                 if parsed_data and isinstance(parsed_data, dict):
                     rnc_emisor = str(parsed_data.get("emisor_rnc", "")).strip()
-                    nombre_prov = str(parsed_data.get("emisor_nombre", "Desconocido")).strip()
                     num_doc = str(parsed_data.get("numero_documento", "")).strip()
                     fecha_doc = str(parsed_data.get("fecha", "")).strip()
                     total_doc_val = safe_float(parsed_data.get("total", 0))
@@ -456,7 +457,7 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
                             st.session_state["batch_accumulated_items"].extend(items)
                 else:
                     st.session_state["batch_audit_log"].append({
-                        "Archivo": file_info["name"], "Estado": f"🔴 Error IA ({err_msg})"
+                        "Archivo": file_info["name"], "Estado": f"🔴 Error: {err_msg}"
                     })
 
                 st.session_state["batch_processed_count"] += 1
@@ -465,6 +466,11 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
                 st.session_state["is_live_processing"] = False
                 st.success("🎉 ¡Lote finalizado con éxito!")
                 st.rerun()
+
+        # Mostrar registro de auditoría en tiempo real de cada archivo procesado
+        if st.session_state["batch_audit_log"]:
+            with st.expander("📋 Ver Registro de Auditoría del Lote (Detalle por Archivo)", expanded=False):
+                st.dataframe(pd.DataFrame(st.session_state["batch_audit_log"]), use_container_width=True, hide_index=True)
 
         if st.session_state["batch_processed_count"] > 0:
             st.markdown("---")
@@ -579,7 +585,7 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
                 wb.save(output)
                 st.download_button("📥 Descargar Excel Consolidado Final", output.getvalue(), "Inventario_WilPOS_Consolidado_Corregido.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
             else:
-                st.warning("No se encontraron ítems válidos para consolidar.")
+                st.warning("No se encontraron ítems válidos para consolidar (revisa el registro de auditoría arriba para ver si las facturas dieron error de IA).")
 
 # ==========================================
 # MÓDULO 3: VER CÓDIGOS ALMACENADOS & CARGAR MAESTRO
