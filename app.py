@@ -129,18 +129,14 @@ def clean_ean_code(code_val):
 def clean_product_name_and_presentation(raw_name, raw_tamano=""):
     """Limpia el nombre del producto y separa la presentación de forma limpia."""
     name = str(raw_name).strip()
-    # Eliminar numeraciones iniciales o códigos sueltos
     name = re.sub(r'^\d+[\s-]*', '', name)
     name = re.sub(r'^\[.*?\]\s*', '', name)
     
-    # Extraer o limpiar patrones de presentación/tamaño incrustados (ej. '12/75 CL.', '750 ML', '1 LT', '6/1.75 L.')
     presentation = str(raw_tamano).strip().upper()
     if not presentation or presentation in ["NAN", "NONE", ""]:
-        # Buscar patrones de tamaño dentro del propio nombre
         match_pres = re.search(r'\b(\d+\s*/\s*[\d\.]+\s*(?:CL|ML|L|LT|OZ)|\d+\s*(?:CL|ML|L|LT|OZ))\b', name, re.IGNORECASE)
         if match_pres:
             presentation = match_pres.group(1).upper()
-            # Remover esa presentación del nombre para dejarlo completamente limpio
             name = name.replace(match_pres.group(1), '')
             
     name = re.sub(r'\s+', ' ', name).strip().upper()
@@ -199,6 +195,14 @@ def process_invoice_smart_router(file_obj, file_type, use_paid_gemini=False):
     except Exception:
         supplier_detected = "GENERAL"
 
+    # Save supplier to supplier memory automatically
+    if supplier_detected and supplier_detected != "GENERAL":
+        supps = st.session_state["supplier_memory"]
+        if supplier_detected not in supps:
+            supps[supplier_detected] = {"nombre": supplier_detected, "formato_empaque": "universal_extractor"}
+            st.session_state["supplier_memory"] = supps
+            save_supplier_memory()
+
     prompt_main = (
         f"Analiza este documento de compra del proveedor '{supplier_detected}' con absoluta precisión. "
         "Extrae ABSOLUTAMENTE TODOS LOS RENGLONES/PRODUCTOS que aparecen en la factura, sin omitir ninguno. "
@@ -234,8 +238,8 @@ def process_invoice_smart_router(file_obj, file_type, use_paid_gemini=False):
 # ==========================================
 if modulo == "📄 Factura Individual":
     try:
-        st.markdown("<h2>📊 Automatizador con <span style='color: #0284c7;'>Nombres Limpios y Presentaciones Separadas</span></h2>", unsafe_allow_html=True)
-        st.markdown("<p style='color: #64748b;'>Estructura perfecta separando nombre del producto y presentación.</p>", unsafe_allow_html=True)
+        st.markdown("<h2>📊 Automatizador con <span style='color: #0284c7;'>Nombres Limpios, Costos Precisos y Proveedor Guardado</span></h2>", unsafe_allow_html=True)
+        st.markdown("<p style='color: #64748b;'>Registro automático de proveedores, nombres limpios y cálculo exacto por botella.</p>", unsafe_allow_html=True)
         st.markdown("---")
         render_master_status_banner()
 
@@ -252,7 +256,7 @@ if modulo == "📄 Factura Individual":
         if uploaded_file is not None:
             if st.button("🚀 Procesar y Guardar en Historial"):
                 file_type = getattr(uploaded_file, 'type', 'image/jpeg')
-                with st.spinner("Procesando factura y limpiando nombres y presentaciones..."):
+                with st.spinner("Procesando factura, guardando proveedor y calculando costos..."):
                     parsed_data, success_msg = process_invoice_smart_router(uploaded_file, file_type, use_paid_gemini=use_gemini_paid_api)
 
                 if success_msg == "QUOTA_EXCEEDED":
@@ -263,7 +267,7 @@ if modulo == "📄 Factura Individual":
                     st.session_state["single_processed_data"] = parsed_data
                     st.session_state["single_prov_det"] = parsed_data.get("proveedor", "GENERAL")
                     st.session_state["single_filename"] = uploaded_file.name
-                    st.success(f"{success_msg} | 🏢 Proveedor detectado: **{st.session_state['single_prov_det']}**")
+                    st.success(f"{success_msg} | 🏢 Proveedor registrado y guardado: **{st.session_state['single_prov_det']}**")
 
         if st.session_state["single_processed_data"] is not None:
             parsed_data = st.session_state["single_processed_data"]
@@ -370,7 +374,7 @@ if modulo == "📄 Factura Individual":
                 output = io.BytesIO()
                 wb.save(output)
                 
-                if st.download_button("📥 Descargar Excel WilPOS Limpio", output.getvalue(), f"Inventario_{prov_det.replace('&', 'Y').replace(' ', '_')}.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"):
+                if st.download_button("📥 Descargar Excel WilPOS Definitivo", output.getvalue(), f"Inventario_{prov_det.replace('&', 'Y').replace(' ', '_')}.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"):
                     history_entry = {
                         "fecha": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                         "proveedor": prov_det,
