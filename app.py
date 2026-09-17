@@ -159,6 +159,8 @@ def parse_empaque_universal(supplier_name="", tamano_txt="", unidad_txt="", desc
         return 24
     if "ALOE PURE" in combined and "UN" not in u_txt:
         return 12
+    if "FOUR LOKO" in combined:
+        return 6
         
     # 3. Buscar formatos con barra como 16/650, 24/12, 6/473, 12/
     match_slash = re.search(r'\b(24|16|12|6|48|10|20|30)\s*/', combined)
