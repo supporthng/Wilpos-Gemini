@@ -144,38 +144,33 @@ def get_strict_ean_code_and_name(description, invoice_ean="", supplier_name=""):
     return desc_clean, "S/C (Sin Codigo)"
 
 # ==========================================
-# REGLA DE EMPAQUE UNIVERSAL E INFALIBLE
+# REGLA DE EMPAQUE UNIVERSAL REFORZADA
 # ==========================================
 def parse_empaque_universal(supplier_name="", tamano_txt="", unidad_txt="", descripcion_txt=""):
     combined = f"{str(tamano_txt)} {str(unidad_txt)} {str(descripcion_txt)}".upper()
     
-    # 1. Buscar formato matriz como 4X6, 6X4, 4x6 (ej: Corona 4x6 = 24)
+    # 1. Buscar formatos con barra como 16/650, 24/12, 6/473, 12/
+    match_slash = re.search(r'\b(24|16|12|6|48|10|20|30)\s*/', combined)
+    if match_slash:
+        return int(match_slash.group(1))
+        
+    # 2. Buscar formato matriz como 4X6, 6X4
     match_nxn = re.search(r'\b(\d+)\s*[xX]\s*(\d+)\b', combined)
     if match_nxn:
         return int(match_nxn.group(1)) * int(match_nxn.group(2))
         
-    # 2. Buscar formatos con barra como 24/12OZ, 6/473, 12/
-    match_slash = re.search(r'\b(24|12|6|48|10|20|30)\s*/', combined)
-    if match_slash:
-        return int(match_slash.group(1))
-        
-    # 3. Buscar palabras explícitas de empaque (ej: 24 BOTELLAS, 6 PACK)
-    match_words = re.search(r'\b(24|12|6|48)\s*(BOTS|BOTELLAS|PACK|PZA|UNIDADES|UN)\b', combined)
+    # 3. Buscar palabras explícitas de empaque
+    match_words = re.search(r'\b(24|16|12|6|48)\s*(BOTS|BOTELLAS|PACK|PZA|UNIDADES|UN)\b', combined)
     if match_words:
         return int(match_words.group(1))
         
-    # 4. Reglas específicas por tipo de producto común en bebidas (Four Loko, Huacales)
-    if "FOUR LOKO" in combined:
-        match_fl = re.search(r'\b(6|12)\s*/', combined)
-        if match_fl: return int(match_fl.group(1))
-        return 6
+    # 4. Reglas específicas para bebidas comunes (ej. Gatorade 24)
+    if "GATORADE" in combined and "24" in combined:
+        return 24
         
     if "HUACAL" in combined or "PTE. HU" in combined or "BRAHMA LIGHT HU" in combined or "THE ONE HU" in combined:
         if "24" in combined: return 24
-        
-    # 5. Si viene marcado como unidad suelta (UN) y no hay patrón de empaque en el texto
-    if "UN" in str(unidad_txt).upper() and not re.search(r'\b(24|12|6|48)\b', combined):
-        return 1
+        if "16" in combined: return 16
         
     return 1
 
@@ -223,7 +218,7 @@ def process_invoice_smart_router(file_obj, file_type, use_paid_gemini=False):
         f"Analiza este documento de compra del proveedor '{supplier_detected}' con absoluta precisión. "
         "Para cada renglón extrae rigurosamente en un JSON bajo la clave 'items': "
         "1. 'codigo_ean': código de barras oficial si existe. "
-        "2. 'descripcion': nombre exacto del producto con todas sus especificaciones (ej: 'FOUR LOKO MARACUYA 6/47', 'CORONA CERO 355ML 4X6 P'). "
+        "2. 'descripcion': nombre exacto del producto con todas sus especificaciones (ej: 'BRAHMA LIGHT HU 16/650M', 'GATORADE FRUIT PUNCH 24'). "
         "3. 'cantidad': cantidad comprada exactamente tal como aparece. "
         "4. 'unidad': unidad de medida exacta impresa en la línea ('UN', 'PC'). "
         "5. 'valor': monto total neto de la línea. "
@@ -251,8 +246,8 @@ def process_invoice_smart_router(file_obj, file_type, use_paid_gemini=False):
 # ==========================================
 if modulo == "📄 Factura Individual":
     try:
-        st.markdown("<h2>📊 Automatizador con <span style='color: #0284c7;'>Empaque Universal e Infalible</span></h2>", unsafe_allow_html=True)
-        st.markdown("<p style='color: #64748b;'>Detección automática de factores (6/, 24/, 4X6) y cálculo de costo unitario real.</p>", unsafe_allow_html=True)
+        st.markdown("<h2>📊 Automatizador con <span style='color: #0284c7;'>Costos Unitarios Reales</span></h2>", unsafe_allow_html=True)
+        st.markdown("<p style='color: #64748b;'>Cálculo exacto de empaques y costos unitarios por botella o lata individual.</p>", unsafe_allow_html=True)
         st.markdown("---")
         render_master_status_banner()
 
@@ -553,7 +548,7 @@ elif modulo == "📜 Historial de Procesados":
             df_hist = pd.DataFrame(history_list)
             st.dataframe(df_hist, use_container_width=True, hide_index=True)
             
-            if st.button("🗑️ Historial"):
+            if st.button("🗑️ Limpiar Historial"):
                 st.session_state["processing_history"] = []
                 save_json_file(HISTORY_FILE, [])
                 st.success("¡Historial limpiado exitosamente!")
