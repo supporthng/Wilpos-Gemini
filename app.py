@@ -123,8 +123,19 @@ def clean_ean_code(code_val):
     if s_val.lower() in ["nan", "none", "", "s/c", "sin codigo"]: return "S/C (Sin Codigo)"
     return s_val
 
+# ==========================================
+# LIMPIEZA ESTRICTA DE NOMBRES (SOLO DESCRIPCIÓN Y PRESENTACIÓN)
+# ==========================================
+def clean_product_description_name(raw_name):
+    name = str(raw_name).strip()
+    # Eliminar códigos numéricos seguidos de guion al inicio (ej: 300055293-)
+    name = re.sub(r'^\d+[\s-]*', '', name)
+    # Eliminar códigos entre corchetes al inicio (ej: [39203])
+    name = re.sub(r'^\[.*?\]\s*', '', name)
+    return name.strip().upper()
+
 def get_strict_ean_code_and_name(description, invoice_ean="", supplier_name=""):
-    desc_clean = str(description).strip().upper()
+    desc_clean = clean_product_description_name(description)
     master = st.session_state["master_catalog"]
     memory = st.session_state["barcode_memory"]
     
@@ -145,22 +156,19 @@ def get_strict_ean_code_and_name(description, invoice_ean="", supplier_name=""):
     return desc_clean, "S/C (Sin Codigo)"
 
 # ==========================================
-# REGLA DE EMPAQUE UNIVERSAL PROTEGIDA (SIN CONFUNDIR CON DIMENSIONES)
+# REGLA DE EMPAQUE UNIVERSAL PROTEGIDA
 # ==========================================
 def parse_empaque_universal(supplier_name="", tamano_txt="", unidad_txt="", descripcion_txt=""):
     combined = f"{str(tamano_txt)} {str(unidad_txt)} {str(descripcion_txt)}".upper()
     u_txt = str(unidad_txt).upper()
     s_name = str(supplier_name).upper()
     
-    # Si el proveedor es Regal Pack o similares de artículos decorativos/empaques vendidos por unidad directa:
     if "REGAL PACK" in s_name:
         return 1
 
-    # Si la línea es explícitamente en unidades sueltas (UN), el empaque es 1
     if "UN" in u_txt and not re.search(r'\b(24|16|12|6|48)\b', combined):
         return 1
 
-    # Excepciones específicas fijas por producto
     if "CLAMATO" in combined:
         return 24
     if "ALOE PURE" in combined and "UN" not in u_txt:
@@ -168,29 +176,24 @@ def parse_empaque_universal(supplier_name="", tamano_txt="", unidad_txt="", desc
     if "FOUR LOKO" in combined:
         return 6
         
-    # 1. Buscar formatos con barra explícita como 16/650, 24/12, 6/473, 12/
     match_slash = re.search(r'\b(24|16|12|6|48|10|20|30)\s*/', combined)
     if match_slash:
         return int(match_slash.group(1))
         
-    # 2. Buscar formato matriz explícito como 4X6, 6X4
     match_nxn = re.search(r'\b(\d+)\s*[xX]\s*(\d+)\b', combined)
     if match_nxn:
         n1, n2 = int(match_nxn.group(1)), int(match_nxn.group(2))
-        # Protección para que dimensiones como 14X8X38 no se multipliquen absurdamente
         if n1 < 10 and n2 < 10:
             return n1 * n2
         
     if re.search(r'\b4\s*[xX]\b', combined) or "LP 4" in combined:
         return 24
         
-    # 3. Buscar palabras explícitas de empaque (evitando dimensiones con cm, x, pulgadas)
     if not ("CMS" in combined or "CM" in combined or "IN" in combined or "X" in combined):
         match_words = re.search(r'\b(24|16|12|6|48)\s*(BOTS|BOTELLAS|PACK|PZA|UNIDADES|UN)\b', combined)
         if match_words:
             return int(match_words.group(1))
         
-    # 4. Reglas específicas para bebidas comunes
     if "GATORADE" in combined and "24" in combined:
         return 24
         
@@ -204,7 +207,7 @@ def parse_empaque_universal(supplier_name="", tamano_txt="", unidad_txt="", desc
 # MENÚ Y CONFIGURACIÓN LATERAL
 # ==========================================
 st.sidebar.markdown("<h3 style='color: #0284c7; text-align: center;'>⚡ WilPOS</h3>", unsafe_allow_html=True)
-st.sidebar.markdown("<p style='text-align: center; color: #64748b; font-size: 0.8rem;'>Sistema Universal de Empaques Definitivo</p>", unsafe_allow_html=True)
+st.sidebar.markdown("<p style='text-align: center; color: #64748b; font-size: 0.8rem;'>Sistema Limpio de Inventario</p>", unsafe_allow_html=True)
 st.sidebar.markdown("---")
 
 modulo = st.sidebar.radio("Menú de Navegación", ["📄 Factura Individual", "📂 Múltiples Facturas (Lote)", "📁 Actualizar Catálogo Maestro", "🏢 Perfiles de Proveedores", "📜 Historial de Procesados", "📋 Códigos Almacenados"])
@@ -244,10 +247,10 @@ def process_invoice_smart_router(file_obj, file_type, use_paid_gemini=False):
         f"Analiza este documento de compra del proveedor '{supplier_detected}' con absoluta precisión. "
         "Para cada renglón extrae rigurosamente en un JSON bajo la clave 'items': "
         "1. 'codigo_ean': código de barras oficial si existe. "
-        "2. 'descripcion': nombre exacto del producto con todas sus especificaciones. "
+        "2. 'descripcion': nombre exacto del producto (omitiendo códigos numéricos iniciales o corchetes para que quede solo la descripción y presentación). "
         "3. 'cantidad': cantidad comprada exactamente tal como aparece. "
         "4. 'unidad': unidad de medida exacta impresa en la línea ('UN', 'PC'). "
-        "5. 'valor': monto TOTAL NETO de toda la línea (el precio total impreso para esa fila). "
+        "5. 'valor': monto TOTAL NETO de toda la línea. "
         "Estructura JSON exacta: "
         '{"proveedor": "' + supplier_detected + '", "items": [{"codigo_ean": "...", "descripcion": "...", "cantidad": 1.0, "unidad": "...", "valor": 0.0}]}. '
         "Respuesta JSON pura sin texto adicional."
@@ -272,8 +275,8 @@ def process_invoice_smart_router(file_obj, file_type, use_paid_gemini=False):
 # ==========================================
 if modulo == "📄 Factura Individual":
     try:
-        st.markdown("<h2>📊 Automatizador con <span style='color: #0284c7;'>Costos Unitarios Reales</span></h2>", unsafe_allow_html=True)
-        st.markdown("<p style='color: #64748b;'>Cálculo exacto de empaques y costos unitarios por botella o artículo individual.</p>", unsafe_allow_html=True)
+        st.markdown("<h2>📊 Automatizador con <span style='color: #0284c7;'>Nombres Limpios</span></h2>", unsafe_allow_html=True)
+        st.markdown("<p style='color: #64748b;'>Cálculo exacto y nombres limpios sin códigos ni corchetes.</p>", unsafe_allow_html=True)
         st.markdown("---")
         render_master_status_banner()
 
@@ -290,7 +293,7 @@ if modulo == "📄 Factura Individual":
         if uploaded_file is not None:
             if st.button("🚀 Procesar y Guardar en Historial"):
                 file_type = getattr(uploaded_file, 'type', 'image/jpeg')
-                with st.spinner("Procesando documento con motor universal protegido..."):
+                with st.spinner("Procesando documento con limpieza de nombres..."):
                     parsed_data, success_msg = process_invoice_smart_router(uploaded_file, file_type, use_paid_gemini=use_gemini_paid_api)
 
                 if success_msg == "QUOTA_EXCEEDED":
@@ -327,7 +330,6 @@ if modulo == "📄 Factura Individual":
                 empaque_val = parse_empaque_universal(prov_det, "", unidad_txt, resolved_name)
                 total_unidades = int(cant_comprada * empaque_val)
 
-                # Costo unitario real = Valor Total de la Línea / Stock Total de Unidades
                 costo_unitario_real = round(val_neto_linea / total_unidades, 2) if total_unidades > 0 else 0.0
                 if costo_unitario_real <= 0: continue
 
@@ -358,7 +360,7 @@ if modulo == "📄 Factura Individual":
             st.markdown("---")
 
             if rows_preview:
-                st.markdown("### ✅ Artículos Procesados con Costos Unitarios Reales")
+                st.markdown("### ✅ Artículos Procesados (Nombres Limpios)")
                 df_resultado = pd.DataFrame(rows_preview)
                 df_resultado["Código EAN Único"] = df_resultado["Código EAN Único"].astype(str)
                 st.dataframe(df_resultado, use_container_width=True, hide_index=True)
@@ -525,7 +527,7 @@ elif modulo == "📁 Actualizar Catálogo Maestro":
                 count = 0
                 temp_dict = {}
                 for _, row in df_master.iterrows():
-                    p_name = str(row[col_name]).strip().upper()
+                    p_name = clean_product_description_name(row[col_name])
                     p_code = clean_ean_code(row[col_code])
                     if p_name and p_code != "S/C (Sin Codigo)":
                         temp_dict[p_name] = p_code
@@ -533,7 +535,7 @@ elif modulo == "📁 Actualizar Catálogo Maestro":
                 st.session_state["master_catalog"] = temp_dict
                 save_master_to_file()
                 save_meta_to_file(datetime.now().strftime("%Y-%m-%d %H:%M:%S"), count)
-                st.success(f"¡Catálogo EAN actualizado con {count} productos!")
+                st.success(f"¡Catálogo EAN actualizado con {count} productos limpios!")
                 st.rerun()
     except Exception as e:
         st.error("⚠️ Error en Maestro:")
