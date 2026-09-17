@@ -80,7 +80,8 @@ if "supplier_memory" not in st.session_state:
             "ALVAREZ & SANCHEZ": {"nombre": "ALVAREZ & SANCHEZ", "formato_empaque": "formula_tamano_slash_4x6"},
             "GONZALEZ CUESTA": {"nombre": "GONZALEZ CUESTA", "formato_empaque": "caj_pza_estandar"},
             "CND": {"nombre": "CND", "formato_empaque": "universal_extractor"},
-            "BEES": {"nombre": "BEES", "formato_empaque": "universal_extractor"}
+            "BEES": {"nombre": "BEES", "formato_empaque": "universal_extractor"},
+            "REGAL PACK": {"nombre": "REGAL PACK", "formato_empaque": "unidades_directas"}
         }
         save_json_file(SUPPLIER_MEMORY_FILE, loaded_suppliers)
     st.session_state["supplier_memory"] = loaded_suppliers
@@ -144,17 +145,22 @@ def get_strict_ean_code_and_name(description, invoice_ean="", supplier_name=""):
     return desc_clean, "S/C (Sin Codigo)"
 
 # ==========================================
-# REGLA DE EMPAQUE UNIVERSAL REFORZADA Y DEFINITIVA
+# REGLA DE EMPAQUE UNIVERSAL PROTEGIDA (SIN CONFUNDIR CON DIMENSIONES)
 # ==========================================
 def parse_empaque_universal(supplier_name="", tamano_txt="", unidad_txt="", descripcion_txt=""):
     combined = f"{str(tamano_txt)} {str(unidad_txt)} {str(descripcion_txt)}".upper()
     u_txt = str(unidad_txt).upper()
+    s_name = str(supplier_name).upper()
     
-    # 1. Si la línea es explícitamente en unidades sueltas (UN), el empaque es 1
+    # Si el proveedor es Regal Pack o similares de artículos decorativos/empaques vendidos por unidad directa:
+    if "REGAL PACK" in s_name:
+        return 1
+
+    # Si la línea es explícitamente en unidades sueltas (UN), el empaque es 1
     if "UN" in u_txt and not re.search(r'\b(24|16|12|6|48)\b', combined):
         return 1
 
-    # 2. Excepciones específicas fijas por producto
+    # Excepciones específicas fijas por producto
     if "CLAMATO" in combined:
         return 24
     if "ALOE PURE" in combined and "UN" not in u_txt:
@@ -162,25 +168,29 @@ def parse_empaque_universal(supplier_name="", tamano_txt="", unidad_txt="", desc
     if "FOUR LOKO" in combined:
         return 6
         
-    # 3. Buscar formatos con barra como 16/650, 24/12, 6/473, 12/
+    # 1. Buscar formatos con barra explícita como 16/650, 24/12, 6/473, 12/
     match_slash = re.search(r'\b(24|16|12|6|48|10|20|30)\s*/', combined)
     if match_slash:
         return int(match_slash.group(1))
         
-    # 4. Buscar formato matriz como 4X6, 6X4, 4X (LP 4)
+    # 2. Buscar formato matriz explícito como 4X6, 6X4
     match_nxn = re.search(r'\b(\d+)\s*[xX]\s*(\d+)\b', combined)
     if match_nxn:
-        return int(match_nxn.group(1)) * int(match_nxn.group(2))
+        n1, n2 = int(match_nxn.group(1)), int(match_nxn.group(2))
+        # Protección para que dimensiones como 14X8X38 no se multipliquen absurdamente
+        if n1 < 10 and n2 < 10:
+            return n1 * n2
         
     if re.search(r'\b4\s*[xX]\b', combined) or "LP 4" in combined:
         return 24
         
-    # 5. Buscar palabras explícitas de empaque
-    match_words = re.search(r'\b(24|16|12|6|48)\s*(BOTS|BOTELLAS|PACK|PZA|UNIDADES|UN)\b', combined)
-    if match_words:
-        return int(match_words.group(1))
+    # 3. Buscar palabras explícitas de empaque (evitando dimensiones con cm, x, pulgadas)
+    if not ("CMS" in combined or "CM" in combined or "IN" in combined or "X" in combined):
+        match_words = re.search(r'\b(24|16|12|6|48)\s*(BOTS|BOTELLAS|PACK|PZA|UNIDADES|UN)\b', combined)
+        if match_words:
+            return int(match_words.group(1))
         
-    # 6. Reglas específicas para bebidas comunes
+    # 4. Reglas específicas para bebidas comunes
     if "GATORADE" in combined and "24" in combined:
         return 24
         
@@ -203,7 +213,7 @@ st.sidebar.markdown("---")
 use_gemini_paid_api = st.sidebar.checkbox("💎 Usar Gemini Paid (API de Pago)", value=bool(ACTIVE_GEMINI_PAID_KEY))
 
 def process_invoice_smart_router(file_obj, file_type, use_paid_gemini=False):
-    prompt_detect = "Identifica el nombre comercial del proveedor emisor de esta factura (ej: CND, BEES, ALVAREZ & SANCHEZ, GONZALEZ CUESTA, PRICESMART). Devuelve un JSON puro: {'proveedor': 'NOMBRE'}"
+    prompt_detect = "Identifica el nombre comercial del proveedor emisor de esta factura (ej: CND, BEES, ALVAREZ & SANCHEZ, GONZALEZ CUESTA, PRICESMART, REGAL PACK). Devuelve un JSON puro: {'proveedor': 'NOMBRE'}"
     
     active_key = ACTIVE_GEMINI_PAID_KEY if use_paid_gemini else ACTIVE_GEMINI_FREE_KEY
     if not active_key and use_paid_gemini: active_key = ACTIVE_GEMINI_FREE_KEY
@@ -237,7 +247,7 @@ def process_invoice_smart_router(file_obj, file_type, use_paid_gemini=False):
         "2. 'descripcion': nombre exacto del producto con todas sus especificaciones. "
         "3. 'cantidad': cantidad comprada exactamente tal como aparece. "
         "4. 'unidad': unidad de medida exacta impresa en la línea ('UN', 'PC'). "
-        "5. 'valor': monto total neto de la línea. "
+        "5. 'valor': monto TOTAL NETO de toda la línea (el precio total impreso para esa fila). "
         "Estructura JSON exacta: "
         '{"proveedor": "' + supplier_detected + '", "items": [{"codigo_ean": "...", "descripcion": "...", "cantidad": 1.0, "unidad": "...", "valor": 0.0}]}. '
         "Respuesta JSON pura sin texto adicional."
@@ -263,7 +273,7 @@ def process_invoice_smart_router(file_obj, file_type, use_paid_gemini=False):
 if modulo == "📄 Factura Individual":
     try:
         st.markdown("<h2>📊 Automatizador con <span style='color: #0284c7;'>Costos Unitarios Reales</span></h2>", unsafe_allow_html=True)
-        st.markdown("<p style='color: #64748b;'>Cálculo exacto de empaques y costos unitarios por botella o lata individual.</p>", unsafe_allow_html=True)
+        st.markdown("<p style='color: #64748b;'>Cálculo exacto de empaques y costos unitarios por botella o artículo individual.</p>", unsafe_allow_html=True)
         st.markdown("---")
         render_master_status_banner()
 
@@ -280,7 +290,7 @@ if modulo == "📄 Factura Individual":
         if uploaded_file is not None:
             if st.button("🚀 Procesar y Guardar en Historial"):
                 file_type = getattr(uploaded_file, 'type', 'image/jpeg')
-                with st.spinner("Procesando documento con motor universal de empaques..."):
+                with st.spinner("Procesando documento con motor universal protegido..."):
                     parsed_data, success_msg = process_invoice_smart_router(uploaded_file, file_type, use_paid_gemini=use_gemini_paid_api)
 
                 if success_msg == "QUOTA_EXCEEDED":
@@ -317,6 +327,7 @@ if modulo == "📄 Factura Individual":
                 empaque_val = parse_empaque_universal(prov_det, "", unidad_txt, resolved_name)
                 total_unidades = int(cant_comprada * empaque_val)
 
+                # Costo unitario real = Valor Total de la Línea / Stock Total de Unidades
                 costo_unitario_real = round(val_neto_linea / total_unidades, 2) if total_unidades > 0 else 0.0
                 if costo_unitario_real <= 0: continue
 
