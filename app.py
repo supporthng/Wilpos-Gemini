@@ -182,7 +182,7 @@ def clean_barcode(code_val):
     return s_val
 
 def get_strict_barcode_and_name(description, invoice_code=""):
-    """Buscador que prioriza el código SAP/EAN de la factura, luego catálogo maestro o memoria."""
+    """Prioriza el código de barras EAN extraído de la factura, luego catálogo maestro o memoria."""
     if invoice_code and str(invoice_code).strip() not in ["", "nan", "None", "S/C"]:
         return str(description).strip().upper(), clean_barcode(invoice_code)
 
@@ -239,15 +239,17 @@ use_gemini_paid_api = st.sidebar.checkbox("💎 Usar Gemini Paid (API de Pago)",
 
 def process_invoice_exact_18(file_obj, file_type, use_paid_gemini=False, use_openai_fallback=False):
     prompt_text = (
-        "Analiza esta factura de proveedor de bebidas con máxima precisión. "
-        "REGLA CRÍTICA: Extrae rigurosamente cada columna de los renglones: "
-        "1. 'codigo_sap': el código numérico SAP o EAN que aparece a la izquierda del producto (ej: 2036911, 7804300150082). "
+        "Analiza esta factura de proveedor con máxima precisión quirúrgica. "
+        "REGLA CRÍTICA DE CÓDIGO DE BARRAS: En cada renglón de la izquierda hay dos códigos (SAP arriba y EAN/código de barras largo abajo de 13 dígitos). "
+        "Debes extraer estrictamente el **código de barras EAN (el número largo)** para el campo 'codigo_barras'. "
+        "Para cada renglón extrae rigurosamente: "
+        "1. 'codigo_barras': el código EAN largo de 13 dígitos impreso debajo del SAP. Si no está, usa el SAP. "
         "2. 'descripcion': texto literal exacto del producto impreso en la factura. "
-        "3. 'cantidad': cantidad numérica de cajas o unidades compradas (ej: 1.000). "
-        "4. 'umv': unidad de medida de venta (ej: 'CAJ / 12 PZA', 'CAJ / 6 PZA'). "
+        "3. 'cantidad': cantidad numérica de cajas o unidades compradas. "
+        "4. 'umv': unidad de medida de venta (ej: 'CAJ / 12 PZA'). "
         "5. 'valor': monto total neto de la línea. "
         "Devuelve un JSON puro bajo la clave 'items': "
-        '{"items": [{"codigo_sap": "2036911", "descripcion": "SANTA HELENA MERLOT 75 CL VEB19056", "cantidad": 1.0, "umv": "CAJ / 12 PZA", "valor": 4814.40}]}. '
+        '{"items": [{"codigo_barras": "7804300150082", "descripcion": "SANTA HELENA MERLOT 75 CL VEB19056", "cantidad": 1.0, "umv": "CAJ / 12 PZA", "valor": 4814.40}]}. '
         "Respuesta JSON pura sin texto adicional."
     )
 
@@ -314,7 +316,7 @@ def process_invoice_exact_18(file_obj, file_type, use_paid_gemini=False, use_ope
 if modulo == "📄 Factura Individual":
     try:
         st.markdown("<h2>📊 Automatizador de Facturas <span style='color: #0284c7;'>(Individual)</span></h2>", unsafe_allow_html=True)
-        st.markdown("<p style='color: #64748b;'>Procesamiento con cálculo exacto de empaques y códigos SAP.</p>", unsafe_allow_html=True)
+        st.markdown("<p style='color: #64748b;'>Procesamiento con prioridad de código EAN y cálculo exacto de empaques.</p>", unsafe_allow_html=True)
         st.markdown("---")
 
         render_master_status_banner()
@@ -357,8 +359,8 @@ if modulo == "📄 Factura Individual":
                         if not desc_raw:
                             continue
 
-                        invoice_code = str(item.get("codigo_sap") or "")
-                        resolved_name, resolved_code = get_strict_validation_code = get_strict_barcode_and_name(desc_raw, invoice_code)
+                        invoice_code = str(item.get("codigo_barras") or item.get("codigo_sap") or "")
+                        resolved_name, resolved_code = get_strict_barcode_and_name(desc_raw, invoice_code)
 
                         cant_comprada = safe_float(item.get("cantidad") or 1, 1.0)
                         val_neto_linea = safe_float(item.get("valor") or 0)
@@ -378,7 +380,7 @@ if modulo == "📄 Factura Individual":
                         
                         rows_preview.append({
                             "No.": idx,
-                            "Código SAP / EAN": str(resolved_code),
+                            "Código de Barras (EAN)": str(resolved_code),
                             "Nombre Factura / Artículo": resolved_name,
                             "Cant. Caja": cant_comprada,
                             "UMV": umv_txt,
@@ -401,7 +403,7 @@ if modulo == "📄 Factura Individual":
                     if rows_preview:
                         st.markdown("### ✅ Artículos Procesados Exitosamente")
                         df_resultado = pd.DataFrame(rows_preview)
-                        df_resultado["Código SAP / EAN"] = df_resultado["Código SAP / EAN"].astype(str)
+                        df_resultado["Código de Barras (EAN)"] = df_resultado["Código de Barras (EAN)"].astype(str)
                         
                         altura_tabla = min(max(len(rows_preview) * 35 + 40, 200), 850)
                         st.dataframe(df_resultado, use_container_width=True, hide_index=True, height=altura_tabla)
@@ -414,7 +416,7 @@ if modulo == "📄 Factura Individual":
                         for item_dict in rows_preview:
                             ws_prod.append([
                                 item_dict["Nombre Factura / Artículo"],
-                                str(item_dict["Código SAP / EAN"]),
+                                str(item_dict["Código de Barras (EAN)"]),
                                 "General", "producto",
                                 item_dict["Precio Venta"],
                                 item_dict["Costo Unitario"],
@@ -543,7 +545,7 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
                     if not desc_raw:
                         continue
 
-                    invoice_code = str(item.get("codigo_sap") or "")
+                    invoice_code = str(item.get("codigo_barras") or item.get("codigo_sap") or "")
                     resolved_name, resolved_code = get_strict_barcode_and_name(desc_raw, invoice_code)
                     
                     cant_comprada = safe_float(item.get("cantidad") or 1, 1.0)
@@ -640,7 +642,7 @@ elif modulo == "📁 Actualizar Catálogo Maestro":
                 st.markdown("### Selecciona las columnas correspondientes")
                 cols = df_master.columns.tolist()
                 col_name = st.selectbox("Columna con el Nombre / Descripción del Producto", cols)
-                col_code = st.selectbox("Columna con el Código de Barras / SAP Oficial", cols)
+                col_code = st.selectbox("Columna con el Código de Barras EAN Oficial", cols)
                 
                 if st.button("🔄 Sobrescribir y Actualizar Maestro en el Sistema"):
                     count = 0
@@ -673,7 +675,7 @@ elif modulo == "📁 Actualizar Catálogo Maestro":
                 save_meta_to_file("Nunca", 0)
                 st.rerun()
                 
-            df_current_master = pd.DataFrame([{"Descripción": k, "Código SAP / EAN": v} for k, v in st.session_state["master_catalog"].items()])
+            df_current_master = pd.DataFrame([{"Descripción": k, "Código de Barras (EAN)": v} for k, v in st.session_state["master_catalog"].items()])
             st.dataframe(df_current_master, use_container_width=True, hide_index=True, height=400)
     except Exception as e:
         st.error("⚠️ Ocurrió un error inesperado en Catálogo Maestro:")
@@ -692,7 +694,7 @@ elif modulo == "📋 Ver Códigos Almacenados":
         with col_m1:
             st.markdown(f"### 📚 Catálogo Maestro ({len(st.session_state['master_catalog'])})")
             if st.session_state["master_catalog"]:
-                df_m_mem = pd.DataFrame([{"Producto": k, "Código SAP / EAN": v} for k, v in st.session_state["master_catalog"].items()])
+                df_m_mem = pd.DataFrame([{"Producto": k, "Código de Barras (EAN)": v} for k, v in st.session_state["master_catalog"].items()])
                 st.dataframe(df_m_mem, use_container_width=True, hide_index=True, height=400)
             else:
                 st.warning("⚠️ No hay Catálogo Maestro cargado.")
