@@ -262,9 +262,11 @@ def process_invoice_smart_router(file_obj, file_type, use_paid_gemini=False):
         "3. 'tamano': texto exacto del tamaño o presentación (ej: '12/70 CL', '750 ML', '1.75L'). "
         "4. 'cantidad': cantidad comprada exactamente tal como aparece. "
         "5. 'unidad': unidad de medida exacta impresa en la línea ('UN', 'PC', 'CAJA'). "
-        "6. 'valor': EL SUBTOTAL NETO GRAVADO DE LA LÍNEA ANTES DE ITBIS (el monto base antes de impuestos, ignorando el importe total con ITBIS). "
+        "6. 'valor_bruto': subtotal de la línea antes de descuentos y antes de ITBIS. "
+        "7. 'descuento_monto': monto del descuento aplicado a esta línea (si existe, ej: 7440.0, si no hay descuento 0.0). "
+        "8. 'valor': el VALOR NETO FINAL DE LA LÍNEA **DESPUÉS DE DESCUENTO Y ANTES DE ITBIS** (es decir, valor_bruto - descuento_monto). "
         "Estructura JSON exacta: "
-        '{"proveedor": "' + supplier_detected + '", "items": [{"codigo_ean": "...", "descripcion": "...", "tamano": "...", "cantidad": 1.0, "unidad": "...", "valor": 0.0}]}. '
+        '{"proveedor": "' + supplier_detected + '", "items": [{"codigo_ean": "...", "descripcion": "...", "tamano": "...", "cantidad": 1.0, "unidad": "...", "valor_bruto": 0.0, "descuento_monto": 0.0, "valor": 0.0}]}. '
         "Respuesta JSON pura sin texto adicional."
     )
 
@@ -287,8 +289,8 @@ def process_invoice_smart_router(file_obj, file_type, use_paid_gemini=False):
 # ==========================================
 if modulo == "📄 Factura Individual":
     try:
-        st.markdown("<h2>📊 Automatizador con <span style='color: #0284c7;'>Costos Netos Reales (Sin ITBIS)</span></h2>", unsafe_allow_html=True)
-        st.markdown("<p style='color: #64748b;'>Cálculo estricto sobre el subtotal sin impuestos en todas las facturas.</p>", unsafe_allow_html=True)
+        st.markdown("<h2>📊 Automatizador con <span style='color: #0284c7;'>Descuentos y Costos Netos Reales</span></h2>", unsafe_allow_html=True)
+        st.markdown("<p style='color: #64748b;'>Cálculo exacto reflejando el descuento comercial aplicado por línea.</p>", unsafe_allow_html=True)
         st.markdown("---")
         render_master_status_banner()
 
@@ -305,7 +307,7 @@ if modulo == "📄 Factura Individual":
         if uploaded_file is not None:
             if st.button("🚀 Procesar y Guardar en Historial"):
                 file_type = getattr(uploaded_file, 'type', 'image/jpeg')
-                with st.spinner("Procesando documento con extracción estricta sin ITBIS..."):
+                with st.spinner("Procesando documento con descuentos y costos netos..."):
                     parsed_data, success_msg = process_invoice_smart_router(uploaded_file, file_type, use_paid_gemini=use_gemini_paid_api)
 
                 if success_msg == "QUOTA_EXCEEDED":
@@ -338,6 +340,7 @@ if modulo == "📄 Factura Individual":
                 tamano_txt = str(item.get("tamano") or "")
                 cant_comprada = safe_float(item.get("cantidad") or 1, 1.0)
                 val_neto_linea = safe_float(item.get("valor") or 0)
+                descuento_monto_linea = safe_float(item.get("descuento_monto") or 0)
                 unidad_txt = str(item.get("unidad") or "")
                 
                 empaque_val = parse_empaque_universal(prov_det, tamano_txt, unidad_txt, resolved_name)
@@ -359,6 +362,7 @@ if modulo == "📄 Factura Individual":
                     "Tamaño": tamano_txt,
                     "Empaque": empaque_val,
                     "Stock Unidades": total_unidades,
+                    "Descuento Monto": descuento_monto_linea,
                     "Costo Unitario Real": costo_unitario_real,
                     "Precio Venta": precio_venta
                 })
@@ -366,15 +370,15 @@ if modulo == "📄 Factura Individual":
             calc_itbis = calc_subtotal * 0.18
             calc_total_factura = calc_subtotal + calc_itbis
 
-            st.markdown("### 📑 Totales del Documento (Sin ITBIS)")
+            st.markdown("### 📑 Totales del Documento (Con Descuentos Aplicados)")
             t1, t2, t3 = st.columns(3)
-            t1.metric("Subtotal Factura", f"RD$ {calc_subtotal:,.2f}")
+            t1.metric("Subtotal Neto", f"RD$ {calc_subtotal:,.2f}")
             t2.metric("ITBIS Total (18%)", f"RD$ {calc_itbis:,.2f}")
             t3.metric("Total Neto", f"RD$ {calc_total_factura:,.2f}")
             st.markdown("---")
 
             if rows_preview:
-                st.markdown("### ✅ Artículos Procesados con Costos Netos Reales")
+                st.markdown("### ✅ Artículos Procesados con Descuentos y Costos Netos")
                 df_resultado = pd.DataFrame(rows_preview)
                 df_resultado["Código EAN Único"] = df_resultado["Código EAN Único"].astype(str)
                 st.dataframe(df_resultado, use_container_width=True, hide_index=True)
@@ -387,11 +391,13 @@ if modulo == "📄 Factura Individual":
                 for item_dict in rows_preview:
                     code_to_save = item_dict["Código EAN Único"]
                     if "Sin Codigo" in code_to_save: code_to_save = "S/C"
+                    desc_val = item_dict["Descuento Monto"]
+                    desc_activo = "Sí" if desc_val > 0 else "No"
                     ws_prod.append([
                         item_dict["Nombre Producto"], str(code_to_save),
                         "General", "producto", item_dict["Precio Venta"],
                         item_dict["Costo Unitario Real"], item_dict["Stock Unidades"],
-                        5, 0.18, "unidad", "No", item_dict["Empaque"], "No", 0, 0, None, "No", None
+                        5, 0.18, "unidad", "No", item_dict["Empaque"], "No", 0, desc_val, None, desc_activo, f"Descuento aplicado: RD$ {desc_val:,.2f}"
                     ])
                     ws_prod.cell(row=ws_prod.max_row, column=2).number_format = '@'
                 
@@ -489,6 +495,7 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
                     tamano_txt = str(item.get("tamano") or "")
                     cant_comprada = safe_float(item.get("cantidad") or 1, 1.0)
                     val_neto_linea = safe_float(item.get("valor") or 0)
+                    descuento_monto_linea = safe_float(item.get("descuento_monto") or 0)
                     unidad_txt = str(item.get("unidad") or "")
                     
                     empaque_val = parse_empaque_universal(prov_det, tamano_txt, unidad_txt, resolved_name)
@@ -505,8 +512,9 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
                         "Costo": costo_unitario_real, "Stock": total_unidades, "Stock Mínimo": 5,
                         "ITBIS": 0.18, "Unidad Medida": "unidad", "Venta Granel": "No",
                         "Cantidad Empaque": empaque_val, "Precio Variable": "No",
-                        "Descuento %": 0, "Descuento Monto": 0, "Precio Especial": None,
-                        "Descuento Activo": "No", "Descuento Nota": None
+                        "Descuento %": 0, "Descuento Monto": descuento_monto_linea, "Precio Especial": None,
+                        "Descuento Activo": "Sí" if descuento_monto_linea > 0 else "No",
+                        "Descuento Nota": f"Descuento aplicado: RD$ {descuento_monto_linea:,.2f}" if descuento_monto_linea > 0 else None
                     })
 
                 if processed_rows:
@@ -516,7 +524,7 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
                         'Categoría': 'first', 'Tipo': 'first', 'Stock Mínimo': 'first',
                         'ITBIS': 'first', 'Unidad Medida': 'first', 'Venta Granel': 'first',
                         'Cantidad Empaque': 'first', 'Precio Variable': 'first',
-                        'Descuento %': 'first', 'Descuento Monto': 'first',
+                        'Descuento %': 'first', 'Descuento Monto': 'sum',
                         'Precio Especial': 'first', 'Descuento Activo': 'first', 'Descuento Nota': 'first'
                     })
                     st.dataframe(df_grouped, use_container_width=True, hide_index=True)
