@@ -4,7 +4,6 @@ import os
 import time
 from datetime import datetime
 import re
-import difflib
 import google.generativeai as genai
 from PIL import Image
 import streamlit as st
@@ -254,8 +253,8 @@ def process_invoice_smart_router(file_obj, file_type, use_paid_gemini=False):
 # ==========================================
 if modulo == "📄 Factura Individual":
     try:
-        st.markdown("<h2>📊 Automatizador con <span style='color: #0284c7;'>Consolidación Inteligente y Ceros Protegidos</span></h2>", unsafe_allow_html=True)
-        st.markdown("<p style='color: #64748b;'>Evita duplicidades agrupando por código EAN y empaque, garantizando costos y stock reales.</p>", unsafe_allow_html=True)
+        st.markdown("<h2>📊 Automatizador con <span style='color: #0284c7;'>Conteo de Artículos y Totales Precisos</span></h2>", unsafe_allow_html=True)
+        st.markdown("<p style='color: #64748b;'>Consolidación por EAN, ceros protegidos y métricas completas.</p>", unsafe_allow_html=True)
         st.markdown("---")
         render_master_status_banner()
 
@@ -272,7 +271,7 @@ if modulo == "📄 Factura Individual":
         if uploaded_file is not None:
             if st.button("🚀 Procesar y Guardar en Historial"):
                 file_type = getattr(uploaded_file, 'type', 'image/jpeg')
-                with st.spinner("Procesando documento y consolidando productos..."):
+                with st.spinner("Procesando documento y calculando conteo..."):
                     parsed_data, success_msg = process_invoice_smart_router(uploaded_file, file_type, use_paid_gemini=use_gemini_paid_api)
 
                 if success_msg == "QUOTA_EXCEEDED":
@@ -291,7 +290,6 @@ if modulo == "📄 Factura Individual":
             
             data_items = parsed_data.get("items", [])
             raw_rows = []
-            multiplicador_ganancia = 1 + (margen_ganancia / 100.0)
             calc_subtotal_bruto = 0.0
             calc_total_descuento = 0.0
             calc_subtotal_sin_itbis = 0.0
@@ -328,11 +326,10 @@ if modulo == "📄 Factura Individual":
                 calc_subtotal_sin_itbis += val_sin_itbis
                 calc_total_con_itbis += val_neto_con_itbis
 
-                raw_pv = (costo_unitario_real * multiplicador_ganancia) * 1.18
+                raw_pv = (costo_unitario_real * (1 + (margen_ganancia / 100.0))) * 1.18
                 precio_venta = round_to_nearest_5(raw_pv)
                 
                 raw_rows.append({
-                    "No.": idx,
                     "Código EAN Único": str(resolved_code),
                     "Nombre Producto": resolved_name,
                     "Cant. Compra": cant_comprada,
@@ -344,11 +341,14 @@ if modulo == "📄 Factura Individual":
                     "Precio Venta": precio_venta
                 })
 
-            # Consolidar filas con el mismo código EAN y empaque para evitar duplicados
+            # CONSOLIDACIÓN ABSOLUTA ESTRICTA POR CÓDIGO EAN
             df_raw = pd.DataFrame(raw_rows)
             if not df_raw.empty:
-                df_grouped = df_raw.groupby(['Código EAN Único', 'Nombre Producto', 'Empaque', 'Unidad'], as_index=False).agg({
+                df_grouped = df_raw.groupby('Código EAN Único', as_index=False).agg({
+                    'Nombre Producto': 'first',
                     'Cant. Compra': 'sum',
+                    'Unidad': 'first',
+                    'Empaque': 'first',
                     'Stock Unidades': 'sum',
                     'Descuento Monto': 'sum',
                     'Costo Unitario Real': 'mean',
@@ -360,18 +360,20 @@ if modulo == "📄 Factura Individual":
 
             calc_itbis = calc_total_con_itbis - calc_subtotal_sin_itbis
             porcentaje_desc_total = (calc_total_descuento / calc_subtotal_bruto * 100.0) if calc_subtotal_bruto > 0 else 0.0
+            total_articulos_unicos = len(rows_preview)
 
-            st.markdown("### 📑 Totales del Documento")
-            t1, t2, t3, t4, t5 = st.columns(5)
-            t1.metric("Subtotal Bruto", f"RD$ {calc_subtotal_bruto:,.2f}")
-            t2.metric("Descuento Aplicado", f"{porcentaje_desc_total:.1f}% / RD$ {calc_total_descuento:,.2f}")
-            t3.metric("Subtotal Neto (Sin ITBIS)", f"RD$ {calc_subtotal_sin_itbis:,.2f}")
-            t4.metric("ITBIS Total (18%)", f"RD$ {calc_itbis:,.2f}")
-            t5.metric("Total Neto", f"RD$ {calc_total_con_itbis:,.2f}")
+            st.markdown("### 📑 Totales y Resumen del Documento")
+            t1, t2, t3, t4, t5, t6 = st.columns(6)
+            t1.metric("Total Artículos", f"{total_articulos_unicos}")
+            t2.metric("Subtotal Bruto", f"RD$ {calc_subtotal_bruto:,.2f}")
+            t3.metric("Descuento Aplicado", f"{porcentaje_desc_total:.1f}% / RD$ {calc_total_descuento:,.2f}")
+            t4.metric("Subtotal Neto (Sin ITBIS)", f"RD$ {calc_subtotal_sin_itbis:,.2f}")
+            t5.metric("ITBIS Total (18%)", f"RD$ {calc_itbis:,.2f}")
+            t6.metric("Total Neto", f"RD$ {calc_total_con_itbis:,.2f}")
             st.markdown("---")
 
             if rows_preview:
-                st.markdown("### ✅ Artículos Procesados (Consolidados y Sin Duplicados)")
+                st.markdown(f"### ✅ Artículos Procesados ({total_articulos_unicos} productos únicos consolidados)")
                 df_resultado = pd.DataFrame(rows_preview)
                 df_resultado["Código EAN Único"] = df_resultado["Código EAN Único"].astype(str)
                 st.dataframe(df_resultado, use_container_width=True, hide_index=True)
@@ -394,7 +396,6 @@ if modulo == "📄 Factura Individual":
                         round(item_dict["Costo Unitario Real"], 2), int(item_dict["Stock Unidades"]),
                         5, 0.18, "unidad", "No", int(item_dict["Empaque"]), "No", 0, round(desc_val, 2), None, desc_activo, f"Descuento aplicado: RD$ {desc_val:,.2f}" if desc_val > 0 else None
                     ])
-                    # FUERZA BRUTA EXCEL: Forzar columna de código de barras (columna 2) como texto puro string
                     cell = ws_prod.cell(row=row_idx, column=2)
                     cell.number_format = '@'
                     cell.value = str(code_to_save)
@@ -407,10 +408,10 @@ if modulo == "📄 Factura Individual":
                         "fecha": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                         "proveedor": prov_det,
                         "archivo": st.session_state["single_filename"] or "Factura Individual",
+                        "total_articulos": total_articulos_unicos,
                         "subtotal": round(calc_subtotal_sin_itbis, 2),
                         "itbis": round(calc_itbis, 2),
-                        "total": round(calc_total_con_itbis, 2),
-                        "total_items": len(rows_preview)
+                        "total": round(calc_total_con_itbis, 2)
                     }
                     add_to_history(history_entry)
     except Exception as e:
@@ -520,14 +521,16 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
 
                 if processed_rows:
                     df_temp = pd.DataFrame(processed_rows)
-                    df_grouped = df_temp.groupby(['Código Barra', 'Nombre', 'Cantidad Empaque'], as_index=False).agg({
+                    df_grouped = df_temp.groupby(['Código Barra'], as_index=False).agg({
+                        'Nombre': 'first',
                         'Stock': 'sum', 'Costo': 'mean', 'Precio Venta': 'mean',
                         'Categoría': 'first', 'Tipo': 'first', 'Stock Mínimo': 'first',
                         'ITBIS': 'first', 'Unidad Medida': 'first', 'Venta Granel': 'first',
-                        'Precio Variable': 'first',
+                        'Cantidad Empaque': 'first', 'Precio Variable': 'first',
                         'Descuento %': 'first', 'Descuento Monto': 'sum',
                         'Precio Especial': 'first', 'Descuento Activo': 'first', 'Descuento Nota': 'first'
                     })
+                    st.markdown(f"### 📦 Total de Artículos Únicos en Lote: **{len(df_grouped)}**")
                     st.dataframe(df_grouped, use_container_width=True, hide_index=True)
     except Exception as e:
         st.error("⚠️ Error en Lotes:")
