@@ -139,7 +139,6 @@ def clean_product_name_and_presentation(raw_name, raw_tamano=""):
     name = re.sub(r'\s+', ' ', name).strip().upper()
     presentation = re.sub(r'\s+', ' ', presentation).strip().upper()
     
-    # Formato unificado Regla 5
     if presentation and presentation not in name:
         clean_full_name = f"{name} {presentation}"
     else:
@@ -148,7 +147,7 @@ def clean_product_name_and_presentation(raw_name, raw_tamano=""):
     return clean_full_name, presentation
 
 def get_flexible_master_barcode(clean_name, clean_pres=""):
-    """Reglas 2 y 3 de Oro: Cruce inteligente con Catálogo Maestro por tokens (tolerante al orden)."""
+    """Reglas 2, 3 y 6 de Oro: Cruce inteligente validando 2 o más palabras clave iguales (independiente del orden y pequeñas variaciones)."""
     master_dict = st.session_state.get("master_catalog", {})
     if not master_dict: return "S/C"
     
@@ -158,17 +157,23 @@ def get_flexible_master_barcode(clean_name, clean_pres=""):
     if clean_name in master_dict:
         return clean_ean_code(master_dict[clean_name])
         
-    name_tokens = set(clean_name.split())
-    if not name_tokens: return "S/C"
+    query_tokens = set(re.findall(r'\w+', full_query.upper()))
+    if not query_tokens: return "S/C"
     
     best_code = "S/C"
-    max_intersection = 0
+    max_sig_matches = 1
     
     for m_name, m_code in master_dict.items():
-        m_tokens = set(m_name.split())
-        intersection = len(name_tokens.intersection(m_tokens))
-        if intersection > max_intersection and intersection >= len(name_tokens) * 0.5:
-            max_intersection = intersection
+        m_tokens = set(re.findall(r'\w+', str(m_name).upper()))
+        # Validar palabras significativas (más de 2 letras)
+        sig_query = {t for t in query_tokens if len(t) > 2}
+        sig_master = {t for t in m_tokens if len(t) > 2}
+        
+        sig_intersection = sig_query.intersection(sig_master)
+        
+        # Regla 6: Requiere al menos 2 o más palabras iguales significativas
+        if len(sig_intersection) >= 2 and len(sig_intersection) >= max_sig_matches:
+            max_sig_matches = len(sig_intersection)
             best_code = clean_ean_code(m_code)
             
     return best_code
@@ -238,7 +243,7 @@ def process_invoice_smart_router(file_obj, file_type, use_paid_gemini=False):
             save_supplier_memory()
 
     prompt_main = (
-        f"Analiza este documento de compra del proveedor '{supplier_detected}' bajo las 5 Reglas de Oro. "
+        f"Analiza este documento de compra del proveedor '{supplier_detected}' bajo las Reglas de Oro. "
         "Extrae ABSOLUTAMENTE TODOS LOS RENGLONES/PRODUCTOS que aparecen en la factura, sin duplicar artificialmente ninguna línea y sin omitir ninguna. "
         "Para cada renglón extrae rigurosamente en un JSON bajo la clave 'items': "
         "1. 'descripcion': nombre del producto. "
@@ -289,7 +294,7 @@ if modulo == "📄 Factura Individual":
         if uploaded_file is not None:
             if st.button("🚀 Procesar bajo Reglas de Oro"):
                 file_type = getattr(uploaded_file, 'type', 'image/jpeg')
-                with st.spinner("Procesando factura bajo las 5 Reglas de Oro..."):
+                with st.spinner("Procesando factura bajo las Reglas de Oro..."):
                     parsed_data, success_msg = process_invoice_smart_router(uploaded_file, file_type, use_paid_gemini=use_gemini_paid_api)
 
                 if success_msg == "QUOTA_EXCEEDED":
@@ -321,17 +326,13 @@ if modulo == "📄 Factura Individual":
                 unidad_txt = str(item.get("unidad") or "")
                 tamano_txt = str(item.get("tamano") or "")
                 
-                # Regla 5: Nombre limpio unificado (Nombre + Presentación)
                 clean_full_name, clean_pres = clean_product_name_and_presentation(desc_raw, tamano_txt)
-                
-                # Reglas 2 y 3: Cruce obligatorio con Catálogo Maestro
                 resolved_code = get_flexible_master_barcode(clean_full_name, clean_pres)
 
                 cant_comprada = safe_float(item.get("cantidad") or 1, 1.0)
                 val_total_con_itbis_linea = safe_float(item.get("valor_con_itbis") or item.get("importe") or 0)
                 descuento_monto_linea = safe_float(item.get("descuento_monto") or 0)
                 
-                # Regla 5: Costos netos sin ITBIS
                 if val_total_con_itbis_linea > 0:
                     val_sin_itbis = val_total_con_itbis_linea / 1.18
                     val_neto_con_itbis = val_total_con_itbis_linea
@@ -346,14 +347,12 @@ if modulo == "📄 Factura Individual":
                 calc_subtotal_sin_itbis += val_sin_itbis
                 calc_total_con_itbis += val_neto_con_itbis
                 
-                # Regla 4: Empaque y cantidad total de unidades
                 empaque_val = parse_empaque_universal(prov_det, clean_pres, unidad_txt, clean_full_name)
                 total_unidades = int(cant_comprada * empaque_val)
 
                 costo_unitario_real = round(val_sin_itbis / total_unidades, 2) if total_unidades > 0 else 0.0
                 if costo_unitario_real <= 0: continue
 
-                # Regla 5: Precio Venta = (Costo + Ganancia) + 18% ITBIS
                 raw_pv = (costo_unitario_real * (1 + (margen_ganancia / 100.0))) * 1.18
                 precio_venta = round_to_nearest_5(raw_pv)
                 
