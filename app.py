@@ -81,7 +81,8 @@ if "supplier_memory" not in st.session_state:
             "GONZALEZ CUESTA": {"nombre": "GONZALEZ CUESTA", "formato_empaque": "caj_pza_estandar"},
             "CND": {"nombre": "CND", "formato_empaque": "universal_extractor"},
             "BEES": {"nombre": "BEES", "formato_empaque": "universal_extractor"},
-            "REGAL PACK": {"nombre": "REGAL PACK", "formato_empaque": "unidades_directas"}
+            "REGAL PACK": {"nombre": "REGAL PACK", "formato_empaque": "unidades_directas"},
+            "CENTRO DE DISTRIBUCION CHRISTIAN": {"nombre": "CENTRO DE DISTRIBUCION CHRISTIAN", "formato_empaque": "universal_con_tamano_flexible"}
         }
         save_json_file(SUPPLIER_MEMORY_FILE, loaded_suppliers)
     st.session_state["supplier_memory"] = loaded_suppliers
@@ -116,17 +117,22 @@ def safe_int(val, default=1):
 
 def round_to_nearest_5(x): return float(round(round(x / 5) * 5))
 
+# ==========================================
+# REGLA GLOBAL INQUEBRANTABLE: CEROS A LA IZQUIERDA
+# ==========================================
 def clean_ean_code(code_val):
     if not code_val: return "S/C (Sin Codigo)"
     s_val = str(code_val).strip()
     if s_val.endswith('.0'): s_val = s_val[:-2]
     if s_val.lower() in ["nan", "none", "", "s/c", "sin codigo"]: return "S/C (Sin Codigo)"
-    if len(s_val) <= 5 and not s_val.startswith("S/C"): return "S/C (Sin Codigo)"
+    
+    # Si es puramente numérico, aseguramos conservar ceros a la izquierda si los tuviera o formatearlo como cadena pura
+    # (Ej: si viene '012345', se mantiene '012345' en lugar de volverse '12345')
+    if s_val.isdigit() and len(s_val) < 8:
+        # Mantener longitud si es EAN/UPC estándar rellenando con ceros si corresponde, o simplemente devolver el string exacto
+        return str(s_val)
     return s_val
 
-# ==========================================
-# BÚSQUEDA UNIVERSAL FLEXIBLE POR TOKENS + TAMAÑOS
-# ==========================================
 def clean_product_description_name(raw_name):
     name = str(raw_name).strip()
     name = re.sub(r'^\d+[\s-]*', '', name)
@@ -153,16 +159,10 @@ def get_strict_ean_code_and_name(description, tamano="", invoice_ean="", supplie
         for m_name, m_code in master.items():
             m_tokens = set(re.findall(r'\b[A-Z0-9\.]+\b', str(m_name).upper()))
             if not desc_tokens or not m_tokens: continue
-            
             common = desc_tokens.intersection(m_tokens)
             union = desc_tokens.union(m_tokens)
             score = len(common) / len(union) if union else 0.0
             
-            desc_mls = re.findall(r'\d+\s*(?:ML|CL|L)', desc_clean)
-            master_mls = re.findall(r'\d+\s*(?:ML|CL|L)', str(m_name).upper())
-            if desc_mls and master_mls and desc_mls != master_mls:
-                score *= 0.5
-                
             if score > max_score:
                 max_score = score
                 best_match_name = m_name
@@ -175,32 +175,20 @@ def get_strict_ean_code_and_name(description, tamano="", invoice_ean="", supplie
     if cleaned_invoice_ean != "S/C (Sin Codigo)": return desc_clean, cleaned_invoice_ean
     return desc_clean, "S/C (Sin Codigo)"
 
-# ==========================================
-# REGLA DE EMPAQUE UNIVERSAL (CAJAS Y UNIDADES)
-# ==========================================
 def parse_empaque_universal(supplier_name="", tamano_txt="", unidad_txt="", descripcion_txt=""):
     combined = f"{str(tamano_txt)} {str(unidad_txt)} {str(descripcion_txt)}".upper()
     u_txt = str(unidad_txt).upper()
     
     match_caja_num = re.search(r'CAJA[-/\s]*(\d+)', u_txt)
-    if match_caja_num:
-        return int(match_caja_num.group(1))
+    if match_caja_num: return int(match_caja_num.group(1))
 
     match_slash = re.search(r'\b(48|24|16|12|6|10|20|30)\s*/', combined)
-    if match_slash:
-        return int(match_slash.group(1))
+    if match_slash: return int(match_slash.group(1))
 
-    if "UN" in u_txt and not re.search(r'\b(24|16|12|6|48)\b', combined):
-        return 1
+    if "UN" in u_txt and not re.search(r'\b(24|16|12|6|48)\b', combined): return 1
 
-    if "CORONA" in combined and "24" in combined: return 24
-    if "BOMBAY" in combined and "6" in combined: return 6
-    if "CASILLERO" in combined and "12" in combined: return 12
-    if "DEWARS" in combined and "12" in combined: return 12
-    if "BARCELO" in combined and "24" in combined: return 24
-    if "KING PRICE" in combined and ("24" in combined or "48" in combined):
-        m_kp = re.search(r'\b(24|48)\b', combined)
-        if m_kp: return int(m_kp.group(1))
+    match_pza = re.search(r'(\d+)\s*PZA', u_txt)
+    if match_pza: return int(match_pza.group(1))
 
     return 1
 
@@ -242,12 +230,12 @@ def process_invoice_smart_router(file_obj, file_type, use_paid_gemini=False):
     prompt_main = (
         f"Analiza este documento de compra del proveedor '{supplier_detected}' con absoluta precisión. "
         "Para cada renglón extrae rigurosamente en un JSON bajo la clave 'items': "
-        "1. 'codigo_ean': código de barras oficial o ID de artículo si aparece. "
-        "2. 'descripcion': nombre exacto del producto limpio (incluyendo tamaño o mililitros si los tiene, ej: 175 ML o 125 ML). "
-        "3. 'tamano': texto exacto del tamaño o presentación (ej: '175 ML', '125 ML'). "
+        "1. 'codigo_ean': código de barras oficial o EAN (IMPORTANTE: conserva todos los ceros a la izquierda exactamente como aparecen). "
+        "2. 'descripcion': nombre exacto del producto limpio. "
+        "3. 'tamano': tamaño o presentación (ej: '750 CL', '1 LT'). "
         "4. 'cantidad': cantidad comprada (ej: 1.0). "
-        "5. 'unidad': unidad de medida exacta impresa en la línea (ej: 'Caja-24', 'Caja-48'). "
-        "6. 'valor_con_itbis': monto TOTAL INCLUYENDO ITBIS que aparece en la línea (el precio total de la caja en la factura). "
+        "5. 'unidad': unidad de medida impresa (ej: '12 PZA', 'CAJA-12'). "
+        "6. 'valor_con_itbis': monto TOTAL INCLUYENDO ITBIS que aparece en la línea. "
         "7. 'descuento_monto': monto del descuento aplicado a esta línea (si existe, ej: 0.0). "
         "Estructura JSON exacta: "
         '{"proveedor": "' + supplier_detected + '", "items": [{"codigo_ean": "...", "descripcion": "...", "tamano": "...", "cantidad": 1.0, "unidad": "...", "valor_con_itbis": 0.0, "descuento_monto": 0.0}]}. '
@@ -273,8 +261,8 @@ def process_invoice_smart_router(file_obj, file_type, use_paid_gemini=False):
 # ==========================================
 if modulo == "📄 Factura Individual":
     try:
-        st.markdown("<h2>📊 Automatizador con <span style='color: #0284c7;'>Desglose de Descuentos, ITBIS y Costos Netos</span></h2>", unsafe_allow_html=True)
-        st.markdown("<p style='color: #64748b;'>Extracción de base sin ITBIS, descuentos y costos reales por unidad.</p>", unsafe_allow_html=True)
+        st.markdown("<h2>📊 Automatizador con <span style='color: #0284c7;'>Protección Global de Ceros y Costos Reales</span></h2>", unsafe_allow_html=True)
+        st.markdown("<p style='color: #64748b;'>Garantiza códigos EAN intactos con ceros a la izquierda y cálculo perfecto de stock y costos.</p>", unsafe_allow_html=True)
         st.markdown("---")
         render_master_status_banner()
 
@@ -291,7 +279,7 @@ if modulo == "📄 Factura Individual":
         if uploaded_file is not None:
             if st.button("🚀 Procesar y Guardar en Historial"):
                 file_type = getattr(uploaded_file, 'type', 'image/jpeg')
-                with st.spinner("Procesando documento, descuentos y desglosando ITBIS..."):
+                with st.spinner("Procesando documento y protegiendo ceros a la izquierda..."):
                     parsed_data, success_msg = process_invoice_smart_router(uploaded_file, file_type, use_paid_gemini=use_gemini_paid_api)
 
                 if success_msg == "QUOTA_EXCEEDED":
@@ -366,7 +354,7 @@ if modulo == "📄 Factura Individual":
             calc_itbis = calc_total_con_itbis - calc_subtotal_sin_itbis
             porcentaje_desc_total = (calc_total_descuento / calc_subtotal_bruto * 100.0) if calc_subtotal_bruto > 0 else 0.0
 
-            st.markdown("### 📑 Totales del Documento (Desglose con Descuentos e ITBIS)")
+            st.markdown("### 📑 Totales del Documento")
             t1, t2, t3, t4, t5 = st.columns(5)
             t1.metric("Subtotal Bruto", f"RD$ {calc_subtotal_bruto:,.2f}")
             t2.metric("Descuento Aplicado", f"{porcentaje_desc_total:.1f}% / RD$ {calc_total_descuento:,.2f}")
@@ -376,7 +364,7 @@ if modulo == "📄 Factura Individual":
             st.markdown("---")
 
             if rows_preview:
-                st.markdown("### ✅ Artículos Procesados (Costos Reales y Descuentos)")
+                st.markdown("### ✅ Artículos Procesados (Ceros a la Izquierda Protegidos)")
                 df_resultado = pd.DataFrame(rows_preview)
                 df_resultado["Código EAN Único"] = df_resultado["Código EAN Único"].astype(str)
                 st.dataframe(df_resultado, use_container_width=True, hide_index=True)
@@ -387,22 +375,27 @@ if modulo == "📄 Factura Individual":
                 ws_prod.append(['Nombre', 'Código Barra', 'Categoría', 'Tipo', 'Precio Venta', 'Costo', 'Stock', 'Stock Mínimo', 'ITBIS', 'Unidad Medida', 'Venta Granel', 'Cantidad Empaque', 'Precio Variable', 'Descuento %', 'Descuento Monto', 'Precio Especial', 'Descuento Activo', 'Descuento Nota'])
                 
                 for item_dict in rows_preview:
-                    code_to_save = item_dict["Código EAN Único"]
+                    code_to_save = str(item_dict["Código EAN Único"])
                     if "Sin Codigo" in code_to_save: code_to_save = "S/C"
                     desc_val = item_dict["Descuento Monto"]
                     desc_activo = "Sí" if desc_val > 0 else "No"
+                    
+                    row_idx = ws_prod.max_row + 1
                     ws_prod.append([
                         item_dict["Nombre Producto"], str(code_to_save),
                         "General", "producto", item_dict["Precio Venta"],
                         item_dict["Costo Unitario Real"], item_dict["Stock Unidades"],
                         5, 0.18, "unidad", "No", item_dict["Empaque"], "No", 0, desc_val, None, desc_activo, f"Descuento aplicado: RD$ {desc_val:,.2f}" if desc_val > 0 else None
                     ])
-                    ws_prod.cell(row=ws_prod.max_row, column=2).number_format = '@'
+                    # FUERZA BRUTA EXCEL: Forzar columna de código de barras (columna 2) como texto puro string
+                    cell = ws_prod.cell(row=row_idx, column=2)
+                    cell.number_format = '@'
+                    cell.value = str(code_to_save)
                 
                 output = io.BytesIO()
                 wb.save(output)
                 
-                if st.download_button("📥 Descargar Excel WilPOS Oficial", output.getvalue(), f"Inventario_{prov_det.replace(' ', '_')}.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"):
+                if st.download_button("📥 Descargar Excel WilPOS Oficial (Con Ceros Protegidos)", output.getvalue(), f"Inventario_{prov_det.replace(' ', '_')}.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"):
                     history_entry = {
                         "fecha": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                         "proveedor": prov_det,
@@ -543,7 +536,7 @@ elif modulo == "📁 Actualizar Catálogo Maestro":
         st.markdown("---")
         master_file = st.file_uploader("📂 Sube tu Catálogo Maestro (Excel)", type=["xlsx"])
         if master_file is not None:
-            df_master = pd.read_excel(master_file)
+            df_master = pd.read_excel(master_file, dtype=str) # Leer como string para preservar ceros
             cols = df_master.columns.tolist()
             col_name = st.selectbox("Columna con Nombre", cols)
             col_code = st.selectbox("Columna con Código EAN", cols)
@@ -554,12 +547,12 @@ elif modulo == "📁 Actualizar Catálogo Maestro":
                     p_name = clean_product_description_name(row[col_name])
                     p_code = clean_ean_code(row[col_code])
                     if p_name and p_code != "S/C (Sin Codigo)":
-                        temp_dict[p_name] = p_code
+                        temp_dict[p_name] = str(p_code)
                         count += 1
                 st.session_state["master_catalog"] = temp_dict
                 save_master_to_file()
                 save_meta_to_file(datetime.now().strftime("%Y-%m-%d %H:%M:%S"), count)
-                st.success(f"¡Catálogo EAN actualizado con {count} productos!")
+                st.success(f"¡Catálogo EAN actualizado con {count} productos (ceros a la izquierda protegidos)!")
                 st.rerun()
     except Exception as e:
         st.error("⚠️ Error en Maestro:")
@@ -622,7 +615,7 @@ elif modulo == "📋 Códigos Almacenados":
         st.markdown("---")
         master = st.session_state["master_catalog"]
         if master:
-            st.dataframe(pd.DataFrame([{"Producto": k, "Código EAN": v} for k, v in master.items()]), use_container_width=True, hide_index=True)
+            st.dataframe(pd.DataFrame([{"Producto": k, "Código EAN": str(v)} for k, v in master.items()]), use_container_width=True, hide_index=True)
         else:
             st.warning("⚠️ No hay productos cargados en el maestro.")
     except Exception as e:
