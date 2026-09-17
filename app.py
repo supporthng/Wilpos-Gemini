@@ -121,10 +121,12 @@ def clean_ean_code(code_val):
     s_val = str(code_val).strip()
     if s_val.endswith('.0'): s_val = s_val[:-2]
     if s_val.lower() in ["nan", "none", "", "s/c", "sin codigo"]: return "S/C (Sin Codigo)"
+    # Ignorar códigos internos cortos de 5 dígitos o menos que no sean EAN reales
+    if len(s_val) <= 5 and not s_val.startswith("S/C"): return "S/C (Sin Codigo)"
     return s_val
 
 # ==========================================
-# LIMPIEZA ESTRICTA DE NOMBRES
+# BÚSQUEDA UNIVERSAL FLEXIBLE POR TOKENS
 # ==========================================
 def clean_product_description_name(raw_name):
     name = str(raw_name).strip()
@@ -137,81 +139,69 @@ def get_strict_ean_code_and_name(description, invoice_ean="", supplier_name=""):
     master = st.session_state["master_catalog"]
     memory = st.session_state["barcode_memory"]
     
-    if "1800" in desc_clean and "CRISTALINO" in desc_clean:
-        if "1.75" in desc_clean or "175" in desc_clean or "1,75" in desc_clean:
-            return "TEQUILA RESERVA CRISTALINO 1800 (1.75L)", "7501035013636"
-        elif "750" in desc_clean or "0.75" in desc_clean or "75 CL" in desc_clean or "12/70" in desc_clean:
-            return "TEQUILA RESERVA CRISTALINO 1800 750 ML", "7501035013483"
-
     if desc_clean in master: return desc_clean, clean_ean_code(master[desc_clean])
     if desc_clean in memory: return desc_clean, clean_ean_code(memory[desc_clean])
         
-    master_keys = list(master.keys())
-    if master_keys:
-        coincidencias = difflib.get_close_matches(desc_clean, master_keys, n=1, cutoff=0.60)
-        if coincidencias: return desc_clean, clean_ean_code(master[coincidencias[0]])
+    # Coincidencia flexible por tokens (independiente del orden de las palabras)
+    if master:
+        desc_tokens = set(re.findall(r'\b[A-Z0-9\.]+\b', desc_clean))
+        best_match_name = desc_clean
+        best_match_code = clean_ean_code(invoice_ean)
+        max_score = 0.0
+        
+        for m_name, m_code in master.items():
+            m_tokens = set(re.findall(r'\b[A-Z0-9\.]+\b', str(m_name).upper()))
+            if not desc_tokens or not m_tokens: continue
+            common = desc_tokens.intersection(m_tokens)
+            union = desc_tokens.union(m_tokens)
+            score = len(common) / len(union) if union else 0.0
             
-    s_name = str(supplier_name).upper()
+            if score > max_score:
+                max_score = score
+                best_match_name = m_name
+                best_match_code = clean_ean_code(m_code)
+                
+        if max_score >= 0.30 and best_match_code != "S/C (Sin Codigo)":
+            return best_match_name, best_match_code
+            
+        # Backup con difflib
+        master_keys = list(master.keys())
+        coincidencias = difflib.get_close_matches(desc_clean, master_keys, n=1, cutoff=0.45)
+        if coincidencias:
+            matched = coincidencias[0]
+            return matched, clean_ean_code(master[matched])
+            
     cleaned_invoice_ean = clean_ean_code(invoice_ean)
-    
-    if ("CND" in s_name or "BEES" in s_name) and len(cleaned_invoice_ean) <= 6:
-        return desc_clean, "S/C (Sin Codigo)"
-
     if cleaned_invoice_ean != "S/C (Sin Codigo)": return desc_clean, cleaned_invoice_ean
     return desc_clean, "S/C (Sin Codigo)"
 
 # ==========================================
-# REGLA DE EMPAQUE UNIVERSAL REFORZADA
+# REGLA DE EMPAQUE UNIVERSAL (CAJAS Y UNIDADES)
 # ==========================================
 def parse_empaque_universal(supplier_name="", tamano_txt="", unidad_txt="", descripcion_txt=""):
     combined = f"{str(tamano_txt)} {str(unidad_txt)} {str(descripcion_txt)}".upper()
     u_txt = str(unidad_txt).upper()
-    s_name = str(supplier_name).upper()
     
-    if "REGAL PACK" in s_name:
-        return 1
+    match_caja_num = re.search(r'CAJA[-/\s]*(\d+)', u_txt)
+    if match_caja_num:
+        return int(match_caja_num.group(1))
 
-    if "1800" in combined and "CRISTALINO" in combined:
-        if "1.75" in combined or "175" in combined or "1,75" in combined:
-            return 6
-        if "750" in combined or "0.75" in combined or "75 CL" in combined or "12/70" in combined:
-            return 12
-
-    match_slash = re.search(r'\b(24|16|12|6|48|10|20|30)\s*/', combined)
+    match_slash = re.search(r'\b(48|24|16|12|6|10|20|30)\s*/', combined)
     if match_slash:
         return int(match_slash.group(1))
 
     if "UN" in u_txt and not re.search(r'\b(24|16|12|6|48)\b', combined):
         return 1
 
-    if "CLAMATO" in combined:
-        return 24
-    if "ALOE PURE" in combined and "UN" not in u_txt:
-        return 12
-    if "FOUR LOKO" in combined:
-        return 6
-        
-    match_nxn = re.search(r'\b(\d+)\s*[xX]\s*(\d+)\b', combined)
-    if match_nxn:
-        n1, n2 = int(match_nxn.group(1)), int(match_nxn.group(2))
-        if n1 < 10 and n2 < 10:
-            return n1 * n2
-        
-    if re.search(r'\b4\s*[xX]\b', combined) or "LP 4" in combined:
-        return 24
-        
-    if not ("CMS" in combined or "CM" in combined or "IN" in combined or "X" in combined):
-        match_words = re.search(r'\b(24|16|12|6|48)\s*(BOTS|BOTELLAS|PACK|PZA|UNIDADES|UN)\b', combined)
-        if match_words:
-            return int(match_words.group(1))
-        
-    if "GATORADE" in combined and "24" in combined:
-        return 24
-        
-    if "HUACAL" in combined or "PTE. HU" in combined or "BRAHMA LIGHT HU" in combined or "THE ONE HU" in combined:
-        if "24" in combined: return 24
-        if "16" in combined: return 16
-        
+    if "CORONA" in combined and "24" in combined: return 24
+    if "BOMBAY" in combined and "6" in combined: return 6
+    if "CASILLERO" in combined and "12" in combined: return 12
+    if "DEWARS" in combined and "12" in combined: return 12
+    if "BARCELO" in combined and "24" in combined: return 24
+    if "KING PRICE" in combined and ("24" in combined or "48" in combined):
+        m_kp = re.search(r'\b(24|48)\b', combined)
+        if m_kp: return int(m_kp.group(1))
+
     return 1
 
 # ==========================================
@@ -227,7 +217,7 @@ st.sidebar.markdown("---")
 use_gemini_paid_api = st.sidebar.checkbox("💎 Usar Gemini Paid (API de Pago)", value=bool(ACTIVE_GEMINI_PAID_KEY))
 
 def process_invoice_smart_router(file_obj, file_type, use_paid_gemini=False):
-    prompt_detect = "Identifica el nombre comercial del proveedor emisor de esta factura (ej: CND, BEES, ALVAREZ & SANCHEZ, GONZALEZ CUESTA, PRICESMART, REGAL PACK). Devuelve un JSON puro: {'proveedor': 'NOMBRE'}"
+    prompt_detect = "Identifica el nombre comercial del proveedor emisor de esta factura (ej: CND, BEES, ALVAREZ & SANCHEZ, GONZALEZ CUESTA, PRICESMART, REGAL PACK, CENTRO DE DISTRIBUCION CHRISTIAN). Devuelve un JSON puro: {'proveedor': 'NOMBRE'}"
     
     active_key = ACTIVE_GEMINI_PAID_KEY if use_paid_gemini else ACTIVE_GEMINI_FREE_KEY
     if not active_key and use_paid_gemini: active_key = ACTIVE_GEMINI_FREE_KEY
@@ -249,24 +239,17 @@ def process_invoice_smart_router(file_obj, file_type, use_paid_gemini=False):
     except Exception:
         supplier_detected = "GENERAL"
 
-    supp_mem = st.session_state["supplier_memory"]
-    if supplier_detected not in supp_mem and supplier_detected != "GENERAL":
-        supp_mem[supplier_detected] = {"nombre": supplier_detected, "formato_empaque": "universal_extractor", "descripcion": "Registrado automaticamente."}
-        save_supplier_memory()
-
     prompt_main = (
         f"Analiza este documento de compra del proveedor '{supplier_detected}' con absoluta precisión. "
         "Para cada renglón extrae rigurosamente en un JSON bajo la clave 'items': "
-        "1. 'codigo_ean': código de barras oficial impreso en la columna correspondiente. "
-        "2. 'descripcion': nombre exacto del producto limpio (sin códigos numéricos iniciales o corchetes). "
-        "3. 'tamano': texto exacto del tamaño o presentación (ej: '12/70 CL', '750 ML', '1.75L'). "
-        "4. 'cantidad': cantidad comprada exactamente tal como aparece. "
-        "5. 'unidad': unidad de medida exacta impresa en la línea ('UN', 'PC', 'CAJA'). "
-        "6. 'valor_bruto': subtotal de la línea antes de descuentos y antes de ITBIS. "
-        "7. 'descuento_monto': monto del descuento aplicado a esta línea (si existe, ej: 7440.0, si no hay descuento 0.0). "
-        "8. 'valor': el VALOR NETO FINAL DE LA LÍNEA **DESPUÉS DE DESCUENTO Y ANTES DE ITBIS** (es decir, valor_bruto - descuento_monto). "
+        "1. 'codigo_ean': código de barras oficial o ID de artículo si aparece. "
+        "2. 'descripcion': nombre exacto del producto limpio. "
+        "3. 'tamano': texto exacto del tamaño o presentación (ej: '750 ML', '375ML'). "
+        "4. 'cantidad': cantidad comprada (ej: 1.0). "
+        "5. 'unidad': unidad de medida exacta impresa en la línea (ej: 'Caja-24', 'Caja-12', 'UN'). "
+        "6. 'valor': monto TOTAL NETO de la línea antes de ITBIS (si la línea dice el precio total de la caja, extrae ese monto total). "
         "Estructura JSON exacta: "
-        '{"proveedor": "' + supplier_detected + '", "items": [{"codigo_ean": "...", "descripcion": "...", "tamano": "...", "cantidad": 1.0, "unidad": "...", "valor_bruto": 0.0, "descuento_monto": 0.0, "valor": 0.0}]}. '
+        '{"proveedor": "' + supplier_detected + '", "items": [{"codigo_ean": "...", "descripcion": "...", "tamano": "...", "cantidad": 1.0, "unidad": "...", "valor": 0.0}]}. '
         "Respuesta JSON pura sin texto adicional."
     )
 
@@ -289,8 +272,8 @@ def process_invoice_smart_router(file_obj, file_type, use_paid_gemini=False):
 # ==========================================
 if modulo == "📄 Factura Individual":
     try:
-        st.markdown("<h2>📊 Automatizador con <span style='color: #0284c7;'>Descuentos y Costos Netos Reales</span></h2>", unsafe_allow_html=True)
-        st.markdown("<p style='color: #64748b;'>Cálculo exacto reflejando el descuento comercial aplicado por línea.</p>", unsafe_allow_html=True)
+        st.markdown("<h2>📊 Automatizador con <span style='color: #0284c7;'>Costos Unitarios y Stock Exactos por Caja</span></h2>", unsafe_allow_html=True)
+        st.markdown("<p style='color: #64748b;'>Cálculo correcto de costo por unidad y stock total multiplicado por empaque.</p>", unsafe_allow_html=True)
         st.markdown("---")
         render_master_status_banner()
 
@@ -307,7 +290,7 @@ if modulo == "📄 Factura Individual":
         if uploaded_file is not None:
             if st.button("🚀 Procesar y Guardar en Historial"):
                 file_type = getattr(uploaded_file, 'type', 'image/jpeg')
-                with st.spinner("Procesando documento con descuentos y costos netos..."):
+                with st.spinner("Procesando documento con recálculo de costos y stock..."):
                     parsed_data, success_msg = process_invoice_smart_router(uploaded_file, file_type, use_paid_gemini=use_gemini_paid_api)
 
                 if success_msg == "QUOTA_EXCEEDED":
@@ -327,9 +310,7 @@ if modulo == "📄 Factura Individual":
             data_items = parsed_data.get("items", [])
             rows_preview = []
             multiplicador_ganancia = 1 + (margen_ganancia / 100.0)
-            calc_subtotal_bruto = 0.0
-            calc_total_descuento = 0.0
-            calc_subtotal_neto = 0.0
+            calc_subtotal = 0.0
 
             for idx, item in enumerate(data_items, start=1):
                 if not isinstance(item, dict): continue
@@ -337,14 +318,13 @@ if modulo == "📄 Factura Individual":
                 if not desc_raw: continue
 
                 invoice_ean = str(item.get("codigo_ean") or "")
+                unidad_txt = str(item.get("unidad") or "")
+                tamano_txt = str(item.get("tamano") or "")
+                
                 resolved_name, resolved_code = get_strict_ean_code_and_name(desc_raw, invoice_ean, prov_det)
 
-                tamano_txt = str(item.get("tamano") or "")
                 cant_comprada = safe_float(item.get("cantidad") or 1, 1.0)
-                val_bruto_linea = safe_float(item.get("valor_bruto") or item.get("valor") or 0)
-                descuento_monto_linea = safe_float(item.get("descuento_monto") or 0)
-                val_neto_linea = safe_float(item.get("valor") or (val_bruto_linea - descuento_monto_linea))
-                unidad_txt = str(item.get("unidad") or "")
+                val_neto_linea = safe_float(item.get("valor") or 0)
                 
                 empaque_val = parse_empaque_universal(prov_det, tamano_txt, unidad_txt, resolved_name)
                 total_unidades = int(cant_comprada * empaque_val)
@@ -352,10 +332,7 @@ if modulo == "📄 Factura Individual":
                 costo_unitario_real = round(val_neto_linea / total_unidades, 2) if total_unidades > 0 else 0.0
                 if costo_unitario_real <= 0: continue
 
-                calc_subtotal_bruto += val_bruto_linea
-                calc_total_descuento += descuento_monto_linea
-                calc_subtotal_neto += val_neto_linea
-
+                calc_subtotal += val_neto_linea
                 raw_pv = (costo_unitario_real * multiplicador_ganancia) * 1.18
                 precio_venta = round_to_nearest_5(raw_pv)
                 
@@ -365,29 +342,24 @@ if modulo == "📄 Factura Individual":
                     "Nombre Producto": resolved_name,
                     "Cant. Compra": cant_comprada,
                     "Unidad": unidad_txt,
-                    "Tamaño": tamano_txt,
                     "Empaque": empaque_val,
                     "Stock Unidades": total_unidades,
-                    "Descuento Monto": descuento_monto_linea,
                     "Costo Unitario Real": costo_unitario_real,
                     "Precio Venta": precio_venta
                 })
 
-            calc_itbis = calc_subtotal_neto * 0.18
-            calc_total_factura = calc_subtotal_neto + calc_itbis
-            porcentaje_desc_total = (calc_total_descuento / calc_subtotal_bruto * 100.0) if calc_subtotal_bruto > 0 else 0.0
+            calc_itbis = calc_subtotal * 0.18
+            calc_total_factura = calc_subtotal + calc_itbis
 
-            st.markdown("### 📑 Totales del Documento (Con Descuentos Aplicados)")
-            t1, t2, t3, t4, t5 = st.columns(5)
-            t1.metric("Subtotal Bruto", f"RD$ {calc_subtotal_bruto:,.2f}")
-            t2.metric("Descuento Aplicado", f"{porcentaje_desc_total:.1f}% / RD$ {calc_total_descuento:,.2f}")
-            t3.metric("Subtotal Neto", f"RD$ {calc_subtotal_neto:,.2f}")
-            t4.metric("ITBIS Total (18%)", f"RD$ {calc_itbis:,.2f}")
-            t5.metric("Total Neto", f"RD$ {calc_total_factura:,.2f}")
+            st.markdown("### 📑 Totales del Documento")
+            t1, t2, t3 = st.columns(3)
+            t1.metric("Subtotal Factura", f"RD$ {calc_subtotal:,.2f}")
+            t2.metric("ITBIS Total (18%)", f"RD$ {calc_itbis:,.2f}")
+            t3.metric("Total Neto", f"RD$ {calc_total_factura:,.2f}")
             st.markdown("---")
 
             if rows_preview:
-                st.markdown("### ✅ Artículos Procesados con Descuentos y Costos Netos")
+                st.markdown("### ✅ Artículos Procesados (Costos y Stock Correctos)")
                 df_resultado = pd.DataFrame(rows_preview)
                 df_resultado["Código EAN Único"] = df_resultado["Código EAN Único"].astype(str)
                 st.dataframe(df_resultado, use_container_width=True, hide_index=True)
@@ -400,13 +372,11 @@ if modulo == "📄 Factura Individual":
                 for item_dict in rows_preview:
                     code_to_save = item_dict["Código EAN Único"]
                     if "Sin Codigo" in code_to_save: code_to_save = "S/C"
-                    desc_val = item_dict["Descuento Monto"]
-                    desc_activo = "Sí" if desc_val > 0 else "No"
                     ws_prod.append([
                         item_dict["Nombre Producto"], str(code_to_save),
                         "General", "producto", item_dict["Precio Venta"],
                         item_dict["Costo Unitario Real"], item_dict["Stock Unidades"],
-                        5, 0.18, "unidad", "No", item_dict["Empaque"], "No", 0, desc_val, None, desc_activo, f"Descuento aplicado: RD$ {desc_val:,.2f}"
+                        5, 0.18, "unidad", "No", item_dict["Empaque"], "No", 0, 0, None, "No", None
                     ])
                     ws_prod.cell(row=ws_prod.max_row, column=2).number_format = '@'
                 
@@ -418,7 +388,7 @@ if modulo == "📄 Factura Individual":
                         "fecha": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                         "proveedor": prov_det,
                         "archivo": st.session_state["single_filename"] or "Factura Individual",
-                        "subtotal": round(calc_subtotal_neto, 2),
+                        "subtotal": round(calc_subtotal, 2),
                         "itbis": round(calc_itbis, 2),
                         "total": round(calc_total_factura, 2),
                         "total_items": len(rows_preview)
@@ -504,7 +474,6 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
                     tamano_txt = str(item.get("tamano") or "")
                     cant_comprada = safe_float(item.get("cantidad") or 1, 1.0)
                     val_neto_linea = safe_float(item.get("valor") or 0)
-                    descuento_monto_linea = safe_float(item.get("descuento_monto") or 0)
                     unidad_txt = str(item.get("unidad") or "")
                     
                     empaque_val = parse_empaque_universal(prov_det, tamano_txt, unidad_txt, resolved_name)
@@ -521,9 +490,8 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
                         "Costo": costo_unitario_real, "Stock": total_unidades, "Stock Mínimo": 5,
                         "ITBIS": 0.18, "Unidad Medida": "unidad", "Venta Granel": "No",
                         "Cantidad Empaque": empaque_val, "Precio Variable": "No",
-                        "Descuento %": 0, "Descuento Monto": descuento_monto_linea, "Precio Especial": None,
-                        "Descuento Activo": "Sí" if descuento_monto_linea > 0 else "No",
-                        "Descuento Nota": f"Descuento aplicado: RD$ {descuento_monto_linea:,.2f}" if descuento_monto_linea > 0 else None
+                        "Descuento %": 0, "Descuento Monto": 0, "Precio Especial": None,
+                        "Descuento Activo": "No", "Descuento Nota": None
                     })
 
                 if processed_rows:
@@ -533,7 +501,7 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
                         'Categoría': 'first', 'Tipo': 'first', 'Stock Mínimo': 'first',
                         'ITBIS': 'first', 'Unidad Medida': 'first', 'Venta Granel': 'first',
                         'Cantidad Empaque': 'first', 'Precio Variable': 'first',
-                        'Descuento %': 'first', 'Descuento Monto': 'sum',
+                        'Descuento %': 'first', 'Descuento Monto': 'first',
                         'Precio Especial': 'first', 'Descuento Activo': 'first', 'Descuento Nota': 'first'
                     })
                     st.dataframe(df_grouped, use_container_width=True, hide_index=True)
