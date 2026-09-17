@@ -50,15 +50,16 @@ MASTER_META_FILE = "catalogo_maestro_meta.json"
 SUPPLIER_MEMORY_FILE = "proveedores_formatos_memoria.json"
 HISTORY_FILE = "historial_procesados.json"
 
-def load_json_file(filepath):
-    data = {}
+def load_json_file(filepath, default_type="dict"):
     if os.path.exists(filepath):
         try:
             with open(filepath, "r", encoding="utf-8") as f:
                 data = json.load(f)
+                if default_type == "list" and isinstance(data, list): return data
+                if default_type == "dict" and isinstance(data, dict): return data
         except Exception:
-            data = {}
-    return data
+            pass
+    return [] if default_type == "list" else {}
 
 def save_json_file(filepath, data):
     try:
@@ -67,13 +68,13 @@ def save_json_file(filepath, data):
     except Exception:
         pass
 
-if "barcode_memory" not in st.session_state: st.session_state["barcode_memory"] = load_json_file(BARCODE_MEMORY_FILE)
-if "master_catalog" not in st.session_state: st.session_state["master_catalog"] = load_json_file(MASTER_CATALOG_FILE)
-if "master_meta" not in st.session_state: st.session_state["master_meta"] = load_json_file(MASTER_META_FILE)
-if "processing_history" not in st.session_state: st.session_state["processing_history"] = load_json_file(HISTORY_FILE)
+if "barcode_memory" not in st.session_state: st.session_state["barcode_memory"] = load_json_file(BARCODE_MEMORY_FILE, "dict")
+if "master_catalog" not in st.session_state: st.session_state["master_catalog"] = load_json_file(MASTER_CATALOG_FILE, "dict")
+if "master_meta" not in st.session_state: st.session_state["master_meta"] = load_json_file(MASTER_META_FILE, "dict")
+if "processing_history" not in st.session_state: st.session_state["processing_history"] = load_json_file(HISTORY_FILE, "list")
 
 if "supplier_memory" not in st.session_state:
-    loaded_suppliers = load_json_file(SUPPLIER_MEMORY_FILE)
+    loaded_suppliers = load_json_file(SUPPLIER_MEMORY_FILE, "dict")
     if not loaded_suppliers:
         loaded_suppliers = {
             "ALVAREZ & SANCHEZ": {"nombre": "ALVAREZ & SANCHEZ", "formato_empaque": "formula_tamano_slash_4x6"},
@@ -93,6 +94,8 @@ def save_supplier_memory(): save_json_file(SUPPLIER_MEMORY_FILE, st.session_stat
 
 def add_to_history(entry):
     hist = st.session_state.get("processing_history", [])
+    if not isinstance(hist, list):
+        hist = []
     hist.insert(0, entry)
     st.session_state["processing_history"] = hist
     save_json_file(HISTORY_FILE, hist)
@@ -138,7 +141,7 @@ def get_strict_ean_code_and_name(description, invoice_ean=""):
             
     return desc_clean, cleaned_invoice_ean
 
-# Reglas de empaque corregidas y optimizadas para CND / BEES
+# Reglas de empaque optimizadas para CND / BEES
 def parse_empaque_isolated(supplier_name, tamano_txt="", unidad_txt="", descripcion_txt=""):
     s_name = str(supplier_name).upper()
     u = str(unidad_txt).strip().upper()
@@ -146,14 +149,10 @@ def parse_empaque_isolated(supplier_name, tamano_txt="", unidad_txt="", descripc
     d = str(descripcion_txt).strip().upper()
     combined = f"{t} {u} {d}"
 
-    # REGLA ESPECÍFICA CND / BEES
     if "CND" in s_name or "BEES" in s_name:
-        # 1. Revisar si el campo tamano_txt trae un número directo (ej: '12')
         if t.isdigit():
             val_t = int(t)
             if val_t in [12, 24, 6, 48]: return val_t
-        
-        # 2. Buscar patrón de empaque en la descripción o combinado ej. '24/12OZ'
         match_cnd_desc = re.search(r'\b(24|12|6|48)\s*/', combined)
         if match_cnd_desc:
             return int(match_cnd_desc.group(1))
@@ -191,7 +190,7 @@ def parse_empaque_isolated(supplier_name, tamano_txt="", unidad_txt="", descripc
 # MENÚ Y CONFIGURACIÓN LATERAL
 # ==========================================
 st.sidebar.markdown("<h3 style='color: #0284c7; text-align: center;'>⚡ WilPOS</h3>", unsafe_allow_html=True)
-st.sidebar.markdown("<p style='text-align: center; color: #64748b; font-size: 0.8rem;'>Sistema con Historial y Stock Corregido</p>", unsafe_allow_html=True)
+st.sidebar.markdown("<p style='text-align: center; color: #64748b; font-size: 0.8rem;'>Sistema con Historial Blindado</p>", unsafe_allow_html=True)
 st.sidebar.markdown("---")
 
 modulo = st.sidebar.radio("Menú de Navegación", ["📄 Factura Individual", "📂 Múltiples Facturas (Lote)", "📁 Actualizar Catálogo Maestro", "🏢 Perfiles de Proveedores", "📜 Historial de Procesados", "📋 Códigos Almacenados"])
@@ -227,16 +226,15 @@ def process_invoice_smart_router(file_obj, file_type, use_paid_gemini=False):
         supp_mem[supplier_detected] = {"nombre": supplier_detected, "formato_empaque": "adaptativo", "descripcion": "Registrado automaticamente."}
         save_supplier_memory()
 
-    # Prompt mejorado para capturar correctamente el empaque o factor unitario en CND (ej: el 12 de Ocean Spray)
     prompt_main = (
         f"Analiza este documento de compra del proveedor '{supplier_detected}' con absoluta precisión. "
-        "REGLA DE ORO: Extrae el código, la descripción exacta, la cantidad, el factor de empaque o presentación (por ejemplo, si aparece un 12 solitario al final de la línea como en Ocean Spray, ponlo en 'tamano'), y el valor total. "
+        "REGLA DE ORO: Extrae el código, la descripción exacta, la cantidad, el factor de empaque o presentación indicado en la línea (por ejemplo, si aparece un 12 solitario al final de la línea como en Ocean Spray, ponlo en 'tamano'), y el valor total. "
         "Para cada renglón extrae rigurosamente en un JSON bajo la clave 'items': "
         "1. 'codigo_ean': código de barras o código de artículo. "
         "2. 'descripcion': nombre exacto del producto. "
         "3. 'cantidad': cantidad comprada. "
-        "4. 'tamano': empaque o factor numérico indicado al final de la línea (ej: '12'). "
-        "5. 'unidad': unidad de medida (ej: 'UN', 'PC'). "
+        "4. 'tamano': empaque o factor numérico indicado en la línea (ej: '12'). "
+        "5. 'unidad': unidad de medida. "
         "6. 'valor': monto total neto de la línea. "
         "Estructura JSON exacta: "
         '{"proveedor": "' + supplier_detected + '", "items": [{"codigo_ean": "...", "descripcion": "...", "cantidad": 1.0, "tamano": "...", "unidad": "...", "valor": 0.0}]}. '
@@ -262,8 +260,8 @@ def process_invoice_smart_router(file_obj, file_type, use_paid_gemini=False):
 # ==========================================
 if modulo == "📄 Factura Individual":
     try:
-        st.markdown("<h2>📊 Automatizador con <span style='color: #0284c7;'>Stock y Empaque Corregido</span></h2>", unsafe_allow_html=True)
-        st.markdown("<p style='color: #64748b;'>Cálculo exacto de unidades para CND, BEES y demás proveedores.</p>", unsafe_allow_html=True)
+        st.markdown("<h2>📊 Automatizador con <span style='color: #0284c7;'>Historial y Stock Corregido</span></h2>", unsafe_allow_html=True)
+        st.markdown("<p style='color: #64748b;'>Cálculo exacto de unidades y persistencia total.</p>", unsafe_allow_html=True)
         st.markdown("---")
         render_master_status_banner()
 
@@ -573,6 +571,9 @@ elif modulo == "📜 Historial de Procesados":
         st.markdown("---")
         
         history_list = st.session_state.get("processing_history", [])
+        if not isinstance(history_list, list):
+            history_list = []
+            
         if history_list:
             df_hist = pd.DataFrame(history_list)
             st.dataframe(df_hist, use_container_width=True, hide_index=True)
