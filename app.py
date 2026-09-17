@@ -76,6 +76,7 @@ if "supplier_memory" not in st.session_state:
         loaded_suppliers = {
             "ALVAREZ & SANCHEZ": {"nombre": "ALVAREZ & SANCHEZ", "formato_empaque": "formula_tamano_slash_4x6", "descripcion": "Usa columna tamano con formulas tipo 4X6 o 12/ y codigos EAN de 13 digitos sin apostrofes."},
             "GONZALEZ CUESTA": {"nombre": "GONZALEZ CUESTA", "formato_empaque": "caj_pza_estandar", "descripcion": "Usa codigos EAN de 13 digitos abajo del SAP y UMV tipo CAJ / 12 PZA sin apostrofes."},
+            "DEPOT": {"nombre": "DEPOT", "formato_empaque": "tiquet_sin_codigos_maestro", "descripcion": "Tiquetes de caja tipo Depot o PriceSmart sin codigo impreso; requiere cruce estricto con Catalogo Maestro."},
             "PRICESMART": {"nombre": "PRICESMART", "formato_empaque": "unidades_sueltas_tiquet", "descripcion": "Tiquets con codigos numericos directos."}
         }
         save_json_file(SUPPLIER_MEMORY_FILE, loaded_suppliers)
@@ -125,7 +126,7 @@ def get_strict_ean_code_and_name(description, invoice_ean=""):
         
     master_keys = list(master.keys())
     if master_keys:
-        coincidencias = difflib.get_close_matches(desc_clean, master_keys, n=1, cutoff=0.80)
+        coincidencias = difflib.get_close_matches(desc_clean, master_keys, n=1, cutoff=0.75)
         if coincidencias: return desc_clean, clean_ean_code(master[coincidencias[0]])
             
     return desc_clean, cleaned_invoice_ean
@@ -151,6 +152,10 @@ def parse_empaque_isolated(supplier_name, tamano_txt="", unidad_txt="", descripc
             if "6" in combined: return 6
             if "24" in combined: return 24
             if "48" in combined: return 48
+    elif "DEPOT" in s_name or "PRICESMART" in s_name:
+        # Tiquetes de caja: extraer cantidades o presentaciones directas (ej: 5CL, 75CL, etc.)
+        if "75" in combined or "75CL" in combined or "75 CL" in combined: return 1
+        if "5" in combined or "5CL" in combined or "5 CL" in combined: return 1
 
     match_pza = re.search(r'(\d+)\s*PZA', combined)
     if match_pza: return int(match_pza.group(1))
@@ -173,7 +178,7 @@ st.sidebar.markdown("---")
 use_gemini_paid_api = st.sidebar.checkbox("💎 Usar Gemini Paid (API de Pago)", value=bool(ACTIVE_GEMINI_PAID_KEY))
 
 def process_invoice_smart_router(file_obj, file_type, use_paid_gemini=False):
-    prompt_detect = "Identifica el nombre comercial del proveedor emisor de esta factura. Devuelve un JSON puro: {'proveedor': 'NOMBRE'}"
+    prompt_detect = "Identifica el nombre comercial del proveedor emisor de esta factura o tiquete (ej: ALVAREZ & SANCHEZ, GONZALEZ CUESTA, DEPOT, PRICESMART). Devuelve un JSON puro: {'proveedor': 'NOMBRE'}"
     
     active_key = ACTIVE_GEMINI_PAID_KEY if use_paid_gemini else ACTIVE_GEMINI_FREE_KEY
     if not active_key and use_paid_gemini: active_key = ACTIVE_GEMINI_FREE_KEY
@@ -195,21 +200,20 @@ def process_invoice_smart_router(file_obj, file_type, use_paid_gemini=False):
     except Exception:
         supplier_detected = "GENERAL"
 
-    # Actualizar memoria local de proveedores si aparece uno nuevo
     supp_mem = st.session_state["supplier_memory"]
     if supplier_detected not in supp_mem and supplier_detected != "GENERAL":
         supp_mem[supplier_detected] = {"nombre": supplier_detected, "formato_empaque": "adaptativo", "descripcion": "Registrado automaticamente."}
         save_supplier_memory()
 
     prompt_main = (
-        f"Analiza esta factura del proveedor '{supplier_detected}' con absoluta precisión. "
-        "REGLA DE ORO: Extrae obligatoriamente el código de barras EAN estándar de 13 dígitos de la línea. "
+        f"Analiza este documento de compra del proveedor '{supplier_detected}' con absoluta precisión. "
+        "REGLA DE ORO: Extrae el código EAN si está impreso, o deja 'codigo_ean' en blanco / 'S/C' si es un tiquete sin código. "
         "Para cada renglón extrae rigurosamente en un JSON bajo la clave 'items': "
-        "1. 'codigo_ean': código EAN estándar de 13 dígitos. "
-        "2. 'descripcion': nombre exacto del producto. "
-        "3. 'cantidad': cantidad comprada. "
-        "4. 'tamano': tamaño o presentación si aplica (ej: '4X6/33 CL', '12/75 CL'). "
-        "5. 'unidad': unidad de medida (ej: 'CAJA', 'BOT', 'PZA'). "
+        "1. 'codigo_ean': código de barras o EAN (si existe). "
+        "2. 'descripcion': nombre exacto del producto (ej: 'FIREBALL APPLE 75CL'). "
+        "3. 'cantidad': cantidad comprada (ej: el multiplicador antes de x, como 12.0 o 20.0). "
+        "4. 'tamano': tamaño o presentación si aplica (ej: '75CL', '5CL'). "
+        "5. 'unidad': unidad de medida si aplica. "
         "6. 'valor': monto total neto de la línea. "
         "Estructura JSON exacta: "
         '{"proveedor": "' + supplier_detected + '", "items": [{"codigo_ean": "...", "descripcion": "...", "cantidad": 1.0, "tamano": "...", "unidad": "...", "valor": 0.0}]}. '
@@ -243,14 +247,14 @@ if modulo == "📄 Factura Individual":
         st.markdown('<div class="card-container">', unsafe_allow_html=True)
         c_col1, _ = st.columns([1, 3])
         with c_col1: margen_ganancia = st.number_input("⚙️ Ganancia (%)", min_value=0.0, max_value=500.0, value=25.0, step=1.0)
-        uploaded_file = st.file_uploader("📂 Sube tu factura (PDF o Imagen)", type=["pdf", "png", "jpg", "jpeg"], key="single_file")
+        uploaded_file = st.file_uploader("📂 Sube tu factura o tiquete (PDF o Imagen)", type=["pdf", "png", "jpg", "jpeg"], key="single_file")
         st.markdown('</div>', unsafe_allow_html=True)
 
         if uploaded_file is not None:
             st.success(f"¡Archivo cargado: {uploaded_file.name}!")
             if st.button("🚀 Procesar con Seguridad Total"):
                 file_type = getattr(uploaded_file, 'type', 'image/jpeg')
-                with st.spinner("Procesando documento y validando catálogo..."):
+                with st.spinner("Procesando documento y cruzando Catálogo Maestro..."):
                     parsed_data, success_msg = process_invoice_smart_router(uploaded_file, file_type, use_paid_gemini=use_gemini_paid_api)
 
                 if success_msg == "QUOTA_EXCEEDED":
@@ -332,7 +336,7 @@ if modulo == "📄 Factura Individual":
                         
                         for item_dict in rows_preview:
                             code_to_save = item_dict["Código EAN Único"]
-                            if "Duplicado" in code_to_save: code_to_save = "S/C"
+                            if "Duplicado" in code_to_save or "Sin Codigo" in code_to_save: code_to_save = "S/C"
                             ws_prod.append([
                                 item_dict["Nombre Producto"], str(code_to_save),
                                 "General", "producto", item_dict["Precio Venta"],
