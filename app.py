@@ -192,15 +192,12 @@ def get_resolved_barcode_and_name(description):
     master = st.session_state["master_catalog"]
     memory = st.session_state["barcode_memory"]
     
-    # 1. Coincidencia exacta en Maestro
     if desc_upper in master:
         return desc_upper, clean_barcode(master[desc_upper])
         
-    # 2. Coincidencia exacta en Memoria
     if desc_upper in memory:
         return desc_upper, clean_barcode(memory[desc_upper])
         
-    # 3. Búsqueda por palabras clave principales (Ej: CORONA CERO, GATORADE, etc.)
     palabras = [p for p in desc_upper.split() if len(p) > 2]
     if palabras:
         mejor_match = None
@@ -213,7 +210,6 @@ def get_resolved_barcode_and_name(description):
         if mejor_match and max_coincidencias >= 2:
             return mejor_match[0], clean_barcode(mejor_match[1])
 
-    # 4. Búsqueda difusa restrictiva
     master_keys = list(master.keys())
     if master_keys:
         coincidencias = difflib.get_close_matches(desc_upper, master_keys, n=1, cutoff=0.40)
@@ -228,7 +224,6 @@ def get_resolved_barcode_and_name(description):
             matched_name = coincidencias_mem[0]
             return matched_name, clean_barcode(memory[matched_name])
         
-    # Si no se encuentra, NUNCA se usa el nombre como código
     return desc_upper, "S/C (Sin Código)"
 
 def parse_empaque_from_tamano(tamano_txt, unidad_txt, descripcion_txt=""):
@@ -236,8 +231,20 @@ def parse_empaque_from_tamano(tamano_txt, unidad_txt, descripcion_txt=""):
     d = str(descripcion_txt).strip().upper()
     t = str(tamano_txt).strip().upper()
     
-    # Detección de packs 4x6 / 6x4 (ej: Corona Cero 4x6 = 24 unidades)
-    match_4x6 = re.search(r'(\d+)\s*X\s*(\d+)', d + " " + t)
+    combined = d + " " + t
+    
+    # REGLA BLINDADA PARA CERVEZAS Y PACKS CND (Corona, Presidente, Michelob, Brahma)
+    if any(beer in combined for beer in ["CORONA", "MICHELOB", "PRESIDENTE", "BRAHMA"]):
+        if "650" in combined or "650M" in combined:
+            return 16
+        if "22OZ" in combined or "22 OZ" in combined:
+            return 24
+        # Si menciona packs tipo 4x6, 4x12 o LP (Lager Pack)
+        if "4X" in combined or "LP" in combined or "4X6" in combined:
+            return 24
+        return 24
+
+    match_4x6 = re.search(r'(\d+)\s*X\s*(\d+)', combined)
     if match_4x6:
         val1 = int(match_4x6.group(1))
         val2 = int(match_4x6.group(2))
@@ -282,7 +289,7 @@ use_gemini_paid_api = st.sidebar.checkbox("💎 Usar Gemini Paid (API de Pago)",
 def process_invoice_exact_18(file_obj, file_type, use_paid_gemini=False, use_openai_fallback=False):
     prompt_text = (
         "Analiza esta factura o tiquet con máxima precisión. "
-        "REGLA DE OBRERO ESTRICTA PARA LA DESCRIPCIÓN: En el campo 'descripcion' solo debe figurar el nombre limpio del producto y su presentación/gramaje o empaque (ej: 'CORONA CERO 355ML 4X6', 'BRAHMA LIGHT 24/12OZ', 'GATORADE FRUIT PUNCH 24', 'ALOE PURE PLUS ORIGINAL'). "
+        "REGLA DE OBRERO ESTRICTA PARA LA DESCRIPCIÓN: En el campo 'descripcion' solo debe figurar el nombre limpio del producto y su presentación/gramaje o empaque (ej: 'CORONA EXTRA 330ML LP 4', 'MICHELOB ULTRA 355ML 4X', 'CORONA CERO 355ML 4X6 P', 'BRAHMA LIGHT 24/12OZ'). "
         "Elimina códigos numéricos iniciales o de proveedor. "
         "Para cada renglón extrae exactamente: "
         "1. 'descripcion': nombre limpio y presentación del producto. "
