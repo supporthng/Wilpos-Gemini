@@ -76,10 +76,10 @@ if "supplier_memory" not in st.session_state:
     loaded_suppliers = load_json_file(SUPPLIER_MEMORY_FILE)
     if not loaded_suppliers:
         loaded_suppliers = {
-            "ALVAREZ & SANCHEZ": {"nombre": "ALVAREZ & SANCHEZ", "formato_empaque": "formula_tamano_slash_4x6", "descripcion": "Usa columna tamano con formulas tipo 4X6 o 12/ y codigos EAN de 13 digitos sin apostrofes."},
-            "GONZALEZ CUESTA": {"nombre": "GONZALEZ CUESTA", "formato_empaque": "caj_pza_estandar", "descripcion": "Usa codigos EAN de 13 digitos abajo del SAP y UMV tipo CAJ / 12 PZA sin apostrofes."},
-            "DEPOT": {"nombre": "DEPOT", "formato_empaque": "tiquet_sin_codigos_maestro", "descripcion": "Tiquetes de caja tipo Depot o PriceSmart sin codigo impreso; requiere cruce estricto con Catalogo Maestro."},
-            "PRICESMART": {"nombre": "PRICESMART", "formato_empaque": "unidades_sueltas_tiquet", "descripcion": "Tiquets con codigos numericos directos."}
+            "ALVAREZ & SANCHEZ": {"nombre": "ALVAREZ & SANCHEZ", "formato_empaque": "formula_tamano_slash_4x6"},
+            "GONZALEZ CUESTA": {"nombre": "GONZALEZ CUESTA", "formato_empaque": "caj_pza_estandar"},
+            "CND": {"nombre": "CND", "formato_empaque": "cnd_bees_extractor"},
+            "BEES": {"nombre": "BEES", "formato_empaque": "cnd_bees_extractor"}
         }
         save_json_file(SUPPLIER_MEMORY_FILE, loaded_suppliers)
     st.session_state["supplier_memory"] = loaded_suppliers
@@ -120,7 +120,6 @@ def clean_ean_code(code_val):
     if s_val.lower() in ["nan", "none", "", "s/c", "sin codigo"]: return "S/C (Sin Codigo)"
     return s_val
 
-# Jerarquía estricta: Catálogo Maestro > Memoria > Factura (con tolerancia flexible para tiquetes)
 def get_strict_ean_code_and_name(description, invoice_ean=""):
     desc_clean = str(description).strip().upper()
     master = st.session_state["master_catalog"]
@@ -134,19 +133,25 @@ def get_strict_ean_code_and_name(description, invoice_ean=""):
         
     master_keys = list(master.keys())
     if master_keys:
-        # Umbral flexible (0.60) para capturar abreviaciones en tiquetes
         coincidencias = difflib.get_close_matches(desc_clean, master_keys, n=1, cutoff=0.60)
         if coincidencias: return desc_clean, clean_ean_code(master[coincidencias[0]])
             
     return desc_clean, cleaned_invoice_ean
 
-# Reglas de empaque aisladas por proveedor
+# Reglas de empaque corregidas y optimizadas para CND / BEES y otros
 def parse_empaque_isolated(supplier_name, tamano_txt="", unidad_txt="", descripcion_txt=""):
     s_name = str(supplier_name).upper()
     u = str(unidad_txt).strip().upper()
     t = str(tamano_txt).strip().upper()
     d = str(descripcion_txt).strip().upper()
     combined = f"{t} {u} {d}"
+
+    # REGLA ESPECÍFICA CND / BEES (CERVECERÍA)
+    if "CND" in s_name or "BEES" in s_name:
+        # Buscar patrón de empaque en la descripción como '24/12OZ' o '12/1L'
+        match_cnd_desc = re.search(r'\b(24|12|6|48)\s*/', combined)
+        if match_cnd_desc:
+            return int(match_cnd_desc.group(1))
 
     if "ALVAREZ" in s_name or "SANCHEZ" in s_name:
         match_4x6 = re.search(r'(\d+)\s*X\s*(\d+)', combined)
@@ -166,6 +171,10 @@ def parse_empaque_isolated(supplier_name, tamano_txt="", unidad_txt="", descripc
         if "5" in combined or "5CL" in combined or "5 CL" in combined: return 1
         if "GALON" in combined or "GAL" in combined: return 1
 
+    # Búsqueda general por si acaso
+    match_general_slash = re.search(r'\b(24|12|6|48)\s*/', combined)
+    if match_general_slash: return int(match_general_slash.group(1))
+
     match_pza = re.search(r'(\d+)\s*PZA', combined)
     if match_pza: return int(match_pza.group(1))
     if "12" in combined: return 12
@@ -178,7 +187,7 @@ def parse_empaque_isolated(supplier_name, tamano_txt="", unidad_txt="", descripc
 # MENÚ Y CONFIGURACIÓN LATERAL
 # ==========================================
 st.sidebar.markdown("<h3 style='color: #0284c7; text-align: center;'>⚡ WilPOS</h3>", unsafe_allow_html=True)
-st.sidebar.markdown("<p style='text-align: center; color: #64748b; font-size: 0.8rem;'>Sistema con Historial y Protección</p>", unsafe_allow_html=True)
+st.sidebar.markdown("<p style='text-align: center; color: #64748b; font-size: 0.8rem;'>Sistema con Historial y Stock Corregido</p>", unsafe_allow_html=True)
 st.sidebar.markdown("---")
 
 modulo = st.sidebar.radio("Menú de Navegación", ["📄 Factura Individual", "📂 Múltiples Facturas (Lote)", "📁 Actualizar Catálogo Maestro", "🏢 Perfiles de Proveedores", "📜 Historial de Procesados", "📋 Códigos Almacenados"])
@@ -187,7 +196,7 @@ st.sidebar.markdown("---")
 use_gemini_paid_api = st.sidebar.checkbox("💎 Usar Gemini Paid (API de Pago)", value=bool(ACTIVE_GEMINI_PAID_KEY))
 
 def process_invoice_smart_router(file_obj, file_type, use_paid_gemini=False):
-    prompt_detect = "Identifica el nombre comercial del proveedor emisor de esta factura o tiquete (ej: ALVAREZ & SANCHEZ, GONZALEZ CUESTA, DEPOT, PRICESMART). Devuelve un JSON puro: {'proveedor': 'NOMBRE'}"
+    prompt_detect = "Identifica el nombre comercial del proveedor emisor de esta factura (ej: CND, BEES, ALVAREZ & SANCHEZ, GONZALEZ CUESTA, DEPOT, PRICESMART). Devuelve un JSON puro: {'proveedor': 'NOMBRE'}"
     
     active_key = ACTIVE_GEMINI_PAID_KEY if use_paid_gemini else ACTIVE_GEMINI_FREE_KEY
     if not active_key and use_paid_gemini: active_key = ACTIVE_GEMINI_FREE_KEY
@@ -216,13 +225,13 @@ def process_invoice_smart_router(file_obj, file_type, use_paid_gemini=False):
 
     prompt_main = (
         f"Analiza este documento de compra del proveedor '{supplier_detected}' con absoluta precisión. "
-        "REGLA DE ORO: Extrae el código EAN si está impreso, o deja 'codigo_ean' en blanco / 'S/C' si es un tiquete sin código. "
+        "REGLA DE ORO: Extrae el código o número de artículo, el código EAN si existe, la descripción completa, la cantidad comprada, y el empaque si viene en la línea. "
         "Para cada renglón extrae rigurosamente en un JSON bajo la clave 'items': "
-        "1. 'codigo_ean': código de barras o EAN (si existe). "
-        "2. 'descripcion': nombre exacto del producto. "
-        "3. 'cantidad': cantidad comprada. "
-        "4. 'tamano': tamaño o presentación si aplica. "
-        "5. 'unidad': unidad de medida si aplica. "
+        "1. 'codigo_ean': código de barras o código de artículo si está disponible. "
+        "2. 'descripcion': nombre exacto del producto (ej: 'OCEAN SPRAY 1/32 OZ', 'PTE. HU 24/12OZ'). "
+        "3. 'cantidad': cantidad comprada (ej: 47.0 o 100.0). "
+        "4. 'tamano': empaque o tamaño especificado (ej: '12', '24'). "
+        "5. 'unidad': unidad de medida (ej: 'UN', 'PC'). "
         "6. 'valor': monto total neto de la línea. "
         "Estructura JSON exacta: "
         '{"proveedor": "' + supplier_detected + '", "items": [{"codigo_ean": "...", "descripcion": "...", "cantidad": 1.0, "tamano": "...", "unidad": "...", "valor": 0.0}]}. '
@@ -248,8 +257,8 @@ def process_invoice_smart_router(file_obj, file_type, use_paid_gemini=False):
 # ==========================================
 if modulo == "📄 Factura Individual":
     try:
-        st.markdown("<h2>📊 Automatizador con <span style='color: #0284c7;'>Historial y Persistencia</span></h2>", unsafe_allow_html=True)
-        st.markdown("<p style='color: #64748b;'>Consulta prioritaria al Maestro, unicidad estricta y registro automático en historial.</p>", unsafe_allow_html=True)
+        st.markdown("<h2>📊 Automatizador con <span style='color: #0284c7;'>Stock y Empaque Corregido</span></h2>", unsafe_allow_html=True)
+        st.markdown("<p style='color: #64748b;'>Cálculo exacto de unidades para CND, BEES y demás proveedores.</p>", unsafe_allow_html=True)
         st.markdown("---")
         render_master_status_banner()
 
@@ -266,7 +275,7 @@ if modulo == "📄 Factura Individual":
         if uploaded_file is not None:
             if st.button("🚀 Procesar y Guardar en Historial"):
                 file_type = getattr(uploaded_file, 'type', 'image/jpeg')
-                with st.spinner("Procesando documento y cruzando Catálogo Maestro..."):
+                with st.spinner("Procesando documento y calculando stock..."):
                     parsed_data, success_msg = process_invoice_smart_router(uploaded_file, file_type, use_paid_gemini=use_gemini_paid_api)
 
                 if success_msg == "QUOTA_EXCEEDED":
@@ -324,7 +333,6 @@ if modulo == "📄 Factura Individual":
                     "Código EAN Único": str(resolved_code),
                     "Nombre Producto": resolved_name,
                     "Cant. Compra": cant_comprada,
-                    "Tamaño": tamano_txt,
                     "Empaque": empaque_val,
                     "Stock Unidades": total_unidades,
                     "Costo Unitario Real": costo_unitario_real,
@@ -342,7 +350,7 @@ if modulo == "📄 Factura Individual":
             st.markdown("---")
 
             if rows_preview:
-                st.markdown("### ✅ Artículos Procesados Correctamente")
+                st.markdown("### ✅ Artículos Procesados con Stock Corregido")
                 df_resultado = pd.DataFrame(rows_preview)
                 df_resultado["Código EAN Único"] = df_resultado["Código EAN Único"].astype(str)
                 st.dataframe(df_resultado, use_container_width=True, hide_index=True)
