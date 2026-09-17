@@ -12,7 +12,7 @@ import openpyxl
 import pandas as pd
 
 # ==========================================
-# CONFIGURACIÓN DE LA PÁGINA Y ESTILOS CSS
+# CONFIGURACIóN DE LA PÁGINA Y ESTILOS CSS
 # ==========================================
 st.set_page_config(
     page_title="WilPOS - Sistema de Inventario Inteligente", 
@@ -74,9 +74,9 @@ if "supplier_memory" not in st.session_state:
     loaded_suppliers = load_json_file(SUPPLIER_MEMORY_FILE)
     if not loaded_suppliers:
         loaded_suppliers = {
-            "ALVAREZ & SANCHEZ": {"nombre": "ALVAREZ & SANCHEZ", "formato_empaque": "formula_tamano_slash_4x6"},
-            "GONZALEZ CUESTA": {"nombre": "GONZALEZ CUESTA", "formato_empaque": "caj_pza_estandar"},
-            "PRICESMART": {"nombre": "PRICESMART", "formato_empaque": "unidades_sueltas_tiquet"}
+            "ALVAREZ & SANCHEZ": {"nombre": "ALVAREZ & SANCHEZ", "formato_empaque": "formula_tamano_slash_4x6", "descripcion": "Usa columna tamano con formulas tipo 4X6 o 12/ y codigos EAN de 13 digitos sin apostrofes."},
+            "GONZALEZ CUESTA": {"nombre": "GONZALEZ CUESTA", "formato_empaque": "caj_pza_estandar", "descripcion": "Usa codigos EAN de 13 digitos abajo del SAP y UMV tipo CAJ / 12 PZA sin apostrofes."},
+            "PRICESMART": {"nombre": "PRICESMART", "formato_empaque": "unidades_sueltas_tiquet", "descripcion": "Tiquets con codigos numericos directos."}
         }
         save_json_file(SUPPLIER_MEMORY_FILE, loaded_suppliers)
     st.session_state["supplier_memory"] = loaded_suppliers
@@ -105,10 +105,10 @@ def safe_int(val, default=1):
 def round_to_nearest_5(x): return float(round(round(x / 5) * 5))
 
 def clean_ean_code(code_val):
-    if not code_val: return "S/C (Sin Código)"
+    if not code_val: return "S/C (Sin Codigo)"
     s_val = str(code_val).strip()
     if s_val.endswith('.0'): s_val = s_val[:-2]
-    if s_val.lower() in ["nan", "none", "", "s/c", "sin codigo"]: return "S/C (Sin Código)"
+    if s_val.lower() in ["nan", "none", "", "s/c", "sin codigo"]: return "S/C (Sin Codigo)"
     return s_val
 
 # Jerarquía estricta: Catálogo Maestro > Memoria > Factura
@@ -121,7 +121,7 @@ def get_strict_ean_code_and_name(description, invoice_ean=""):
     if desc_clean in memory: return desc_clean, clean_ean_code(memory[desc_clean])
     
     cleaned_invoice_ean = clean_ean_code(invoice_ean)
-    if cleaned_invoice_ean != "S/C (Sin Código)": return desc_clean, cleaned_invoice_ean
+    if cleaned_invoice_ean != "S/C (Sin Codigo)": return desc_clean, cleaned_invoice_ean
         
     master_keys = list(master.keys())
     if master_keys:
@@ -194,6 +194,12 @@ def process_invoice_smart_router(file_obj, file_type, use_paid_gemini=False):
         supplier_detected = str(json.loads(txt_det.strip()).get("proveedor") or "GENERAL").upper().strip()
     except Exception:
         supplier_detected = "GENERAL"
+
+    # Actualizar memoria local de proveedores si aparece uno nuevo
+    supp_mem = st.session_state["supplier_memory"]
+    if supplier_detected not in supp_mem and supplier_detected != "GENERAL":
+        supp_mem[supplier_detected] = {"nombre": supplier_detected, "formato_empaque": "adaptativo", "descripcion": "Registrado automaticamente."}
+        save_supplier_memory()
 
     prompt_main = (
         f"Analiza esta factura del proveedor '{supplier_detected}' con absoluta precisión. "
@@ -270,11 +276,10 @@ if modulo == "📄 Factura Individual":
                         invoice_ean = str(item.get("codigo_ean") or "")
                         resolved_name, resolved_code = get_strict_ean_code_and_name(desc_raw, invoice_ean)
 
-                        # Control anti-duplicados en la misma factura
-                        if resolved_code in assigned_barcodes and resolved_code != "S/C (Sin Código)":
+                        if resolved_code in assigned_barcodes and resolved_code != "S/C (Sin Codigo)":
                             resolved_code = "S/C (Duplicado - Revisar)"
 
-                        if resolved_code != "S/C (Sin Código)" and "Duplicado" not in resolved_code:
+                        if resolved_code != "S/C (Sin Codigo)" and "Duplicado" not in resolved_code:
                             assigned_barcodes.add(resolved_code)
 
                         cant_comprada = safe_float(item.get("cantidad") or 1, 1.0)
@@ -417,9 +422,9 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
                     prov_det = str(item.get("_prov") or "GENERAL")
                     resolved_name, resolved_code = get_strict_ean_code_and_name(desc_raw, invoice_ean)
                     
-                    if resolved_code in batch_assigned_barcodes and resolved_code != "S/C (Sin Código)":
+                    if resolved_code in batch_assigned_barcodes and resolved_code != "S/C (Sin Codigo)":
                         resolved_code = "S/C"
-                    if resolved_code != "S/C (Sin Código)":
+                    if resolved_code != "S/C (Sin Codigo)":
                         batch_assigned_barcodes.add(resolved_code)
 
                     cant_comprada = safe_float(item.get("cantidad") or 1, 1.0)
@@ -480,7 +485,7 @@ elif modulo == "📁 Actualizar Catálogo Maestro":
                 for _, row in df_master.iterrows():
                     p_name = str(row[col_name]).strip().upper()
                     p_code = clean_ean_code(row[col_code])
-                    if p_name and p_code != "S/C (Sin Código)":
+                    if p_name and p_code != "S/C (Sin Codigo)":
                         temp_dict[p_name] = p_code
                         count += 1
                 st.session_state["master_catalog"] = temp_dict
@@ -505,6 +510,7 @@ elif modulo == "🏢 Perfiles de Proveedores":
             for s_name, s_data in supps.items():
                 with st.expander(f"🏢 {s_name}"):
                     st.write(f"**Formato / Regla:** {s_data.get('formato_empaque', 'N/A')}")
+                    st.write(f"**Descripcion:** {s_data.get('descripcion', 'N/A')}")
         else:
             st.info("No hay proveedores en memoria aún.")
     except Exception as e:
