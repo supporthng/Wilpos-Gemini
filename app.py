@@ -79,8 +79,8 @@ if "supplier_memory" not in st.session_state:
         loaded_suppliers = {
             "ALVAREZ & SANCHEZ": {"nombre": "ALVAREZ & SANCHEZ", "formato_empaque": "formula_tamano_slash_4x6"},
             "GONZALEZ CUESTA": {"nombre": "GONZALEZ CUESTA", "formato_empaque": "caj_pza_estandar"},
-            "CND": {"nombre": "CND", "formato_empaque": "cnd_direct_extractor"},
-            "BEES": {"nombre": "BEES", "formato_empaque": "cnd_direct_extractor"}
+            "CND": {"nombre": "CND", "formato_empaque": "universal_extractor"},
+            "BEES": {"nombre": "BEES", "formato_empaque": "universal_extractor"}
         }
         save_json_file(SUPPLIER_MEMORY_FILE, loaded_suppliers)
     st.session_state["supplier_memory"] = loaded_suppliers
@@ -122,7 +122,6 @@ def clean_ean_code(code_val):
     if s_val.lower() in ["nan", "none", "", "s/c", "sin codigo"]: return "S/C (Sin Codigo)"
     return s_val
 
-# Jerarquía estricta: Catálogo Maestro > Memoria. Se permite compartir códigos EAN entre múltiples renglones.
 def get_strict_ean_code_and_name(description, invoice_ean="", supplier_name=""):
     desc_clean = str(description).strip().upper()
     master = st.session_state["master_catalog"]
@@ -144,26 +143,47 @@ def get_strict_ean_code_and_name(description, invoice_ean="", supplier_name=""):
     if cleaned_invoice_ean != "S/C (Sin Codigo)": return desc_clean, cleaned_invoice_ean
     return desc_clean, "S/C (Sin Codigo)"
 
-# Regla de empaque limpia y directa para CND/BEES
-def parse_empaque_isolated(supplier_name, tamano_txt="", unidad_txt="", descripcion_txt=""):
-    d = str(descripcion_txt).strip().upper()
-    t = str(tamano_txt).strip().upper()
-    combined = f"{t} {d}"
-
-    if "24" in combined or "24/" in combined:
-        if "24 BOTELLAS" in combined or "24/" in combined or "24 BOTS" in combined or "HUACAL" in combined or "PTE" in combined:
-            return 24
-    if "12" in combined or "12/" in combined:
-        if "12 BOTELLAS" in combined or "12/" in combined:
-            return 12
-
+# ==========================================
+# REGLA DE EMPAQUE UNIVERSAL E INFALIBLE
+# ==========================================
+def parse_empaque_universal(supplier_name="", tamano_txt="", unidad_txt="", descripcion_txt=""):
+    combined = f"{str(tamano_txt)} {str(unidad_txt)} {str(descripcion_txt)}".upper()
+    
+    # 1. Buscar formato matriz como 4X6, 6X4, 4x6 (ej: Corona 4x6 = 24)
+    match_nxn = re.search(r'\b(\d+)\s*[xX]\s*(\d+)\b', combined)
+    if match_nxn:
+        return int(match_nxn.group(1)) * int(match_nxn.group(2))
+        
+    # 2. Buscar formatos con barra como 24/12OZ, 6/473, 12/
+    match_slash = re.search(r'\b(24|12|6|48|10|20|30)\s*/', combined)
+    if match_slash:
+        return int(match_slash.group(1))
+        
+    # 3. Buscar palabras explícitas de empaque (ej: 24 BOTELLAS, 6 PACK)
+    match_words = re.search(r'\b(24|12|6|48)\s*(BOTS|BOTELLAS|PACK|PZA|UNIDADES|UN)\b', combined)
+    if match_words:
+        return int(match_words.group(1))
+        
+    # 4. Reglas específicas por tipo de producto común en bebidas (Four Loko, Huacales)
+    if "FOUR LOKO" in combined:
+        match_fl = re.search(r'\b(6|12)\s*/', combined)
+        if match_fl: return int(match_fl.group(1))
+        return 6
+        
+    if "HUACAL" in combined or "PTE. HU" in combined or "BRAHMA LIGHT HU" in combined or "THE ONE HU" in combined:
+        if "24" in combined: return 24
+        
+    # 5. Si viene marcado como unidad suelta (UN) y no hay patrón de empaque en el texto
+    if "UN" in str(unidad_txt).upper() and not re.search(r'\b(24|12|6|48)\b', combined):
+        return 1
+        
     return 1
 
 # ==========================================
 # MENÚ Y CONFIGURACIÓN LATERAL
 # ==========================================
 st.sidebar.markdown("<h3 style='color: #0284c7; text-align: center;'>⚡ WilPOS</h3>", unsafe_allow_html=True)
-st.sidebar.markdown("<p style='text-align: center; color: #64748b; font-size: 0.8rem;'>Sistema sin Restricción de Duplicados</p>", unsafe_allow_html=True)
+st.sidebar.markdown("<p style='text-align: center; color: #64748b; font-size: 0.8rem;'>Sistema Universal de Empaques</p>", unsafe_allow_html=True)
 st.sidebar.markdown("---")
 
 modulo = st.sidebar.radio("Menú de Navegación", ["📄 Factura Individual", "📂 Múltiples Facturas (Lote)", "📁 Actualizar Catálogo Maestro", "🏢 Perfiles de Proveedores", "📜 Historial de Procesados", "📋 Códigos Almacenados"])
@@ -196,18 +216,19 @@ def process_invoice_smart_router(file_obj, file_type, use_paid_gemini=False):
 
     supp_mem = st.session_state["supplier_memory"]
     if supplier_detected not in supp_mem and supplier_detected != "GENERAL":
-        supp_mem[supplier_detected] = {"nombre": supplier_detected, "formato_empaque": "adaptativo", "descripcion": "Registrado automaticamente."}
+        supp_mem[supplier_detected] = {"nombre": supplier_detected, "formato_empaque": "universal_extractor", "descripcion": "Registrado automaticamente."}
         save_supplier_memory()
 
     prompt_main = (
         f"Analiza este documento de compra del proveedor '{supplier_detected}' con absoluta precisión. "
         "Para cada renglón extrae rigurosamente en un JSON bajo la clave 'items': "
         "1. 'codigo_ean': código de barras oficial si existe. "
-        "2. 'descripcion': nombre exacto del producto. "
+        "2. 'descripcion': nombre exacto del producto con todas sus especificaciones (ej: 'FOUR LOKO MARACUYA 6/47', 'CORONA CERO 355ML 4X6 P'). "
         "3. 'cantidad': cantidad comprada exactamente tal como aparece. "
-        "4. 'valor': monto total neto de la línea. "
+        "4. 'unidad': unidad de medida exacta impresa en la línea ('UN', 'PC'). "
+        "5. 'valor': monto total neto de la línea. "
         "Estructura JSON exacta: "
-        '{"proveedor": "' + supplier_detected + '", "items": [{"codigo_ean": "...", "descripcion": "...", "cantidad": 1.0, "valor": 0.0}]}. '
+        '{"proveedor": "' + supplier_detected + '", "items": [{"codigo_ean": "...", "descripcion": "...", "cantidad": 1.0, "unidad": "...", "valor": 0.0}]}. '
         "Respuesta JSON pura sin texto adicional."
     )
 
@@ -230,8 +251,8 @@ def process_invoice_smart_router(file_obj, file_type, use_paid_gemini=False):
 # ==========================================
 if modulo == "📄 Factura Individual":
     try:
-        st.markdown("<h2>📊 Automatizador con <span style='color: #0284c7;'>Catálogo Maestro Flexible</span></h2>", unsafe_allow_html=True)
-        st.markdown("<p style='color: #64748b;'>Permite códigos EAN compartidos entre diferentes renglones de la factura.</p>", unsafe_allow_html=True)
+        st.markdown("<h2>📊 Automatizador con <span style='color: #0284c7;'>Empaque Universal e Infalible</span></h2>", unsafe_allow_html=True)
+        st.markdown("<p style='color: #64748b;'>Detección automática de factores (6/, 24/, 4X6) y cálculo de costo unitario real.</p>", unsafe_allow_html=True)
         st.markdown("---")
         render_master_status_banner()
 
@@ -248,7 +269,7 @@ if modulo == "📄 Factura Individual":
         if uploaded_file is not None:
             if st.button("🚀 Procesar y Guardar en Historial"):
                 file_type = getattr(uploaded_file, 'type', 'image/jpeg')
-                with st.spinner("Procesando documento y cruzando Catálogo Maestro..."):
+                with st.spinner("Procesando documento con motor universal de empaques..."):
                     parsed_data, success_msg = process_invoice_smart_router(uploaded_file, file_type, use_paid_gemini=use_gemini_paid_api)
 
                 if success_msg == "QUOTA_EXCEEDED":
@@ -280,8 +301,9 @@ if modulo == "📄 Factura Individual":
 
                 cant_comprada = safe_float(item.get("cantidad") or 1, 1.0)
                 val_neto_linea = safe_float(item.get("valor") or 0)
+                unidad_txt = str(item.get("unidad") or "")
                 
-                empaque_val = parse_empaque_isolated(prov_det, "", "", resolved_name)
+                empaque_val = parse_empaque_universal(prov_det, "", unidad_txt, resolved_name)
                 total_unidades = int(cant_comprada * empaque_val)
 
                 costo_unitario_real = round(val_neto_linea / total_unidades, 2) if total_unidades > 0 else 0.0
@@ -296,6 +318,7 @@ if modulo == "📄 Factura Individual":
                     "Código EAN Único": str(resolved_code),
                     "Nombre Producto": resolved_name,
                     "Cant. Compra": cant_comprada,
+                    "Unidad": unidad_txt,
                     "Empaque": empaque_val,
                     "Stock Unidades": total_unidades,
                     "Costo Unitario Real": costo_unitario_real,
@@ -313,7 +336,7 @@ if modulo == "📄 Factura Individual":
             st.markdown("---")
 
             if rows_preview:
-                st.markdown("### ✅ Artículos Procesados Correctamente")
+                st.markdown("### ✅ Artículos Procesados con Costos Unitarios Reales")
                 df_resultado = pd.DataFrame(rows_preview)
                 df_resultado["Código EAN Único"] = df_resultado["Código EAN Único"].astype(str)
                 st.dataframe(df_resultado, use_container_width=True, hide_index=True)
@@ -427,8 +450,9 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
 
                     cant_comprada = safe_float(item.get("cantidad") or 1, 1.0)
                     val_neto_linea = safe_float(item.get("valor") or 0)
+                    unidad_txt = str(item.get("unidad") or "")
                     
-                    empaque_val = parse_empaque_isolated(prov_det, "", "", resolved_name)
+                    empaque_val = parse_empaque_universal(prov_det, "", unidad_txt, resolved_name)
                     total_unidades = int(cant_comprada * empaque_val)
                     costo_unitario_real = round(val_neto_linea / total_unidades, 2) if total_unidades > 0 else 0.0
                     if costo_unitario_real <= 0: continue
@@ -529,7 +553,7 @@ elif modulo == "📜 Historial de Procesados":
             df_hist = pd.DataFrame(history_list)
             st.dataframe(df_hist, use_container_width=True, hide_index=True)
             
-            if st.button("🗑️ Limpiar Historial"):
+            if st.button("🗑️ Historial"):
                 st.session_state["processing_history"] = []
                 save_json_file(HISTORY_FILE, [])
                 st.success("¡Historial limpiado exitosamente!")
