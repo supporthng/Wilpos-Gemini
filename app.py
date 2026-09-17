@@ -137,6 +137,13 @@ def get_strict_ean_code_and_name(description, invoice_ean="", supplier_name=""):
     master = st.session_state["master_catalog"]
     memory = st.session_state["barcode_memory"]
     
+    # Manejo específico multi-tamaño para Tequila Reserva Cristalino 1800
+    if "1800" in desc_clean and "CRISTALINO" in desc_clean:
+        if "1.75" in desc_clean or "175" in desc_clean or "1,75" in desc_clean:
+            return "TEQUILA RESERVA CRISTALINO 1800 (1.75L)", "7501035013636"
+        elif "750" in desc_clean or "0.75" in desc_clean or "75 CL" in desc_clean or "12/70" in desc_clean:
+            return "TEQUILA RESERVA CRISTALINO 1800 750 ML", "7501035013483"
+
     if desc_clean in master: return desc_clean, clean_ean_code(master[desc_clean])
     if desc_clean in memory: return desc_clean, clean_ean_code(memory[desc_clean])
         
@@ -148,10 +155,6 @@ def get_strict_ean_code_and_name(description, invoice_ean="", supplier_name=""):
     s_name = str(supplier_name).upper()
     cleaned_invoice_ean = clean_ean_code(invoice_ean)
     
-    # Corrección específica si el OCR lee mal el código de Álvarez & Sánchez del Tequila 1800
-    if "1800" in desc_clean and "CRISTALINO" in desc_clean:
-        return desc_clean, "7501035013483"
-
     if ("CND" in s_name or "BEES" in s_name) and len(cleaned_invoice_ean) <= 6:
         return desc_clean, "S/C (Sin Codigo)"
 
@@ -159,7 +162,7 @@ def get_strict_ean_code_and_name(description, invoice_ean="", supplier_name=""):
     return desc_clean, "S/C (Sin Codigo)"
 
 # ==========================================
-# REGLA DE EMPAQUE UNIVERSAL (ÁLVAREZ & SÁNCHEZ Y OTROS)
+# REGLA DE EMPAQUE UNIVERSAL PROTEGIDA
 # ==========================================
 def parse_empaque_universal(supplier_name="", tamano_txt="", unidad_txt="", descripcion_txt=""):
     combined = f"{str(tamano_txt)} {str(unidad_txt)} {str(descripcion_txt)}".upper()
@@ -169,7 +172,6 @@ def parse_empaque_universal(supplier_name="", tamano_txt="", unidad_txt="", desc
     if "REGAL PACK" in s_name:
         return 1
 
-    # Para Álvarez & Sánchez, formato tamaño con barra tipo 12/70 CL
     match_slash = re.search(r'\b(24|16|12|6|48|10|20|30)\s*/', combined)
     if match_slash:
         return int(match_slash.group(1))
