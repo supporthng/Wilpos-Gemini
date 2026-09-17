@@ -129,12 +129,6 @@ def save_json_file(filepath, data):
 
 if "barcode_memory" not in st.session_state:
     mem_data = load_json_file(BARCODE_MEMORY_FILE)
-    mem_data.setdefault("VINO TINTO SIX EIGHT NINE 689", "051497322618")
-    mem_data.setdefault("VODKA SKYY", "721059007504")
-    mem_data.setdefault("VODKA INFUSIONS CITRUS SKYY", "721059627504")
-    mem_data.setdefault("VODKA INFUSIONS RASPBERRY SKYY", "721059637503")
-    mem_data.setdefault("FIREBALL APPLE 50 ML", "088004087524")
-    mem_data.setdefault("FIREBALL APPLE 750 ML", "088004087425")
     st.session_state["barcode_memory"] = mem_data
 
 if "master_catalog" not in st.session_state:
@@ -160,7 +154,7 @@ def render_master_status_banner():
     if total_prod > 0:
         st.success(f"🟢 **Catálogo Maestro Activo en el Sistema** | Productos cargados: **{total_prod:,}** | 🕒 Última actualización: **{ultima_act}**")
     else:
-        st.error(f"🔴 **Catálogo Maestro Vacío** | No hay productos cargados en la memoria del sistema. Ve a **'📁 Actualizar Catálogo Maestro'** para registrarlo.")
+        st.error(f"🔴 **Catálogo Maestro Vacío** | No hay productos cargados en el sistema. Ve a **'📁 Actualizar Catálogo Maestro'** para registrarlo.")
 
 def safe_float(val, default=0.0):
     try:
@@ -187,8 +181,11 @@ def clean_barcode(code_val):
         return "S/C (Sin Código)"
     return s_val
 
-def get_strict_barcode_and_name(description):
-    """Buscador estricto que respeta el nombre literal de la factura y solo busca el código maestro si coincide de forma muy alta."""
+def get_strict_barcode_and_name(description, invoice_code=""):
+    """Buscador que prioriza el código SAP/EAN de la factura, luego catálogo maestro o memoria."""
+    if invoice_code and str(invoice_code).strip() not in ["", "nan", "None", "S/C"]:
+        return str(description).strip().upper(), clean_barcode(invoice_code)
+
     desc_clean = str(description).strip().upper()
     master = st.session_state["master_catalog"]
     memory = st.session_state["barcode_memory"]
@@ -200,32 +197,27 @@ def get_strict_barcode_and_name(description):
         
     master_keys = list(master.keys())
     if master_keys:
-        coincidencias = difflib.get_close_matches(desc_clean, master_keys, n=1, cutoff=0.85)
+        coincidencias = difflib.get_close_matches(desc_clean, master_keys, n=1, cutoff=0.80)
         if coincidencias:
             matched_name = coincidencias[0]
             return desc_clean, clean_barcode(master[matched_name])
             
     return desc_clean, "S/C (Sin Código)"
 
-def parse_empaque_from_tamano(tamano_txt, unidad_txt, descripcion_txt=""):
-    u = str(unidad_txt).strip().upper()
+def parse_empaque_from_umv(umv_txt, descripcion_txt=""):
+    u = str(umv_txt).strip().upper()
     d = str(descripcion_txt).strip().upper()
-    t = str(tamano_txt).strip().upper()
+    combined = d + " " + u
     
-    combined = d + " " + t + " " + u
-    
-    if "BOT" in u or "UND" in u or "UNIDAD" in u or "EA" in u:
-        return 1
-
-    match_slash = re.search(r'\b(\d+)\s*/', combined)
-    if match_slash:
-        val = int(match_slash.group(1))
-        if val in [1, 3, 6, 12, 16, 20, 24, 48]:
-            return val
-
     match_pza = re.search(r'(\d+)\s*PZA', combined)
     if match_pza:
         return int(match_pza.group(1))
+
+    if "CAJ" in u or "CAJA" in u:
+        if "12" in combined: return 12
+        if "6" in combined: return 6
+        if "24" in combined: return 24
+        if "48" in combined: return 48
 
     return 1
 
@@ -247,19 +239,15 @@ use_gemini_paid_api = st.sidebar.checkbox("💎 Usar Gemini Paid (API de Pago)",
 
 def process_invoice_exact_18(file_obj, file_type, use_paid_gemini=False, use_openai_fallback=False):
     prompt_text = (
-        "Analiza esta factura o tiquet con máxima precisión quirúrgica. "
-        "REGLA CRÍTICA DE EXTRACCIÓN LITERAL: Copia exactamente el nombre del producto tal como aparece impreso en la factura en el campo 'descripcion'. "
-        "PROHIBIDO inventar, adivinar o sustituir nombres de productos por otros que no aparezcan en la factura (por ejemplo, si el texto dice 'Parlante', debes escribir exactamente 'Parlante' y nunca un licor o marca distinta). "
-        "Para cada renglón extrae estrictamente: "
-        "1. 'descripcion': texto literal del producto impreso en la factura. "
-        "2. 'cantidad': cantidad numérica. "
-        "3. 'unidad': unidad (ej: 'EA', 'CAJA', 'BOT.'). "
-        "4. 'tamano': tamaño o presentación si se indica. "
-        "5. 'precio_lista': precio unitario. "
-        "6. 'valor': monto total neto de la línea. "
-        "7. 'descuento_porcentaje': porcentaje de descuento si aplica. "
+        "Analiza esta factura de proveedor de bebidas con máxima precisión. "
+        "REGLA CRÍTICA: Extrae rigurosamente cada columna de los renglones: "
+        "1. 'codigo_sap': el código numérico SAP o EAN que aparece a la izquierda del producto (ej: 2036911, 7804300150082). "
+        "2. 'descripcion': texto literal exacto del producto impreso en la factura. "
+        "3. 'cantidad': cantidad numérica de cajas o unidades compradas (ej: 1.000). "
+        "4. 'umv': unidad de medida de venta (ej: 'CAJ / 12 PZA', 'CAJ / 6 PZA'). "
+        "5. 'valor': monto total neto de la línea. "
         "Devuelve un JSON puro bajo la clave 'items': "
-        '{"items": [{"descripcion": "Parlante", "cantidad": 1, "unidad": "EA", "tamano": "", "precio_lista": 4063.56, "valor": 4063.56, "descuento_porcentaje": 0.0}]}. '
+        '{"items": [{"codigo_sap": "2036911", "descripcion": "SANTA HELENA MERLOT 75 CL VEB19056", "cantidad": 1.0, "umv": "CAJ / 12 PZA", "valor": 4814.40}]}. '
         "Respuesta JSON pura sin texto adicional."
     )
 
@@ -326,7 +314,7 @@ def process_invoice_exact_18(file_obj, file_type, use_paid_gemini=False, use_ope
 if modulo == "📄 Factura Individual":
     try:
         st.markdown("<h2>📊 Automatizador de Facturas <span style='color: #0284c7;'>(Individual)</span></h2>", unsafe_allow_html=True)
-        st.markdown("<p style='color: #64748b;'>Procesamiento estricto fiel al texto de la factura.</p>", unsafe_allow_html=True)
+        st.markdown("<p style='color: #64748b;'>Procesamiento con cálculo exacto de empaques y códigos SAP.</p>", unsafe_allow_html=True)
         st.markdown("---")
 
         render_master_status_banner()
@@ -344,7 +332,7 @@ if modulo == "📄 Factura Individual":
             st.success(f"¡Archivo cargado: {uploaded_file.name}!")
             if st.button("🚀 Procesar Documento"):
                 file_type = getattr(uploaded_file, 'type', 'image/jpeg')
-                with st.spinner("Procesando documento con precisión estricta..."):
+                with st.spinner("Procesando documento..."):
                     parsed_data, success_msg = process_invoice_exact_18(uploaded_file, file_type, use_paid_gemini=use_gemini_paid_api, use_openai_fallback=use_openai_single)
 
                 if success_msg == "QUOTA_EXCEEDED":
@@ -360,79 +348,60 @@ if modulo == "📄 Factura Individual":
                     multiplicador_ganancia = 1 + (margen_ganancia / 100.0)
 
                     calc_subtotal = 0.0
-                    calc_descuento_total = 0.0
 
                     for idx, item in enumerate(data_items, start=1):
                         if not isinstance(item, dict):
-                            omitted_items.append({"Item #": idx, "Descripción": str(item), "Razón": "Estructura inválida"})
                             continue
                         
-                        desc_raw = str(item.get("descripcion") or item.get("nombre") or "").strip()
+                        desc_raw = str(item.get("descripcion") or "").strip()
                         if not desc_raw:
-                            omitted_items.append({"Item #": idx, "Descripción": "(Sin descripción)", "Razón": "Línea sin descripción"})
                             continue
 
-                        resolved_name, resolved_code = get_strict_barcode_and_name(desc_raw)
+                        invoice_code = str(item.get("codigo_sap") or "")
+                        resolved_name, resolved_code = get_strict_validation_code = get_strict_barcode_and_name(desc_raw, invoice_code)
 
-                        cant_comprada = safe_int(item.get("cantidad") or 1, 1)
+                        cant_comprada = safe_float(item.get("cantidad") or 1, 1.0)
                         val_neto_linea = safe_float(item.get("valor") or 0)
+                        umv_txt = str(item.get("umv") or "")
                         
-                        unidad_txt = str(item.get("unidad") or "EA")
-                        tamano_txt = str(item.get("tamano") or "")
-                        empaque_val = parse_empaque_from_tamano(tamano_txt, unidad_txt, resolved_name)
+                        empaque_val = parse_empaque_from_umv(umv_txt, resolved_name)
+                        total_unidades = int(cant_comprada * empaque_val)
 
-                        if empaque_val > 1:
-                            total_unidades = cant_comprada * empaque_val
-                            costo = round(val_neto_linea / total_unidades, 2) if total_unidades > 0 else 0.0
-                        else:
-                            total_unidades = cant_comprada
-                            costo = round(val_neto_linea / cant_comprada, 2) if cant_comprada > 0 else 0.0
-
+                        costo = round(val_neto_linea / total_unidades, 2) if total_unidades > 0 else 0.0
                         if costo <= 0:
-                            omitted_items.append({"Item #": idx, "Descripción": resolved_name, "Razón": "Costo cero o inválido"})
                             continue
 
-                        desc_pct = safe_float(item.get("descuento_porcentaje") or 0)
-                        importe_bruto = val_neto_linea
-                        descuento_linea = importe_bruto * (desc_pct / 100.0)
-                        
-                        calc_subtotal += importe_bruto
-                        calc_descuento_total += descuento_linea
+                        calc_subtotal += val_neto_linea
 
                         raw_pv = (costo * multiplicador_ganancia) * 1.18
                         precio_venta = round_to_nearest_5(raw_pv)
                         
                         rows_preview.append({
                             "No.": idx,
-                            "Código Oficial POS": str(resolved_code),
+                            "Código SAP / EAN": str(resolved_code),
                             "Nombre Factura / Artículo": resolved_name,
-                            "Cant. Compra": cant_comprada,
-                            "Unidad": unidad_txt,
-                            "Empaque Num": empaque_val,
-                            "Stock Total": total_unidades,
+                            "Cant. Caja": cant_comprada,
+                            "UMV": umv_txt,
+                            "Empaque": empaque_val,
+                            "Stock Total Unidades": total_unidades,
                             "Costo Unitario": costo,
-                            "Precio Venta": precio_venta,
-                            "Estado": "Catálogo Maestro" if resolved_code != "S/C (Sin Código)" else "Sin Código Maestro"
+                            "Precio Venta": precio_venta
                         })
 
-                    calc_neto_gravado = calc_subtotal - calc_descuento_total
-                    calc_itbis = calc_neto_gravado * 0.18
-                    calc_total_factura = calc_neto_gravado + calc_itbis
+                    calc_itbis = calc_subtotal * 0.18
+                    calc_total_factura = calc_subtotal + calc_itbis
 
                     st.markdown("### 📑 Totales del Documento")
-                    t1, t2, t3, t4 = st.columns(4)
-                    t1.metric("Subtotal Gravado", f"RD$ {calc_subtotal:,.2f}")
-                    t2.metric("Descuento Total", f"RD$ {calc_descuento_total:,.2f}")
-                    t3.metric("ITBIS Total (18%)", f"RD$ {calc_itbis:,.2f}")
-                    t4.metric("Total Neto", f"RD$ {calc_total_factura:,.2f}")
+                    t1, t2, t3 = st.columns(3)
+                    t1.metric("Subtotal Factura", f"RD$ {calc_subtotal:,.2f}")
+                    t2.metric("ITBIS Total (18%)", f"RD$ {calc_itbis:,.2f}")
+                    t3.metric("Total Neto", f"RD$ {calc_total_factura:,.2f}")
                     st.markdown("---")
-
-                    st.info(f"📋 **Auditoría:** Se detectaron **{len(data_items)} ítems**. Procesados: **{len(rows_preview)}** | Omitidos: **{len(omitted_items)}**")
 
                     if rows_preview:
                         st.markdown("### ✅ Artículos Procesados Exitosamente")
                         df_resultado = pd.DataFrame(rows_preview)
-                        df_resultado["Código Oficial POS"] = df_resultado["Código Oficial POS"].astype(str)
+                        df_resultado["Código SAP / EAN"] = df_resultado["Código SAP / EAN"].astype(str)
                         
                         altura_tabla = min(max(len(rows_preview) * 35 + 40, 200), 850)
                         st.dataframe(df_resultado, use_container_width=True, hide_index=True, height=altura_tabla)
@@ -445,13 +414,13 @@ if modulo == "📄 Factura Individual":
                         for item_dict in rows_preview:
                             ws_prod.append([
                                 item_dict["Nombre Factura / Artículo"],
-                                str(item_dict["Código Oficial POS"]),
+                                str(item_dict["Código SAP / EAN"]),
                                 "General", "producto",
                                 item_dict["Precio Venta"],
                                 item_dict["Costo Unitario"],
-                                item_dict["Stock Total"],
+                                item_dict["Stock Total Unidades"],
                                 5, 0.18, "unidad", "No",
-                                item_dict["Empaque Num"], "No", 0, 0, None, "No", None
+                                item_dict["Empaque"], "No", 0, 0, None, "No", None
                             ])
                             ws_prod.cell(row=ws_prod.max_row, column=2).number_format = '@'
                         
@@ -459,7 +428,7 @@ if modulo == "📄 Factura Individual":
                         wb.save(output)
                         st.download_button("📥 Descargar Excel WilPOS Oficial", output.getvalue(), "Inventario_WilPOS_Actualizado.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
     except Exception as e:
-        st.error("⚠️ Ocurrió un error inesperado en el módulo de Factura Individual:")
+        st.error("⚠️ Ocurrió un error inesperado en Factura Individual:")
         st.exception(e)
 
 # ==========================================
@@ -468,11 +437,8 @@ if modulo == "📄 Factura Individual":
 elif modulo == "📂 Múltiples Facturas (Lote)":
     try:
         st.markdown("<h2>📂 Procesador por <span style='color: #0284c7;'>Lotes y Consolidación Oficial</span></h2>", unsafe_allow_html=True)
-        st.markdown("<p style='color: #64748b;'>Procesamiento con extracción literal y consolidación.</p>", unsafe_allow_html=True)
         st.markdown("---")
-
         render_master_status_banner()
-
         st.markdown('<div class="card-container">', unsafe_allow_html=True)
         l_col1, _ = st.columns([1, 3])
         with l_col1:
@@ -563,8 +529,6 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
 
             if st.session_state["batch_processed_count"] > 0:
                 st.markdown("---")
-                st.markdown("## 📊 Consolidado de Inventario y Totales")
-
                 raw_items = st.session_state["batch_accumulated_items"]
                 multiplicador_ganancia = 1 + (margen_ganancia_lote / 100.0)
 
@@ -579,36 +543,30 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
                     if not desc_raw:
                         continue
 
-                    resolved_name, resolved_code = get_strict_barcode_and_name(desc_raw)
+                    invoice_code = str(item.get("codigo_sap") or "")
+                    resolved_name, resolved_code = get_strict_barcode_and_name(desc_raw, invoice_code)
                     
-                    cant_comprada = safe_int(item.get("cantidad") or 1, 1)
+                    cant_comprada = safe_float(item.get("cantidad") or 1, 1.0)
                     val_neto_linea = safe_float(item.get("valor") or 0)
+                    umv_txt = str(item.get("umv") or "")
                     
-                    unidad_txt = str(item.get("unidad") or "EA")
-                    tamano_txt = str(item.get("tamano") or "")
-                    empaque_val = parse_empaque_from_tamano(tamano_txt, unidad_txt, resolved_name)
+                    empaque_val = parse_empaque_from_umv(umv_txt, resolved_name)
+                    total_unidades = int(cant_comprada * empaque_val)
 
-                    if empaque_val > 1:
-                        total_unidades = cant_comprada * empaque_val
-                        costo = round(val_neto_linea / total_unidades, 2) if total_unidades > 0 else 0.0
-                    else:
-                        total_unidades = cant_comprada
-                        costo = round(val_neto_linea / cant_comprada, 2) if cant_comprada > 0 else 0.0
-
+                    costo = round(val_neto_linea / total_unidades, 2) if total_unidades > 0 else 0.0
                     if costo <= 0:
                         continue
 
                     raw_pv = (costo * multiplicador_ganancia) * 1.18
                     precio_venta = round_to_nearest_5(raw_pv)
-                    stock_val = total_unidades
-                    total_unidades_inventario += stock_val
+                    total_unidades_inventario += total_unidades
 
                     processed_rows.append({
                         "Nombre": resolved_name,
                         "Código Barra": str(resolved_code),
                         "Categoría": "General", "Tipo": "producto",
                         "Precio Venta": precio_venta, "Costo": costo,
-                        "Stock": stock_val, "Stock Mínimo": 5, "ITBIS": 0.18,
+                        "Stock": total_unidades, "Stock Mínimo": 5, "ITBIS": 0.18,
                         "Unidad Medida": "unidad", "Venta Granel": "No",
                         "Cantidad Empaque": empaque_val, "Precio Variable": "No",
                         "Descuento %": 0, "Descuento Monto": 0, "Precio Especial": None,
@@ -660,7 +618,7 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
                     wb.save(output)
                     st.download_button("📥 Descargar Excel Consolidado Final", output.getvalue(), "Inventario_WilPOS_Consolidado.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
     except Exception as e:
-        st.error("⚠️ Ocurrió un error inesperado en el módulo de Lotes:")
+        st.error("⚠️ Ocurrió un error inesperado en Lotes:")
         st.exception(e)
 
 # ==========================================
@@ -669,12 +627,8 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
 elif modulo == "📁 Actualizar Catálogo Maestro":
     try:
         st.markdown("<h2>📁 Actualización y Gestión del <span style='color: #0284c7;'>Catálogo Maestro</span></h2>", unsafe_allow_html=True)
-        st.markdown("<p style='color: #64748b;'>Sube un nuevo archivo Excel para actualizar la base de datos oficial.</p>", unsafe_allow_html=True)
-        st.markdown("---")
-
         render_master_status_banner()
         st.markdown("---")
-
         master_file = st.file_uploader("📂 Sube tu Catálogo Maestro actualizado (Excel .xlsx)", type=["xlsx"], key="master_upload")
         
         if master_file is not None:
@@ -686,7 +640,7 @@ elif modulo == "📁 Actualizar Catálogo Maestro":
                 st.markdown("### Selecciona las columnas correspondientes")
                 cols = df_master.columns.tolist()
                 col_name = st.selectbox("Columna con el Nombre / Descripción del Producto", cols)
-                col_code = st.selectbox("Columna con el Código de Barras Oficial", cols)
+                col_code = st.selectbox("Columna con el Código de Barras / SAP Oficial", cols)
                 
                 if st.button("🔄 Sobrescribir y Actualizar Maestro en el Sistema"):
                     count = 0
@@ -719,12 +673,10 @@ elif modulo == "📁 Actualizar Catálogo Maestro":
                 save_meta_to_file("Nunca", 0)
                 st.rerun()
                 
-            df_current_master = pd.DataFrame([{"Descripción": k, "Código de Barras": v} for k, v in st.session_state["master_catalog"].items()])
+            df_current_master = pd.DataFrame([{"Descripción": k, "Código SAP / EAN": v} for k, v in st.session_state["master_catalog"].items()])
             st.dataframe(df_current_master, use_container_width=True, hide_index=True, height=400)
-        else:
-            st.info("ℹ️ El Catálogo Maestro está vacío actualmente. Sube un archivo Excel arriba para registrar los productos.")
     except Exception as e:
-        st.error("⚠️ Ocurrió un error inesperado en el Catálogo Maestro:")
+        st.error("⚠️ Ocurrió un error inesperado en Catálogo Maestro:")
         st.exception(e)
 
 # ==========================================
@@ -733,7 +685,6 @@ elif modulo == "📁 Actualizar Catálogo Maestro":
 elif modulo == "📋 Ver Códigos Almacenados":
     try:
         st.markdown("<h2>📋 Memoria de <span style='color: #0284c7;'>Códigos y Catálogo del Sistema</span></h2>", unsafe_allow_html=True)
-        
         render_master_status_banner()
         st.markdown("---")
 
@@ -741,7 +692,7 @@ elif modulo == "📋 Ver Códigos Almacenados":
         with col_m1:
             st.markdown(f"### 📚 Catálogo Maestro ({len(st.session_state['master_catalog'])})")
             if st.session_state["master_catalog"]:
-                df_m_mem = pd.DataFrame([{"Producto": k, "Código EAN": v} for k, v in st.session_state["master_catalog"].items()])
+                df_m_mem = pd.DataFrame([{"Producto": k, "Código SAP / EAN": v} for k, v in st.session_state["master_catalog"].items()])
                 st.dataframe(df_m_mem, use_container_width=True, hide_index=True, height=400)
             else:
                 st.warning("⚠️ No hay Catálogo Maestro cargado.")
@@ -755,5 +706,5 @@ elif modulo == "📋 Ver Códigos Almacenados":
             else:
                 st.warning("⚠️ La memoria de aprendizaje está vacía.")
     except Exception as e:
-        st.error("⚠️ Ocurrió un error inesperado en la sección de Códigos Almacenados:")
+        st.error("⚠️ Ocurrió un error inesperado en Códigos Almacenados:")
         st.exception(e)
