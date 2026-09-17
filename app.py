@@ -100,6 +100,7 @@ openai_key_candidates = [
 ACTIVE_OPENAI_KEY = next((k for k in openai_key_candidates if k and str(k).strip()), None)
 
 BARCODE_MEMORY_FILE = "codigos_escaneados_memoria.json"
+MASTER_CATALOG_FILE = "catalogo_maestro_sistema.json"
 
 def load_json_file(filepath):
     data = {}
@@ -109,21 +110,36 @@ def load_json_file(filepath):
                 data = json.load(f)
         except Exception:
             data = {}
-    
-    data["WHISKY ESCOCES MALTA 12 AÑOS GLEN GRANT"] = "8000040630269"
-    data["VINO TINTO SIX EIGHT NINE 689"] = "051497322618"
-    data["VODKA SKYY"] = "721059007504"
-    data["VODKA INFUSIONS CITRUS SKYY"] = "721059627504"
-    data["VODKA INFUSIONS RASPBERRY SKYY"] = "721059637503"
-    data["FIREBALL APPLE 50 ML"] = "088004087524"
-    data["FIREBALL APPLE 750 ML"] = "088004087425"
     return data
 
+def save_json_file(filepath, data):
+    try:
+        with open(filepath, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=4)
+    except Exception:
+        pass
+
+# Inicializar Memoria y Catálogo Maestro en el Sistema
 if "barcode_memory" not in st.session_state:
-    st.session_state["barcode_memory"] = load_json_file(BARCODE_MEMORY_FILE)
+    mem_data = load_json_file(BARCODE_MEMORY_FILE)
+    mem_data.setdefault("WHISKY ESCOCES MALTA 12 AÑOS GLEN GRANT", "8000040630269")
+    mem_data.setdefault("VINO TINTO SIX EIGHT NINE 689", "051497322618")
+    mem_data.setdefault("VODKA SKYY", "721059007504")
+    mem_data.setdefault("VODKA INFUSIONS CITRUS SKYY", "721059627504")
+    mem_data.setdefault("VODKA INFUSIONS RASPBERRY SKYY", "721059637503")
+    mem_data.setdefault("FIREBALL APPLE 50 ML", "088004087524")
+    mem_data.setdefault("FIREBALL APPLE 750 ML", "088004087425")
+    st.session_state["barcode_memory"] = mem_data
 
 if "master_catalog" not in st.session_state:
-    st.session_state["master_catalog"] = {}
+    # Cargar automáticamente desde la memoria persistente del sistema
+    st.session_state["master_catalog"] = load_json_file(MASTER_CATALOG_FILE)
+
+def save_memory_to_file():
+    save_json_file(BARCODE_MEMORY_FILE, st.session_state["barcode_memory"])
+
+def save_master_to_file():
+    save_json_file(MASTER_CATALOG_FILE, st.session_state["master_catalog"])
 
 def safe_float(val, default=0.0):
     try:
@@ -150,24 +166,19 @@ def clean_barcode(code_val):
         return "S/C (Sin Código)"
     return s_val
 
-def extract_size_token(text):
-    match = re.search(r'\b(?:\d+\s*(?:CL|ML|L|LT|OZ|G|GR)|GALON)\b', str(text).upper())
-    return match.group(0).replace(" ", "") if match else None
-
 def get_resolved_barcode_and_name(description):
-    """REGLA DE ORO: Busca obligatoriamente en el Catálogo Maestro y Memoria. 
-       Devuelve (Nombre Oficial Unificado, Código Oficial EAN)."""
+    """REGLA DE ORO BLINDADA: Consulta estricta en el Catálogo Maestro y Memoria del Sistema."""
     desc_upper = str(description).strip().upper()
     
-    # 1. Búsqueda exacta en Catálogo Maestro
+    # 1. Búsqueda exacta en Catálogo Maestro del Sistema
     if desc_upper in st.session_state["master_catalog"]:
         return desc_upper, st.session_state["master_catalog"][desc_upper]
         
-    # 2. Búsqueda exacta en Memoria
+    # 2. Búsqueda exacta en Memoria de Aprendizaje
     if desc_upper in st.session_state["barcode_memory"]:
         return desc_upper, st.session_state["barcode_memory"][desc_upper]
         
-    # 3. Búsqueda difusa altamente restrictiva contrastando con el Catálogo Maestro
+    # 3. Búsqueda difusa contrastando con el Catálogo Maestro del Sistema
     master_keys = list(st.session_state["master_catalog"].keys())
     if master_keys:
         coincidencias = difflib.get_close_matches(desc_upper, master_keys, n=1, cutoff=0.45)
@@ -193,7 +204,7 @@ st.sidebar.markdown("---")
 
 modulo = st.sidebar.radio(
     "Menú de Navegación",
-    ["📄 Factura Individual", "📂 Múltiples Facturas (Lote)", "📁 Cargar Archivo Maestro", "📋 Ver Códigos Almacenados"]
+    ["📄 Factura Individual", "📂 Múltiples Facturas (Lote)", "📁 Actualizar Catálogo Maestro", "📋 Ver Códigos Almacenados"]
 )
 
 st.sidebar.markdown("---")
@@ -299,8 +310,11 @@ def process_invoice_exact_18(file_obj, file_type, use_paid_gemini=False, use_ope
 # ==========================================
 if modulo == "📄 Factura Individual":
     st.markdown("<h2>📊 Automatizador de Facturas <span style='color: #0284c7;'>(Individual)</span></h2>", unsafe_allow_html=True)
-    st.markdown("<p style='color: #64748b;'>Procesamiento con regla de oro estricta de Catálogo Maestro y costos precisos.</p>", unsafe_allow_html=True)
+    st.markdown("<p style='color: #64748b;'>Procesamiento con Catálogo Maestro activo en la memoria del sistema.</p>", unsafe_allow_html=True)
     st.markdown("---")
+
+    if not st.session_state["master_catalog"]:
+        st.warning("⚠️ **Aviso importante:** El Catálogo Maestro está vacío en el sistema. Ve a la sección **'📁 Actualizar Catálogo Maestro'** en la barra lateral para cargarlo.")
 
     st.markdown('<div class="card-container">', unsafe_allow_html=True)
     c_col1, _ = st.columns([1, 3])
@@ -343,7 +357,7 @@ if modulo == "📄 Factura Individual":
                         omitted_items.append({"Item #": idx, "Descripción": "(Sin descripción)", "Razón": "Línea sin descripción"})
                         continue
 
-                    # APLICAR REGLA DE ORO: Resolver nombre oficial y código EAN oficial del Catálogo Maestro
+                    # APLICAR REGLA DE ORO BLINDADA (Memoria del Sistema)
                     resolved_name, resolved_code = get_resolved_barcode_and_name(desc_raw)
 
                     cant_comprada = safe_int(item.get("cantidad") or 1, 1)
@@ -437,7 +451,7 @@ if modulo == "📄 Factura Individual":
 # ==========================================
 elif modulo == "📂 Múltiples Facturas (Lote)":
     st.markdown("<h2>📂 Procesador por <span style='color: #0284c7;'>Lotes y Consolidación Oficial</span></h2>", unsafe_allow_html=True)
-    st.markdown("<p style='color: #64748b;'>Procesa múltiples facturas aplicando la Regla de Oro de códigos oficiales.</p>", unsafe_allow_html=True)
+    st.markdown("<p style='color: #64748b;'>Procesa múltiples facturas aplicando la Regla de Oro en memoria.</p>", unsafe_allow_html=True)
     st.markdown("---")
 
     st.markdown('<div class="card-container">', unsafe_allow_html=True)
@@ -628,58 +642,77 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
                 st.download_button("📥 Descargar Excel Consolidado Final", output.getvalue(), "Inventario_WilPOS_Consolidado_Corregido.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
 # ==========================================
-# MÓDULO 3: CARGAR ARCHIVO MAESTRO
+# MÓDULO 3: ACTUALIZAR CATÁLOGO MAESTRO
 # ==========================================
-elif modulo == "📁 Cargar Archivo Maestro":
-    st.markdown("<h2>📁 Gestión de <span style='color: #0284c7;'>Catálogo Maestro</span></h2>", unsafe_allow_html=True)
-    st.markdown("<p style='color: #64748b;'>Sube tu archivo Excel maestro con presentaciones y códigos oficiales.</p>", unsafe_allow_html=True)
+elif modulo == "📁 Actualizar Catálogo Maestro":
+    st.markdown("<h2>📁 Actualización y Gestión del <span style='color: #0284c7;'>Catálogo Maestro</span></h2>", unsafe_allow_html=True)
+    st.markdown("<p style='color: #64748b;'>Sube un nuevo archivo Excel para actualizar la base de datos oficial en la memoria del sistema.</p>", unsafe_allow_html=True)
     st.markdown("---")
 
-    master_file = st.file_uploader("📂 Sube tu Catálogo Maestro (Excel .xlsx)", type=["xlsx"], key="master_upload")
+    master_file = st.file_uploader("📂 Sube tu Catálogo Maestro actualizado (Excel .xlsx)", type=["xlsx"], key="master_upload")
     
     if master_file is not None:
         try:
             df_master = pd.read_excel(master_file)
-            st.success("¡Archivo maestro cargado con éxito!")
-            st.write("Vista previa de tus datos:", df_master.head())
+            st.success("¡Archivo Excel leído con éxito!")
+            st.write("Vista previa:", df_master.head())
             
             st.markdown("### Selecciona las columnas correspondientes")
             cols = df_master.columns.tolist()
             col_name = st.selectbox("Columna con el Nombre / Descripción del Producto", cols)
             col_code = st.selectbox("Columna con el Código de Barras Oficial", cols)
             
-            if st.button("💾 Guardar Catálogo en Memoria"):
+            if st.button("🔄 Sobrescribir y Actualizar Maestro en el Sistema"):
                 count = 0
                 temp_dict = {}
                 for _, row in df_master.iterrows():
                     p_name = str(row[col_name]).strip().upper()
-                    p_code = clean_barcode(row[col_code])
-                    if p_name and p_code != "S/C (Sin Código)":
+                    p_code = str(row[col_code]).strip()
+                    if p_code.endswith('.0'): p_code = p_code[:-2]
+                    if p_name and p_code and p_code.lower() not in ['nan', 'none', '', 's/c']:
                         temp_dict[p_name] = p_code
                         count += 1
                 
                 st.session_state["master_catalog"] = temp_dict
-                st.success(f"¡Se han importado y guardado correctamente {count} productos en el catálogo maestro!")
+                save_master_to_file()
+                st.success(f"¡Catálogo maestro actualizado exitosamente con {count} productos en la memoria persistente del sistema!")
         except Exception as e:
-            st.error(f"Error al leer el archivo Excel: {e}")
+            st.error(f"Error al procesar el archivo Excel: {e}")
 
     if st.session_state["master_catalog"]:
         st.markdown("---")
-        st.markdown(f"### 📋 Productos activos en el Catálogo Maestro ({len(st.session_state['master_catalog'])})")
+        col_act1, col_act2 = st.columns([3, 1])
+        col_act1.markdown(f"### 📋 Productos activos en el Sistema ({len(st.session_state['master_catalog'])})")
+        if col_act2.button("🗑️ Vaciar Catálogo"):
+            st.session_state["master_catalog"] = {}
+            save_master_to_file()
+            st.rerun()
+            
         df_current_master = pd.DataFrame([{"Descripción": k, "Código de Barras": v} for k, v in st.session_state["master_catalog"].items()])
         st.dataframe(df_current_master, use_container_width=True, hide_index=True, height=400)
     else:
-        st.info("ℹ️ Aún no hay productos cargados en el catálogo maestro. Sube un archivo Excel para comenzar.")
+        st.info("ℹ️ El Catálogo Maestro está vacío actualmente. Sube un archivo Excel arriba para registrar los productos.")
 
 # ==========================================
 # MÓDULO 4: MEMORIA
 # ==========================================
 elif modulo == "📋 Ver Códigos Almacenados":
-    st.markdown("<h2>📋 Memoria de <span style='color: #0284c7;'>Códigos Almacenados</span></h2>", unsafe_allow_html=True)
-    b_mem = st.session_state["barcode_memory"]
-    if b_mem:
-        st.info(f"📊 Total de códigos oficiales almacenados en memoria: **{len(b_mem)}**")
-        df_codes = pd.DataFrame([{"Código de Barras Oficial": str(code), "Nombre del Producto": name} for name, code in b_mem.items()])
-        st.dataframe(df_codes, use_container_width=True, hide_index=True, height=500)
-    else:
-        st.warning("⚠️ La memoria está vacía.")
+    st.markdown("<h2>📋 Memoria de <span style='color: #0284c7;'>Códigos y Catálogo del Sistema</span></h2>", unsafe_allow_html=True)
+    
+    col_m1, col_m2 = st.columns(2)
+    with col_m1:
+        st.markdown(f"### 📚 Catálogo Maestro ({len(st.session_state['master_catalog'])})")
+        if st.session_state["master_catalog"]:
+            df_m_mem = pd.DataFrame([{"Producto": k, "Código EAN": v} for k, v in st.session_state["master_catalog"].items()])
+            st.dataframe(df_m_mem, use_container_width=True, hide_index=True, height=400)
+        else:
+            st.warning("⚠️ No hay Catálogo Maestro cargado.")
+            
+    with col_m2:
+        b_mem = st.session_state["barcode_memory"]
+        st.markdown(f"### ⚡ Memoria de Aprendizaje ({len(b_mem)})")
+        if b_mem:
+            df_codes = pd.DataFrame([{"Código Oficial": str(code), "Producto": name} for name, code in b_mem.items()])
+            st.dataframe(df_codes, use_container_width=True, hide_index=True, height=400)
+        else:
+            st.warning("⚠️ La memoria de aprendizaje está vacía.")
