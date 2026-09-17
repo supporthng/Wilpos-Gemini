@@ -126,35 +126,26 @@ def clean_ean_code(code_val):
     if s_val.lower() in ["nan", "none", "", "s/c", "sin codigo"]: return "S/C (Sin Codigo)"
     return str(s_val)
 
-def clean_product_description_name(raw_name):
+def clean_product_name_and_presentation(raw_name, raw_tamano=""):
+    """Limpia el nombre del producto y separa la presentación de forma limpia."""
     name = str(raw_name).strip()
+    # Eliminar numeraciones iniciales o códigos sueltos
     name = re.sub(r'^\d+[\s-]*', '', name)
     name = re.sub(r'^\[.*?\]\s*', '', name)
-    return name.strip().upper()
-
-def get_strict_ean_code_and_name(description, tamano="", invoice_ean="", supplier_name="", unidad_txt=""):
-    desc_clean = clean_product_description_name(description)
-    if tamano and str(tamano).strip() not in desc_clean:
-        desc_clean = f"{desc_clean} {str(tamano).strip().upper()}"
-    elif unidad_txt and str(unidad_txt).strip() and not any(char.isdigit() for char in str(unidad_txt)):
-        pass
-        
-    master = st.session_state["master_catalog"]
-    memory = st.session_state["barcode_memory"]
     
-    if desc_clean in master: return desc_clean, clean_ean_code(master[desc_clean])
-    if desc_clean in memory: return desc_clean, clean_ean_code(memory[desc_clean])
-        
-    cleaned_invoice_ean = clean_ean_code(invoice_ean)
-    if cleaned_invoice_ean != "S/C (Sin Codigo)": 
-        # Si el EAN se repite pero el empaque/presentación es diferente, añadimos el detalle al nombre para distinguirlo en el POS
-        if tamano and str(tamano).strip():
-            final_name = f"{desc_clean} ({str(tamano).strip().upper()})"
-        else:
-            final_name = desc_clean
-        return final_name, cleaned_invoice_ean
-        
-    return desc_clean, "S/C (Sin Codigo)"
+    # Extraer o limpiar patrones de presentación/tamaño incrustados (ej. '12/75 CL.', '750 ML', '1 LT', '6/1.75 L.')
+    presentation = str(raw_tamano).strip().upper()
+    if not presentation or presentation in ["NAN", "NONE", ""]:
+        # Buscar patrones de tamaño dentro del propio nombre
+        match_pres = re.search(r'\b(\d+\s*/\s*[\d\.]+\s*(?:CL|ML|L|LT|OZ)|\d+\s*(?:CL|ML|L|LT|OZ))\b', name, re.IGNORECASE)
+        if match_pres:
+            presentation = match_pres.group(1).upper()
+            # Remover esa presentación del nombre para dejarlo completamente limpio
+            name = name.replace(match_pres.group(1), '')
+            
+    name = re.sub(r'\s+', ' ', name).strip().upper()
+    presentation = re.sub(r'\s+', ' ', presentation).strip().upper()
+    return name, presentation
 
 def parse_empaque_universal(supplier_name="", tamano_txt="", unidad_txt="", descripcion_txt=""):
     combined = f"{str(tamano_txt)} {str(unidad_txt)} {str(descripcion_txt)}".upper()
@@ -213,9 +204,9 @@ def process_invoice_smart_router(file_obj, file_type, use_paid_gemini=False):
         "Extrae ABSOLUTAMENTE TODOS LOS RENGLONES/PRODUCTOS que aparecen en la factura, sin omitir ninguno. "
         "Para cada renglón extrae rigurosamente en un JSON bajo la clave 'items': "
         "1. 'codigo_ean': código de barras oficial o EAN (IMPORTANTE: conserva todos los ceros a la izquierda exactamente como aparecen). "
-        "2. 'descripcion': nombre exacto del producto limpio. "
-        "3. 'tamano': tamaño o presentación (ej: '750 CL', '1 LT', '6/75 CL'). "
-        "4. 'cantidad': cantidad comprada (ej: 1.0). "
+        "2. 'descripcion': nombre exacto del producto (sin tamaño ni presentación). "
+        "3. 'tamano': tamaño o presentación separada (ej: '750 CL', '1 LT', '6/75 CL'). "
+        "4. 'cantidad': cantidad comprada de cajas o unidades (ej: 2.0). "
         "5. 'unidad': unidad de medida impresa (ej: '12 PZA', 'CAJA-12'). "
         "6. 'valor_con_itbis': monto TOTAL INCLUYENDO ITBIS que aparece en la línea. "
         "7. 'descuento_monto': monto del descuento aplicado a esta línea (si existe, ej: 0.0). "
@@ -243,8 +234,8 @@ def process_invoice_smart_router(file_obj, file_type, use_paid_gemini=False):
 # ==========================================
 if modulo == "📄 Factura Individual":
     try:
-        st.markdown("<h2>📊 Automatizador con <span style='color: #0284c7;'>Detalle por Presentación y Ceros Protegidos</span></h2>", unsafe_allow_html=True)
-        st.markdown("<p style='color: #64748b;'>Mantiene todos los productos individuales diferenciando lotes y empaques.</p>", unsafe_allow_html=True)
+        st.markdown("<h2>📊 Automatizador con <span style='color: #0284c7;'>Nombres Limpios y Presentaciones Separadas</span></h2>", unsafe_allow_html=True)
+        st.markdown("<p style='color: #64748b;'>Estructura perfecta separando nombre del producto y presentación.</p>", unsafe_allow_html=True)
         st.markdown("---")
         render_master_status_banner()
 
@@ -261,7 +252,7 @@ if modulo == "📄 Factura Individual":
         if uploaded_file is not None:
             if st.button("🚀 Procesar y Guardar en Historial"):
                 file_type = getattr(uploaded_file, 'type', 'image/jpeg')
-                with st.spinner("Procesando factura y extrayendo todos los productos..."):
+                with st.spinner("Procesando factura y limpiando nombres y presentaciones..."):
                     parsed_data, success_msg = process_invoice_smart_router(uploaded_file, file_type, use_paid_gemini=use_gemini_paid_api)
 
                 if success_msg == "QUOTA_EXCEEDED":
@@ -294,7 +285,8 @@ if modulo == "📄 Factura Individual":
                 unidad_txt = str(item.get("unidad") or "")
                 tamano_txt = str(item.get("tamano") or "")
                 
-                resolved_name, resolved_code = get_strict_ean_code_and_name(desc_raw, tamano_txt, invoice_ean, prov_det, unidad_txt)
+                clean_name, clean_pres = clean_product_name_and_presentation(desc_raw, tamano_txt)
+                resolved_code = clean_ean_code(invoice_ean)
 
                 cant_comprada = safe_float(item.get("cantidad") or 1, 1.0)
                 val_con_itbis = safe_float(item.get("valor_con_itbis") or item.get("valor") or 0)
@@ -307,7 +299,7 @@ if modulo == "📄 Factura Individual":
                 val_neto_con_itbis = val_con_itbis - descuento_monto_linea
                 val_sin_itbis = val_neto_con_itbis / 1.18
                 
-                empaque_val = parse_empaque_universal(prov_det, tamano_txt, unidad_txt, resolved_name)
+                empaque_val = parse_empaque_universal(prov_det, clean_pres, unidad_txt, clean_name)
                 total_unidades = int(cant_comprada * empaque_val)
 
                 costo_unitario_real = round(val_sin_itbis / total_unidades, 2) if total_unidades > 0 else 0.0
@@ -322,7 +314,8 @@ if modulo == "📄 Factura Individual":
                 rows_preview.append({
                     "No.": idx,
                     "Código EAN Único": str(resolved_code),
-                    "Nombre Producto": resolved_name,
+                    "Nombre Producto": clean_name,
+                    "Presentación": clean_pres if clean_pres else "S/P",
                     "Cant. Compra": cant_comprada,
                     "Unidad": unidad_txt,
                     "Empaque": empaque_val,
@@ -355,7 +348,7 @@ if modulo == "📄 Factura Individual":
                 wb = openpyxl.Workbook()
                 ws_prod = wb.active
                 ws_prod.title = "Productos"
-                ws_prod.append(['Nombre', 'Código Barra', 'Categoría', 'Tipo', 'Precio Venta', 'Costo', 'Stock', 'Stock Mínimo', 'ITBIS', 'Unidad Medida', 'Venta Granel', 'Cantidad Empaque', 'Precio Variable', 'Descuento %', 'Descuento Monto', 'Precio Especial', 'Descuento Activo', 'Descuento Nota'])
+                ws_prod.append(['Nombre', 'Presentación', 'Código Barra', 'Categoría', 'Tipo', 'Precio Venta', 'Costo', 'Stock', 'Stock Mínimo', 'ITBIS', 'Unidad Medida', 'Venta Granel', 'Cantidad Empaque', 'Precio Variable', 'Descuento %', 'Descuento Monto', 'Precio Especial', 'Descuento Activo', 'Descuento Nota'])
                 
                 for idx_item, item_dict in enumerate(rows_preview, start=1):
                     code_to_save = str(item_dict["Código EAN Único"])
@@ -365,19 +358,19 @@ if modulo == "📄 Factura Individual":
                     
                     row_idx = ws_prod.max_row + 1
                     ws_prod.append([
-                        item_dict["Nombre Producto"], str(code_to_save),
+                        item_dict["Nombre Producto"], item_dict["Presentación"], str(code_to_save),
                         "General", "producto", round_to_nearest_5(item_dict["Precio Venta"]),
                         round(item_dict["Costo Unitario Real"], 2), int(item_dict["Stock Unidades"]),
                         5, 0.18, "unidad", "No", int(item_dict["Empaque"]), "No", 0, round(desc_val, 2), None, desc_activo, f"Descuento aplicado: RD$ {desc_val:,.2f}" if desc_val > 0 else None
                     ])
-                    cell = ws_prod.cell(row=row_idx, column=2)
+                    cell = ws_prod.cell(row=row_idx, column=3) # Columna de código de barras
                     cell.number_format = '@'
                     cell.value = str(code_to_save)
                 
                 output = io.BytesIO()
                 wb.save(output)
                 
-                if st.download_button("📥 Descargar Excel WilPOS Completo", output.getvalue(), f"Inventario_{prov_det.replace('&', 'Y').replace(' ', '_')}.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"):
+                if st.download_button("📥 Descargar Excel WilPOS Limpio", output.getvalue(), f"Inventario_{prov_det.replace('&', 'Y').replace(' ', '_')}.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"):
                     history_entry = {
                         "fecha": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                         "proveedor": prov_det,
@@ -466,7 +459,8 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
                     tamano_txt = str(item.get("tamano") or "")
                     unidad_txt = str(item.get("unidad") or "")
                     
-                    resolved_name, resolved_code = get_strict_ean_code_and_name(desc_raw, tamano_txt, invoice_ean, prov_det, unidad_txt)
+                    clean_name, clean_pres = clean_product_name_and_presentation(desc_raw, tamano_txt)
+                    resolved_code = clean_ean_code(invoice_ean)
 
                     cant_comprada = safe_float(item.get("cantidad") or 1, 1.0)
                     val_con_itbis = safe_float(item.get("valor_con_itbis") or item.get("valor") or 0)
@@ -474,7 +468,7 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
                     val_neto_con_itbis = val_con_itbis - descuento_monto_linea
                     val_sin_itbis = val_neto_con_itbis / 1.18
                     
-                    empaque_val = parse_empaque_universal(prov_det, tamano_txt, unidad_txt, resolved_name)
+                    empaque_val = parse_empaque_universal(prov_det, clean_pres, unidad_txt, clean_name)
                     total_unidades = int(cant_comprada * empaque_val)
                     costo_unitario_real = round(val_sin_itbis / total_unidades, 2) if total_unidades > 0 else 0.0
                     if costo_unitario_real <= 0: continue
@@ -483,7 +477,7 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
                     precio_venta = round_to_nearest_5(raw_pv)
 
                     processed_rows.append({
-                        "Nombre": resolved_name, "Código Barra": str(resolved_code),
+                        "Nombre": clean_name, "Presentación": clean_pres, "Código Barra": str(resolved_code),
                         "Categoría": "General", "Tipo": "producto", "Precio Venta": precio_venta,
                         "Costo": costo_unitario_real, "Stock": total_unidades, "Stock Mínimo": 5,
                         "ITBIS": 0.18, "Unidad Medida": "unidad", "Venta Granel": "No",
@@ -519,7 +513,7 @@ elif modulo == "📁 Actualizar Catálogo Maestro":
                 count = 0
                 temp_dict = {}
                 for _, row in df_master.iterrows():
-                    p_name = clean_product_description_name(row[col_name])
+                    p_name, _ = clean_product_name_and_presentation(row[col_name])
                     p_code = clean_ean_code(row[col_code])
                     if p_name and p_code != "S/C (Sin Codigo)":
                         temp_dict[p_name] = str(p_code)
