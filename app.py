@@ -161,7 +161,7 @@ def get_strict_ean_code_and_name(description, invoice_ean="", supplier_name=""):
     return desc_clean, "S/C (Sin Codigo)"
 
 # ==========================================
-# REGLA DE EMPAQUE UNIVERSAL REFORZADA (CON LECTURA DE TAMAÑO)
+# REGLA DE EMPAQUE UNIVERSAL REFORZADA
 # ==========================================
 def parse_empaque_universal(supplier_name="", tamano_txt="", unidad_txt="", descripcion_txt=""):
     combined = f"{str(tamano_txt)} {str(unidad_txt)} {str(descripcion_txt)}".upper()
@@ -262,7 +262,7 @@ def process_invoice_smart_router(file_obj, file_type, use_paid_gemini=False):
         "3. 'tamano': texto exacto del tamaño o presentación (ej: '12/70 CL', '750 ML', '1.75L'). "
         "4. 'cantidad': cantidad comprada exactamente tal como aparece. "
         "5. 'unidad': unidad de medida exacta impresa en la línea ('UN', 'PC', 'CAJA'). "
-        "6. 'valor': monto TOTAL NETO de toda la línea (sin incluir ITBIS). "
+        "6. 'valor': EL SUBTOTAL NETO GRAVADO DE LA LÍNEA ANTES DE ITBIS (el monto base antes de impuestos, ignorando el importe total con ITBIS). "
         "Estructura JSON exacta: "
         '{"proveedor": "' + supplier_detected + '", "items": [{"codigo_ean": "...", "descripcion": "...", "tamano": "...", "cantidad": 1.0, "unidad": "...", "valor": 0.0}]}. '
         "Respuesta JSON pura sin texto adicional."
@@ -287,8 +287,8 @@ def process_invoice_smart_router(file_obj, file_type, use_paid_gemini=False):
 # ==========================================
 if modulo == "📄 Factura Individual":
     try:
-        st.markdown("<h2>📊 Automatizador con <span style='color: #0284c7;'>Empaques y Stock Garantizados</span></h2>", unsafe_allow_html=True)
-        st.markdown("<p style='color: #64748b;'>Lectura completa de tamaño, empaque y stock exacto.</p>", unsafe_allow_html=True)
+        st.markdown("<h2>📊 Automatizador con <span style='color: #0284c7;'>Costos Netos Reales (Sin ITBIS)</span></h2>", unsafe_allow_html=True)
+        st.markdown("<p style='color: #64748b;'>Cálculo estricto sobre el subtotal sin impuestos en todas las facturas.</p>", unsafe_allow_html=True)
         st.markdown("---")
         render_master_status_banner()
 
@@ -305,7 +305,7 @@ if modulo == "📄 Factura Individual":
         if uploaded_file is not None:
             if st.button("🚀 Procesar y Guardar en Historial"):
                 file_type = getattr(uploaded_file, 'type', 'image/jpeg')
-                with st.spinner("Procesando documento con lectura de tamaño y empaques..."):
+                with st.spinner("Procesando documento con extracción estricta sin ITBIS..."):
                     parsed_data, success_msg = process_invoice_smart_router(uploaded_file, file_type, use_paid_gemini=use_gemini_paid_api)
 
                 if success_msg == "QUOTA_EXCEEDED":
@@ -340,7 +340,6 @@ if modulo == "📄 Factura Individual":
                 val_neto_linea = safe_float(item.get("valor") or 0)
                 unidad_txt = str(item.get("unidad") or "")
                 
-                # ¡Aquí pasamos el tamaño real extraído de la factura!
                 empaque_val = parse_empaque_universal(prov_det, tamano_txt, unidad_txt, resolved_name)
                 total_unidades = int(cant_comprada * empaque_val)
 
@@ -367,7 +366,7 @@ if modulo == "📄 Factura Individual":
             calc_itbis = calc_subtotal * 0.18
             calc_total_factura = calc_subtotal + calc_itbis
 
-            st.markdown("### 📑 Totales del Documento")
+            st.markdown("### 📑 Totales del Documento (Sin ITBIS)")
             t1, t2, t3 = st.columns(3)
             t1.metric("Subtotal Factura", f"RD$ {calc_subtotal:,.2f}")
             t2.metric("ITBIS Total (18%)", f"RD$ {calc_itbis:,.2f}")
@@ -375,7 +374,7 @@ if modulo == "📄 Factura Individual":
             st.markdown("---")
 
             if rows_preview:
-                st.markdown("### ✅ Artículos Procesados con Stock y Empaques Correctos")
+                st.markdown("### ✅ Artículos Procesados con Costos Netos Reales")
                 df_resultado = pd.DataFrame(rows_preview)
                 df_resultado["Código EAN Único"] = df_resultado["Código EAN Único"].astype(str)
                 st.dataframe(df_resultado, use_container_width=True, hide_index=True)
