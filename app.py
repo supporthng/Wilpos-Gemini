@@ -137,8 +137,7 @@ if "master_catalog" not in st.session_state:
     st.session_state["master_catalog"] = load_json_file(MASTER_CATALOG_FILE)
 
 if "master_meta" not in st.session_state:
-    meta_data = load_json_file(MASTER_META_FILE)
-    st.session_state["master_meta"] = meta_data
+    st.session_state["master_meta"] = load_json_file(MASTER_META_FILE)
 
 def save_memory_to_file():
     save_json_file(BARCODE_MEMORY_FILE, st.session_state["barcode_memory"])
@@ -152,7 +151,6 @@ def save_meta_to_file(timestamp_str, count):
     save_json_file(MASTER_META_FILE, meta)
 
 def render_master_status_banner():
-    """Muestra una notificación clara del estado del Catálogo Maestro y su última actualización."""
     master_dict = st.session_state["master_catalog"]
     meta = st.session_state.get("master_meta", {})
     total_prod = len(master_dict)
@@ -189,33 +187,81 @@ def clean_barcode(code_val):
     return s_val
 
 def get_resolved_barcode_and_name(description):
-    """REGLA DE ORO BLINDADA: Consulta estricta en el Catálogo Maestro y Memoria del Sistema."""
+    """REGLA DE ORO BLINDADA: Búsqueda exacta, por palabras clave y difusa en el Maestro."""
     desc_upper = str(description).strip().upper()
+    master = st.session_state["master_catalog"]
+    memory = st.session_state["barcode_memory"]
     
-    # 1. Búsqueda exacta en Catálogo Maestro del Sistema
-    if desc_upper in st.session_state["master_catalog"]:
-        return desc_upper, st.session_state["master_catalog"][desc_upper]
+    # 1. Coincidencia exacta en Maestro
+    if desc_upper in master:
+        return desc_upper, clean_barcode(master[desc_upper])
         
-    # 2. Búsqueda exacta en Memoria de Aprendizaje
-    if desc_upper in st.session_state["barcode_memory"]:
-        return desc_upper, st.session_state["barcode_memory"][desc_upper]
+    # 2. Coincidencia exacta en Memoria
+    if desc_upper in memory:
+        return desc_upper, clean_barcode(memory[desc_upper])
         
-    # 3. Búsqueda difusa contrastando con el Catálogo Maestro del Sistema
-    master_keys = list(st.session_state["master_catalog"].keys())
+    # 3. Búsqueda por palabras clave principales (Ej: CORONA CERO, GATORADE, etc.)
+    palabras = [p for p in desc_upper.split() if len(p) > 2]
+    if palabras:
+        mejor_match = None
+        max_coincidencias = 0
+        for m_name, m_code in master.items():
+            coincide = sum(1 for p in palabras if p in m_name)
+            if coincide > max_coincidencias:
+                max_coincidencias = coincide
+                mejor_match = (m_name, m_code)
+        if mejor_match and max_coincidencias >= 2:
+            return mejor_match[0], clean_barcode(mejor_match[1])
+
+    # 4. Búsqueda difusa restrictiva
+    master_keys = list(master.keys())
     if master_keys:
-        coincidencias = difflib.get_close_matches(desc_upper, master_keys, n=1, cutoff=0.45)
+        coincidencias = difflib.get_close_matches(desc_upper, master_keys, n=1, cutoff=0.40)
         if coincidencias:
             matched_name = coincidencias[0]
-            return matched_name, st.session_state["master_catalog"][matched_name]
+            return matched_name, clean_barcode(master[matched_name])
             
-    memory_keys = list(st.session_state["barcode_memory"].keys())
+    memory_keys = list(memory.keys())
     if memory_keys:
-        coincidencias_mem = difflib.get_close_matches(desc_upper, memory_keys, n=1, cutoff=0.45)
+        coincidencias_mem = difflib.get_close_matches(desc_upper, memory_keys, n=1, cutoff=0.40)
         if coincidencias_mem:
             matched_name = coincidencias_mem[0]
-            return matched_name, st.session_state["barcode_memory"][matched_name]
+            return matched_name, clean_barcode(memory[matched_name])
         
+    # Si no se encuentra, NUNCA se usa el nombre como código
     return desc_upper, "S/C (Sin Código)"
+
+def parse_empaque_from_tamano(tamano_txt, unidad_txt, descripcion_txt=""):
+    u = str(unidad_txt).strip().upper()
+    d = str(descripcion_txt).strip().upper()
+    t = str(tamano_txt).strip().upper()
+    
+    # Detección de packs 4x6 / 6x4 (ej: Corona Cero 4x6 = 24 unidades)
+    match_4x6 = re.search(r'(\d+)\s*X\s*(\d+)', d + " " + t)
+    if match_4x6:
+        val1 = int(match_4x6.group(1))
+        val2 = int(match_4x6.group(2))
+        return val1 * val2
+
+    if "UND" in u or "UNIDAD" in u:
+        if "FRITOLAY" in d or "CHIZPA" in d:
+            match_f = re.search(r'(\d+)X\d+$', d)
+            if match_f:
+                return int(match_f.group(1))
+        return 1
+        
+    if "BOT" in u and "CAJA" not in u:
+        return 1
+        
+    match_cnd = re.search(r'\b(\d+)\s*/', d)
+    if match_cnd:
+        return int(match_cnd.group(1))
+        
+    match_t = re.search(r'^(\d+)\s*/', t)
+    if match_t:
+        return int(match_t.group(1))
+        
+    return 12
 
 # ==========================================
 # MENÚ Y CONFIGURACIÓN LATERAL
@@ -233,34 +279,10 @@ st.sidebar.markdown("---")
 st.sidebar.markdown("### ⚙️ Configuración de API")
 use_gemini_paid_api = st.sidebar.checkbox("💎 Usar Gemini Paid (API de Pago)", value=bool(ACTIVE_GEMINI_PAID_KEY))
 
-def parse_empaque_from_tamano(tamano_txt, unidad_txt, descripcion_txt=""):
-    u = str(unidad_txt).strip().upper()
-    d = str(descripcion_txt).strip().upper()
-    
-    if "UND" in u or "UNIDAD" in u:
-        if "FRITOLAY" in d or "CHIZPA" in d:
-            match_f = re.search(r'(\d+)X\d+$', d)
-            if match_f:
-                return int(match_f.group(1))
-        return 1
-        
-    if "BOT" in u and "CAJA" not in u:
-        return 1
-        
-    match_cnd = re.search(r'\b(\d+)\s*/', d)
-    if match_cnd:
-        return int(match_cnd.group(1))
-        
-    t = str(tamano_txt).strip()
-    match_t = re.search(r'^(\d+)\s*/', t)
-    if match_t:
-        return int(match_t.group(1))
-    return 12
-
 def process_invoice_exact_18(file_obj, file_type, use_paid_gemini=False, use_openai_fallback=False):
     prompt_text = (
         "Analiza esta factura o tiquet con máxima precisión. "
-        "REGLA DE OBRERO ESTRICTA PARA LA DESCRIPCIÓN: En el campo 'descripcion' solo debe figurar el nombre limpio del producto y su presentación/gramaje o empaque (ej: 'BRAHMA LIGHT 24/12OZ', 'GATORADE FRUIT PUNCH 24', 'ALOE PURE PLUS ORIGINAL'). "
+        "REGLA DE OBRERO ESTRICTA PARA LA DESCRIPCIÓN: En el campo 'descripcion' solo debe figurar el nombre limpio del producto y su presentación/gramaje o empaque (ej: 'CORONA CERO 355ML 4X6', 'BRAHMA LIGHT 24/12OZ', 'GATORADE FRUIT PUNCH 24', 'ALOE PURE PLUS ORIGINAL'). "
         "Elimina códigos numéricos iniciales o de proveedor. "
         "Para cada renglón extrae exactamente: "
         "1. 'descripcion': nombre limpio y presentación del producto. "
@@ -335,7 +357,6 @@ if modulo == "📄 Factura Individual":
     st.markdown("<p style='color: #64748b;'>Procesamiento con Catálogo Maestro activo en la memoria del sistema.</p>", unsafe_allow_html=True)
     st.markdown("---")
 
-    # Notificación de Estado del Maestro
     render_master_status_banner()
 
     st.markdown('<div class="card-container">', unsafe_allow_html=True)
@@ -379,7 +400,6 @@ if modulo == "📄 Factura Individual":
                         omitted_items.append({"Item #": idx, "Descripción": "(Sin descripción)", "Razón": "Línea sin descripción"})
                         continue
 
-                    # APLICAR REGLA DE ORO BLINDADA (Memoria del Sistema)
                     resolved_name, resolved_code = get_resolved_barcode_and_name(desc_raw)
 
                     cant_comprada = safe_int(item.get("cantidad") or 1, 1)
@@ -476,7 +496,6 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
     st.markdown("<p style='color: #64748b;'>Procesa múltiples facturas aplicando la Regla de Oro en memoria.</p>", unsafe_allow_html=True)
     st.markdown("---")
 
-    # Notificación de Estado del Maestro
     render_master_status_banner()
 
     st.markdown('<div class="card-container">', unsafe_allow_html=True)
@@ -695,16 +714,14 @@ elif modulo == "📁 Actualizar Catálogo Maestro":
                 temp_dict = {}
                 for _, row in df_master.iterrows():
                     p_name = str(row[col_name]).strip().upper()
-                    p_code = str(row[col_code]).strip()
-                    if p_code.endswith('.0'): p_code = p_code[:-2]
-                    if p_name and p_code and p_code.lower() not in ['nan', 'none', '', 's/c']:
+                    p_code = clean_barcode(row[col_code])
+                    if p_name and p_code != "S/C (Sin Código)":
                         temp_dict[p_name] = p_code
                         count += 1
                 
                 st.session_state["master_catalog"] = temp_dict
                 save_master_to_file()
                 
-                # Guardar timestamp de actualización
                 timestamp_actual = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                 save_meta_to_file(timestamp_actual, count)
                 
