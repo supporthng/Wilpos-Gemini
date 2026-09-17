@@ -140,7 +140,7 @@ def get_strict_ean_code_and_name(description, invoice_ean=""):
             
     return desc_clean, cleaned_invoice_ean
 
-# Regla estricta: Si es unidad suelta (UN) o no hay empaque por cajas explícito en el texto, el empaque es 1.
+# Regla de empaque definitiva para detectar cualquier mención de 24 o factores en CND/BEES
 def parse_empaque_isolated(supplier_name, tamano_txt="", unidad_txt="", descripcion_txt=""):
     s_name = str(supplier_name).upper()
     u = str(unidad_txt).strip().upper()
@@ -148,11 +148,15 @@ def parse_empaque_isolated(supplier_name, tamano_txt="", unidad_txt="", descripc
     d = str(descripcion_txt).strip().upper()
     combined = f"{t} {u} {d}"
 
-    # Si la unidad es explícitamente UN (unidad suelta), empaque es 1 sin discusión
+    # Si la unidad es explícitamente UN (unidad suelta), empaque es 1
     if "UN" in u:
         return 1
 
-    # Buscar patrón explícito de cajas/huacales en la descripción (ej: '24/12OZ')
+    # Detección robusta de empaques en CND/BEES (ej: '24/', '24 BOTELLAS', '24 BOTS')
+    if "24" in combined or "24/" in combined:
+        if "24 BOTELLAS" in combined or "24/" in combined or "24 BOTS" in combined or "HUACAL" in combined or "PTE" in combined:
+            return 24
+
     match_explicit_slash = re.search(r'\b(24|12|6|48)\s*/', combined)
     if match_explicit_slash:
         return int(match_explicit_slash.group(1))
@@ -172,14 +176,13 @@ def parse_empaque_isolated(supplier_name, tamano_txt="", unidad_txt="", descripc
     match_pza = re.search(r'(\d+)\s*PZA', combined)
     if match_pza: return int(match_pza.group(1))
 
-    # Por defecto, si viene como unidad (UN), respetamos la cantidad exacta con empaque 1
     return 1
 
 # ==========================================
 # MENÚ Y CONFIGURACIÓN LATERAL
 # ==========================================
 st.sidebar.markdown("<h3 style='color: #0284c7; text-align: center;'>⚡ WilPOS</h3>", unsafe_allow_html=True)
-st.sidebar.markdown("<p style='text-align: center; color: #64748b; font-size: 0.8rem;'>Sistema con Empaque Estricto</p>", unsafe_allow_html=True)
+st.sidebar.markdown("<p style='text-align: center; color: #64748b; font-size: 0.8rem;'>Sistema con Empaque Definitivo</p>", unsafe_allow_html=True)
 st.sidebar.markdown("---")
 
 modulo = st.sidebar.radio("Menú de Navegación", ["📄 Factura Individual", "📂 Múltiples Facturas (Lote)", "📁 Actualizar Catálogo Maestro", "🏢 Perfiles de Proveedores", "📜 Historial de Procesados", "📋 Códigos Almacenados"])
@@ -217,13 +220,13 @@ def process_invoice_smart_router(file_obj, file_type, use_paid_gemini=False):
 
     prompt_main = (
         f"Analiza este documento de compra del proveedor '{supplier_detected}' con absoluta precisión. "
-        "REGLA DE ORO: Extrae rigurosamente la unidad de medida exactamente como aparece en la factura (por ejemplo 'UN' para unidades sueltas, 'PC' para bultos/huacales). "
+        "REGLA DE ORO: Extrae la descripción completa tal cual aparece (incluyendo '24 BOTELLAS' o '24/12OZ'), la cantidad, la unidad ('UN' o 'PC'), y el valor total. "
         "Para cada renglón extrae en un JSON bajo la clave 'items': "
         "1. 'codigo_ean': código de barras o código de artículo. "
-        "2. 'descripcion': nombre exacto del producto. "
-        "3. 'cantidad': cantidad comprada (ej: 47.0). "
+        "2. 'descripcion': nombre exacto del producto con todas sus especificaciones. "
+        "3. 'cantidad': cantidad comprada. "
         "4. 'tamano': tamaño o presentación si aplica. "
-        "5. 'unidad': unidad de medida exacta impresa en la línea (ej: 'UN', 'PC'). "
+        "5. 'unidad': unidad de medida exacta ('UN', 'PC'). "
         "6. 'valor': monto total neto de la línea. "
         "Estructura JSON exacta: "
         '{"proveedor": "' + supplier_detected + '", "items": [{"codigo_ean": "...", "descripcion": "...", "cantidad": 1.0, "tamano": "...", "unidad": "...", "valor": 0.0}]}. '
@@ -249,8 +252,8 @@ def process_invoice_smart_router(file_obj, file_type, use_paid_gemini=False):
 # ==========================================
 if modulo == "📄 Factura Individual":
     try:
-        st.markdown("<h2>📊 Automatizador con <span style='color: #0284c7;'>Respeto Absoluto de Unidades</span></h2>", unsafe_allow_html=True)
-        st.markdown("<p style='color: #64748b;'>Las unidades (UN) se calculan 1 a 1 con su costo exacto.</p>", unsafe_allow_html=True)
+        st.markdown("<h2>📊 Automatizador con <span style='color: #0284c7;'>Detección Definitiva de Empaques</span></h2>", unsafe_allow_html=True)
+        st.markdown("<p style='color: #64748b;'>Control absoluto de unidades y empaques de 24 botellas.</p>", unsafe_allow_html=True)
         st.markdown("---")
         render_master_status_banner()
 
@@ -267,7 +270,7 @@ if modulo == "📄 Factura Individual":
         if uploaded_file is not None:
             if st.button("🚀 Procesar y Guardar en Historial"):
                 file_type = getattr(uploaded_file, 'type', 'image/jpeg')
-                with st.spinner("Procesando documento y respetando unidades..."):
+                with st.spinner("Procesando documento y calculando stock..."):
                     parsed_data, success_msg = process_invoice_smart_router(uploaded_file, file_type, use_paid_gemini=use_gemini_paid_api)
 
                 if success_msg == "QUOTA_EXCEEDED":
