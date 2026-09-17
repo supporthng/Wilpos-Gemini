@@ -6,7 +6,6 @@ from datetime import datetime
 import re
 import difflib
 import google.generativeai as genai
-from openai import OpenAI
 from PIL import Image
 import streamlit as st
 import openpyxl
@@ -16,7 +15,7 @@ import pandas as pd
 # CONFIGURACIÓN DE LA PÁGINA Y ESTILOS CSS
 # ==========================================
 st.set_page_config(
-    page_title="WilPOS - Reglas Aisladas por Proveedor", 
+    page_title="WilPOS - Sistema de Inventario Inteligente", 
     page_icon="⚡", 
     layout="wide",
     initial_sidebar_state="expanded"
@@ -71,26 +70,13 @@ if "barcode_memory" not in st.session_state: st.session_state["barcode_memory"] 
 if "master_catalog" not in st.session_state: st.session_state["master_catalog"] = load_json_file(MASTER_CATALOG_FILE)
 if "master_meta" not in st.session_state: st.session_state["master_meta"] = load_json_file(MASTER_META_FILE)
 
-# Memoria de Proveedores con reglas aisladas por emisor
 if "supplier_memory" not in st.session_state:
     loaded_suppliers = load_json_file(SUPPLIER_MEMORY_FILE)
     if not loaded_suppliers:
         loaded_suppliers = {
-            "ALVAREZ & SANCHEZ": {
-                "nombre": "ALVAREZ & SANCHEZ",
-                "formato_empaque": "formula_tamano_slash_4x6",
-                "descripcion": "Usa columna tamaño con fórmulas tipo 4X6 o 12/ y códigos EAN de 13 dígitos."
-            },
-            "GONZALEZ CUESTA": {
-                "nombre": "GONZALEZ CUESTA",
-                "formato_empaque": "caj_pza_estandar",
-                "descripcion": "Usa códigos EAN de 13 dígitos abajo del SAP y UMV tipo CAJ / 12 PZA."
-            },
-            "PRICESMART": {
-                "nombre": "PRICESMART",
-                "formato_empaque": "unidades_sueltas_tiquet",
-                "descripcion": "Tiquets con códigos numéricos directos."
-            }
+            "ALVAREZ & SANCHEZ": {"nombre": "ALVAREZ & SANCHEZ", "formato_empaque": "formula_tamano_slash_4x6"},
+            "GONZALEZ CUESTA": {"nombre": "GONZALEZ CUESTA", "formato_empaque": "caj_pza_estandar"},
+            "PRICESMART": {"nombre": "PRICESMART", "formato_empaque": "unidades_sueltas_tiquet"}
         }
         save_json_file(SUPPLIER_MEMORY_FILE, loaded_suppliers)
     st.session_state["supplier_memory"] = loaded_suppliers
@@ -125,6 +111,7 @@ def clean_ean_code(code_val):
     if s_val.lower() in ["nan", "none", "", "s/c", "sin codigo"]: return "S/C (Sin Código)"
     return s_val
 
+# Jerarquía estricta: Catálogo Maestro > Memoria > Factura
 def get_strict_ean_code_and_name(description, invoice_ean=""):
     desc_clean = str(description).strip().upper()
     master = st.session_state["master_catalog"]
@@ -143,9 +130,7 @@ def get_strict_ean_code_and_name(description, invoice_ean=""):
             
     return desc_clean, cleaned_invoice_ean
 
-# ==========================================
-# REGLAS DE EMPAQUE AISLADAS POR PROVEEDOR
-# ==========================================
+# Reglas de empaque aisladas por proveedor
 def parse_empaque_isolated(supplier_name, tamano_txt="", unidad_txt="", descripcion_txt=""):
     s_name = str(supplier_name).upper()
     u = str(unidad_txt).strip().upper()
@@ -153,16 +138,11 @@ def parse_empaque_isolated(supplier_name, tamano_txt="", unidad_txt="", descripc
     d = str(descripcion_txt).strip().upper()
     combined = f"{t} {u} {d}"
 
-    # REGLA EXCLUSIVA PARA ALVAREZ & SANCHEZ
     if "ALVAREZ" in s_name or "SANCHEZ" in s_name:
         match_4x6 = re.search(r'(\d+)\s*X\s*(\d+)', combined)
-        if match_4x6:
-            return int(match_4x6.group(1)) * int(match_4x6.group(2))
+        if match_4x6: return int(match_4x6.group(1)) * int(match_4x6.group(2))
         match_slash = re.search(r'\b(12|6|24|48)\s*/', combined)
-        if match_slash:
-            return int(match_slash.group(1))
-
-    # REGLA EXCLUSIVA PARA GONZALEZ CUESTA
+        if match_slash: return int(match_slash.group(1))
     elif "GONZALEZ" in s_name or "CUESTA" in s_name:
         match_pza = re.search(r'(\d+)\s*PZA', combined)
         if match_pza: return int(match_pza.group(1))
@@ -172,21 +152,19 @@ def parse_empaque_isolated(supplier_name, tamano_txt="", unidad_txt="", descripc
             if "24" in combined: return 24
             if "48" in combined: return 48
 
-    # REGLA GENERAL / PRICESMART
     match_pza = re.search(r'(\d+)\s*PZA', combined)
     if match_pza: return int(match_pza.group(1))
     if "12" in combined: return 12
     if "6" in combined: return 6
     if "24" in combined: return 24
     if "48" in combined: return 48
-
     return 1
 
 # ==========================================
 # MENÚ Y CONFIGURACIÓN LATERAL
 # ==========================================
 st.sidebar.markdown("<h3 style='color: #0284c7; text-align: center;'>⚡ WilPOS</h3>", unsafe_allow_html=True)
-st.sidebar.markdown("<p style='text-align: center; color: #64748b; font-size: 0.8rem;'>Memoria y Reglas Aisladas por Proveedor</p>", unsafe_allow_html=True)
+st.sidebar.markdown("<p style='text-align: center; color: #64748b; font-size: 0.8rem;'>Sistema Integrado y Protegido</p>", unsafe_allow_html=True)
 st.sidebar.markdown("---")
 
 modulo = st.sidebar.radio("Menú de Navegación", ["📄 Factura Individual", "📂 Múltiples Facturas (Lote)", "📁 Actualizar Catálogo Maestro", "🏢 Perfiles de Proveedores", "📋 Códigos Almacenados"])
@@ -195,7 +173,7 @@ st.sidebar.markdown("---")
 use_gemini_paid_api = st.sidebar.checkbox("💎 Usar Gemini Paid (API de Pago)", value=bool(ACTIVE_GEMINI_PAID_KEY))
 
 def process_invoice_smart_router(file_obj, file_type, use_paid_gemini=False):
-    prompt_detect = "Identifica el nombre comercial del proveedor emisor de esta factura (ej: ALVAREZ & SANCHEZ, GONZALEZ CUESTA, PRICESMART). Devuelve un JSON puro: {'proveedor': 'NOMBRE'}"
+    prompt_detect = "Identifica el nombre comercial del proveedor emisor de esta factura. Devuelve un JSON puro: {'proveedor': 'NOMBRE'}"
     
     active_key = ACTIVE_GEMINI_PAID_KEY if use_paid_gemini else ACTIVE_GEMINI_FREE_KEY
     if not active_key and use_paid_gemini: active_key = ACTIVE_GEMINI_FREE_KEY
@@ -216,12 +194,6 @@ def process_invoice_smart_router(file_obj, file_type, use_paid_gemini=False):
         supplier_detected = str(json.loads(txt_det.strip()).get("proveedor") or "GENERAL").upper().strip()
     except Exception:
         supplier_detected = "GENERAL"
-
-    # Registrar en memoria si es nuevo
-    supp_mem = st.session_state["supplier_memory"]
-    if supplier_detected not in supp_mem and supplier_detected != "GENERAL":
-        supp_mem[supplier_detected] = {"nombre": supplier_detected, "formato_empaque": "adaptativo"}
-        save_supplier_memory()
 
     prompt_main = (
         f"Analiza esta factura del proveedor '{supplier_detected}' con absoluta precisión. "
@@ -257,8 +229,8 @@ def process_invoice_smart_router(file_obj, file_type, use_paid_gemini=False):
 # ==========================================
 if modulo == "📄 Factura Individual":
     try:
-        st.markdown("<h2>📊 Automatizador con <span style='color: #0284c7;'>Reglas Aisladas por Proveedor</span></h2>", unsafe_allow_html=True)
-        st.markdown("<p style='color: #64748b;'>Detección automática del proveedor y aplicación de su empaque específico.</p>", unsafe_allow_html=True)
+        st.markdown("<h2>📊 Automatizador con <span style='color: #0284c7;'>Protección Total Anti-Duplicados</span></h2>", unsafe_allow_html=True)
+        st.markdown("<p style='color: #64748b;'>Consulta prioritaria al Maestro, unicidad estricta y empaques por proveedor.</p>", unsafe_allow_html=True)
         st.markdown("---")
         render_master_status_banner()
 
@@ -270,9 +242,9 @@ if modulo == "📄 Factura Individual":
 
         if uploaded_file is not None:
             st.success(f"¡Archivo cargado: {uploaded_file.name}!")
-            if st.button("🚀 Procesar con Regla de Proveedor"):
+            if st.button("🚀 Procesar con Seguridad Total"):
                 file_type = getattr(uploaded_file, 'type', 'image/jpeg')
-                with st.spinner("Procesando documento..."):
+                with st.spinner("Procesando documento y validando catálogo..."):
                     parsed_data, success_msg = process_invoice_smart_router(uploaded_file, file_type, use_paid_gemini=use_gemini_paid_api)
 
                 if success_msg == "QUOTA_EXCEEDED":
@@ -288,6 +260,8 @@ if modulo == "📄 Factura Individual":
                     multiplicador_ganancia = 1 + (margen_ganancia / 100.0)
                     calc_subtotal = 0.0
 
+                    assigned_barcodes = set()
+
                     for idx, item in enumerate(data_items, start=1):
                         if not isinstance(item, dict): continue
                         desc_raw = str(item.get("descripcion") or "").strip()
@@ -296,12 +270,18 @@ if modulo == "📄 Factura Individual":
                         invoice_ean = str(item.get("codigo_ean") or "")
                         resolved_name, resolved_code = get_strict_ean_code_and_name(desc_raw, invoice_ean)
 
+                        # Control anti-duplicados en la misma factura
+                        if resolved_code in assigned_barcodes and resolved_code != "S/C (Sin Código)":
+                            resolved_code = "S/C (Duplicado - Revisar)"
+
+                        if resolved_code != "S/C (Sin Código)" and "Duplicado" not in resolved_code:
+                            assigned_barcodes.add(resolved_code)
+
                         cant_comprada = safe_float(item.get("cantidad") or 1, 1.0)
                         val_neto_linea = safe_float(item.get("valor") or 0)
                         tamano_txt = str(item.get("tamano") or "")
                         unidad_txt = str(item.get("unidad") or "")
                         
-                        # Aplicar empaque estrictamente aislado por proveedor
                         empaque_val = parse_empaque_isolated(prov_det, tamano_txt, unidad_txt, resolved_name)
                         total_unidades = int(cant_comprada * empaque_val)
 
@@ -314,7 +294,7 @@ if modulo == "📄 Factura Individual":
                         
                         rows_preview.append({
                             "No.": idx,
-                            "Código EAN Estándar": str(resolved_code),
+                            "Código EAN Único": str(resolved_code),
                             "Nombre Producto": resolved_name,
                             "Cant. Compra": cant_comprada,
                             "Tamaño": tamano_txt,
@@ -335,9 +315,9 @@ if modulo == "📄 Factura Individual":
                     st.markdown("---")
 
                     if rows_preview:
-                        st.markdown("### ✅ Artículos Procesados con Regla de Proveedor")
+                        st.markdown("### ✅ Artículos Procesados Correctamente")
                         df_resultado = pd.DataFrame(rows_preview)
-                        df_resultado["Código EAN Estándar"] = df_resultado["Código EAN Estándar"].astype(str)
+                        df_resultado["Código EAN Único"] = df_resultado["Código EAN Único"].astype(str)
                         st.dataframe(df_resultado, use_container_width=True, hide_index=True)
                         
                         wb = openpyxl.Workbook()
@@ -346,8 +326,10 @@ if modulo == "📄 Factura Individual":
                         ws_prod.append(['Nombre', 'Código Barra', 'Categoría', 'Tipo', 'Precio Venta', 'Costo', 'Stock', 'Stock Mínimo', 'ITBIS', 'Unidad Medida', 'Venta Granel', 'Cantidad Empaque', 'Precio Variable', 'Descuento %', 'Descuento Monto', 'Precio Especial', 'Descuento Activo', 'Descuento Nota'])
                         
                         for item_dict in rows_preview:
+                            code_to_save = item_dict["Código EAN Único"]
+                            if "Duplicado" in code_to_save: code_to_save = "S/C"
                             ws_prod.append([
-                                item_dict["Nombre Producto"], str(item_dict["Código EAN Estándar"]),
+                                item_dict["Nombre Producto"], str(code_to_save),
                                 "General", "producto", item_dict["Precio Venta"],
                                 item_dict["Costo Unitario Real"], item_dict["Stock Unidades"],
                                 5, 0.18, "unidad", "No", item_dict["Empaque"], "No", 0, 0, None, "No", None
@@ -366,7 +348,7 @@ if modulo == "📄 Factura Individual":
 # ==========================================
 elif modulo == "📂 Múltiples Facturas (Lote)":
     try:
-        st.markdown("<h2>📂 Procesador por Lotes <span style='color: #0284c7;'>(Reglas por Proveedor)</span></h2>", unsafe_allow_html=True)
+        st.markdown("<h2>📂 Procesador por Lotes <span style='color: #0284c7;'>(Protegido)</span></h2>", unsafe_allow_html=True)
         st.markdown("---")
         render_master_status_banner()
         st.markdown('<div class="card-container">', unsafe_allow_html=True)
@@ -390,7 +372,7 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
 
             processed_so_far = st.session_state["batch_processed_count"]
             b_col1, b_col2 = st.columns(2)
-            if b_col1.button("🚀 Iniciar Lote", type="primary"):
+            if b_col1.button("🚀 Iniciar Lote Seguro", type="primary"):
                 st.session_state["is_live_processing"] = True
                 st.rerun()
             if b_col2.button("🔄 Reiniciar"):
@@ -426,6 +408,7 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
                 raw_items = st.session_state["batch_accumulated_items"]
                 multiplicador_ganancia = 1 + (margen_ganancia_lote / 100.0)
                 processed_rows = []
+                batch_assigned_barcodes = set()
 
                 for item in raw_items:
                     desc_raw = str(item.get("descripcion") or "").strip()
@@ -433,6 +416,12 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
                     invoice_ean = str(item.get("codigo_ean") or "")
                     prov_det = str(item.get("_prov") or "GENERAL")
                     resolved_name, resolved_code = get_strict_ean_code_and_name(desc_raw, invoice_ean)
+                    
+                    if resolved_code in batch_assigned_barcodes and resolved_code != "S/C (Sin Código)":
+                        resolved_code = "S/C"
+                    if resolved_code != "S/C (Sin Código)":
+                        batch_assigned_barcodes.add(resolved_code)
+
                     cant_comprada = safe_float(item.get("cantidad") or 1, 1.0)
                     val_neto_linea = safe_float(item.get("valor") or 0)
                     tamano_txt = str(item.get("tamano") or "")
@@ -497,7 +486,7 @@ elif modulo == "📁 Actualizar Catálogo Maestro":
                 st.session_state["master_catalog"] = temp_dict
                 save_master_to_file()
                 save_meta_to_file(datetime.now().strftime("%Y-%m-%d %H:%M:%S"), count)
-                st.success(f"¡Catálogo EAN actualizado con {count} products!")
+                st.success(f"¡Catálogo EAN actualizado con {count} productos!")
                 st.rerun()
     except Exception as e:
         st.error("⚠️ Error en Maestro:")
@@ -516,7 +505,6 @@ elif modulo == "🏢 Perfiles de Proveedores":
             for s_name, s_data in supps.items():
                 with st.expander(f"🏢 {s_name}"):
                     st.write(f"**Formato / Regla:** {s_data.get('formato_empaque', 'N/A')}")
-                    st.write(f"**Descripción:** {s_data.get('descripcion', 'Registrado automáticamente')}")
         else:
             st.info("No hay proveedores en memoria aún.")
     except Exception as e:
