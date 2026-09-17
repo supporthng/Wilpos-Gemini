@@ -76,9 +76,9 @@ if "supplier_memory" not in st.session_state:
     loaded_suppliers = load_json_file(SUPPLIER_MEMORY_FILE, "dict")
     if not loaded_suppliers:
         loaded_suppliers = {
-            "ALVAREZ & SANCHEZ": {"nombre": "ALVAREZ & SANCHEZ", "formato_empaque": "universal_extractor_con_costo_neto"},
-            "GONZALEZ CUESTA": {"nombre": "GONZALEZ CUESTA", "formato_empaque": "caj_pza_estandar"},
-            "CENTRO DE DISTRIBUCION CHRISTIAN": {"nombre": "CENTRO DE DISTRIBUCION CHRISTIAN", "formato_empaque": "universal"}
+            "ALVAREZ & SANCHEZ": {"nombre": "ALVAREZ & SANCHEZ", "formato_empaque": "regla_oro_universal"},
+            "GONZALEZ CUESTA": {"nombre": "GONZALEZ CUESTA", "formato_empaque": "regla_oro_universal"},
+            "CENTRO DE DISTRIBUCION CHRISTIAN": {"nombre": "CENTRO DE DISTRIBUCION CHRISTIAN", "formato_empaque": "regla_oro_universal"}
         }
         save_json_file(SUPPLIER_MEMORY_FILE, loaded_suppliers)
     st.session_state["supplier_memory"] = loaded_suppliers
@@ -101,7 +101,7 @@ def render_master_status_banner():
     master_dict = st.session_state["master_catalog"]
     meta = st.session_state.get("master_meta", {})
     supps = st.session_state.get("supplier_memory", {})
-    st.success(f"🟢 **WilPOS Activo** | Catálogo Maestro: **{len(master_dict):,}** prods | 🏢 Proveedores: **{len(supps)}** | 🕒 Última act: **{meta.get('ultima_actualizacion', 'Desconocida')}**")
+    st.success(f"🟢 **WilPOS Blindado (Reglas de Oro)** | Maestro: **{len(master_dict):,}** prods | 🏢 Proveedores: **{len(supps)}**")
 
 def safe_float(val, default=0.0):
     try: return float(val)
@@ -114,7 +114,7 @@ def safe_int(val, default=1):
 def round_to_nearest_5(x): return float(round(round(x / 5) * 5))
 
 # ==========================================
-# REGLA GLOBAL INQUEBRANTABLE: CEROS A LA IZQUIERDA Y CRUCE INTELIGENTE
+# REGLAS DE ORO: LIMPIEZA, EAN Y CRUCE MAESTRO
 # ==========================================
 def clean_ean_code(code_val):
     if not code_val: return "S/C"
@@ -124,6 +124,7 @@ def clean_ean_code(code_val):
     return str(s_val)
 
 def clean_product_name_and_presentation(raw_name, raw_tamano=""):
+    """Regla 5: Nombres limpios (solo nombre y presentación separados)."""
     name = str(raw_name).strip()
     name = re.sub(r'^\d+[\s-]*', '', name)
     name = re.sub(r'^\[.*?\]\s*', '', name)
@@ -139,16 +140,18 @@ def clean_product_name_and_presentation(raw_name, raw_tamano=""):
     presentation = re.sub(r'\s+', ' ', presentation).strip().upper()
     return name, presentation
 
-def get_flexible_master_barcode(clean_name):
-    """Busca en el Catálogo Maestro ignorando el orden de las palabras (por coincidencia de tokens)."""
+def get_flexible_master_barcode(clean_name, clean_pres=""):
+    """Reglas 2 y 3: Cruce inteligente con Catálogo Maestro por tokens (sin importar orden de palabras)."""
     master_dict = st.session_state.get("master_catalog", {})
     if not master_dict: return "S/C"
     
-    # 1. Búsqueda exacta
+    full_query = f"{clean_name} {clean_pres}".strip()
+    if full_query in master_dict:
+        return clean_ean_code(master_dict[full_query])
     if clean_name in master_dict:
         return clean_ean_code(master_dict[clean_name])
         
-    # 2. Búsqueda flexible por intersección de palabras clave (sin importar el orden)
+    # Cruce por tokens (palabras clave independientes del orden)
     name_tokens = set(clean_name.split())
     if not name_tokens: return "S/C"
     
@@ -158,7 +161,6 @@ def get_flexible_master_barcode(clean_name):
     for m_name, m_code in master_dict.items():
         m_tokens = set(m_name.split())
         intersection = len(name_tokens.intersection(m_tokens))
-        # Si coinciden al menos el 50% de las palabras y es el mejor puntaje
         if intersection > max_intersection and intersection >= len(name_tokens) * 0.5:
             max_intersection = intersection
             best_code = clean_ean_code(m_code)
@@ -166,9 +168,14 @@ def get_flexible_master_barcode(clean_name):
     return best_code
 
 def parse_empaque_universal(supplier_name="", tamano_txt="", unidad_txt="", descripcion_txt=""):
+    """Regla 4: Identificación precisa de empaques y cantidades."""
     combined = f"{str(tamano_txt)} {str(unidad_txt)} {str(descripcion_txt)}".upper()
     u_txt = str(unidad_txt).upper()
     
+    if "BOT" in u_txt or "UNI" in u_txt or "PZA" in u_txt and not re.search(r'\b(24|12|6|48|30|20)\b', u_txt):
+        if not re.search(r'CAJA[-/\s]*\d+', u_txt):
+            return 1
+
     match_caja_num = re.search(r'CAJA[-/\s]*(\d+)', u_txt)
     if match_caja_num: return int(match_caja_num.group(1))
 
@@ -185,8 +192,8 @@ def parse_empaque_universal(supplier_name="", tamano_txt="", unidad_txt="", desc
 # ==========================================
 # MENÚ Y CONFIGURACIÓN LATERAL
 # ==========================================
-st.sidebar.markdown("<h3 style='color: #0284c7; text-align: center;'>⚡ WilPOS</h3>", unsafe_allow_html=True)
-st.sidebar.markdown("<p style='text-align: center; color: #64748b; font-size: 0.8rem;'>Sistema Limpio de Inventario</p>", unsafe_allow_html=True)
+st.sidebar.markdown("<h3 style='color: #0284c7; text-align: center;'>⚡ WilPOS (Blindado)</h3>", unsafe_allow_html=True)
+st.sidebar.markdown("<p style='text-align: center; color: #64748b; font-size: 0.8rem;'>Reglas de Oro Activas</p>", unsafe_allow_html=True)
 st.sidebar.markdown("---")
 
 modulo = st.sidebar.radio("Menú de Navegación", ["📄 Factura Individual", "📂 Múltiples Facturas (Lote)", "📁 Actualizar Catálogo Maestro", "🏢 Perfiles de Proveedores", "📜 Historial de Procesados", "📋 Códigos Almacenados"])
@@ -195,7 +202,7 @@ st.sidebar.markdown("---")
 use_gemini_paid_api = st.sidebar.checkbox("💎 Usar Gemini Paid (API de Pago)", value=bool(ACTIVE_GEMINI_PAID_KEY))
 
 def process_invoice_smart_router(file_obj, file_type, use_paid_gemini=False):
-    prompt_detect = "Identifica el nombre comercial del proveedor emisor de esta factura (ej: CND, BEES, ALVAREZ & SANCHEZ, GONZALEZ CUESTA, PRICESMART, REGAL PACK, CENTRO DE DISTRIBUCION CHRISTIAN). Devuelve un JSON puro: {'proveedor': 'NOMBRE'}"
+    prompt_detect = "Identifica el nombre comercial del proveedor emisor de esta factura (ej: CND, BEES, ALVAREZ & SANCHEZ, GONZALEZ CUESTA, CENTRO DE DISTRIBUCION CHRISTIAN). Devuelve un JSON puro: {'proveedor': 'NOMBRE'}"
     
     active_key = ACTIVE_GEMINI_PAID_KEY if use_paid_gemini else ACTIVE_GEMINI_FREE_KEY
     if not active_key and use_paid_gemini: active_key = ACTIVE_GEMINI_FREE_KEY
@@ -220,19 +227,19 @@ def process_invoice_smart_router(file_obj, file_type, use_paid_gemini=False):
     if supplier_detected and supplier_detected != "GENERAL":
         supps = st.session_state["supplier_memory"]
         if supplier_detected not in supps:
-            supps[supplier_detected] = {"nombre": supplier_detected, "formato_empaque": "universal"}
+            supps[supplier_detected] = {"nombre": supplier_detected, "formato_empaque": "regla_oro_universal"}
             st.session_state["supplier_memory"] = supps
             save_supplier_memory()
 
     prompt_main = (
-        f"Analiza este documento de compra del proveedor '{supplier_detected}' con absoluta precisión. "
-        "Extrae ABSOLUTAMENTE TODOS LOS RENGLONES/PRODUCTOS que aparecen en la factura, sin omitir ninguno. "
+        f"Analiza este documento de compra del proveedor '{supplier_detected}' bajo las Reglas de Oro. "
+        "Extrae ABSOLUTAMENTE TODOS LOS RENGLONES/PRODUCTOS que aparecen en la factura, sin duplicar artificialmente ninguna línea y sin omitir ninguna. "
         "Para cada renglón extrae rigurosamente en un JSON bajo la clave 'items': "
         "1. 'descripcion': nombre exacto del producto (sin tamaño ni presentación). "
         "2. 'tamano': tamaño o presentación separada (ej: '750 CL', '1 LT', '6/75 CL'). "
-        "3. 'cantidad': cantidad comprada de cajas o unidades (ej: 1.0). "
-        "4. 'unidad': unidad de medida impresa (ej: '12 PZA', 'Caja-12'). "
-        "5. 'valor_con_itbis': monto TOTAL INCLUYENDO ITBIS que aparece en la línea (el importe final con impuestos y descuentos ya aplicados). "
+        "3. 'cantidad': cantidad comprada (ej: 1.0). "
+        "4. 'unidad': unidad de medida o empaque impreso (ej: '12 PZA', 'Caja-24', 'BOT'). "
+        "5. 'valor_con_itbis': monto TOTAL INCLUYENDO ITBIS que aparece en la línea (importe final con impuestos y descuentos aplicados). "
         "6. 'descuento_monto': monto del descuento aplicado a esta línea (si existe, ej: 0.0). "
         "Estructura JSON exacta: "
         '{"proveedor": "' + supplier_detected + '", "items": [{"descripcion": "...", "tamano": "...", "cantidad": 1.0, "unidad": "...", "valor_con_itbis": 0.0, "descuento_monto": 0.0}]}. '
@@ -258,8 +265,8 @@ def process_invoice_smart_router(file_obj, file_type, use_paid_gemini=False):
 # ==========================================
 if modulo == "📄 Factura Individual":
     try:
-        st.markdown("<h2>📊 Automatizador con <span style='color: #0284c7;'>Cruce Maestro Flexible por Palabras</span></h2>", unsafe_allow_html=True)
-        st.markdown("<p style='color: #64748b;'>Consulta automática al maestro sin importar el orden de las palabras en el texto del proveedor.</p>", unsafe_allow_html=True)
+        st.markdown("<h2>📊 Automatizador <span style='color: #0284c7;'>Reglas de Oro WilPOS</span></h2>", unsafe_allow_html=True)
+        st.markdown("<p style='color: #64748b;'>Procesamiento blindado con validación de maestro, costos netos y cero duplicidades.</p>", unsafe_allow_html=True)
         st.markdown("---")
         render_master_status_banner()
 
@@ -274,9 +281,9 @@ if modulo == "📄 Factura Individual":
         st.markdown('</div>', unsafe_allow_html=True)
 
         if uploaded_file is not None:
-            if st.button("🚀 Procesar y Cruce Inteligente"):
+            if st.button("🚀 Procesar bajo Reglas de Oro"):
                 file_type = getattr(uploaded_file, 'type', 'image/jpeg')
-                with st.spinner("Procesando factura y consultando Catálogo Maestro..."):
+                with st.spinner("Procesando factura y aplicando validación estandarizada..."):
                     parsed_data, success_msg = process_invoice_smart_router(uploaded_file, file_type, use_paid_gemini=use_gemini_paid_api)
 
                 if success_msg == "QUOTA_EXCEEDED":
@@ -308,15 +315,17 @@ if modulo == "📄 Factura Individual":
                 unidad_txt = str(item.get("unidad") or "")
                 tamano_txt = str(item.get("tamano") or "")
                 
+                # Regla 5: Nombres limpios y presentación separada
                 clean_name, clean_pres = clean_product_name_and_presentation(desc_raw, tamano_txt)
                 
-                # CRUCE INTELIGENTE CON EL MAESTRO (INDEPENDIENTE DEL ORDEN DE PALABRAS)
-                resolved_code = get_flexible_master_barcode(clean_name)
+                # Reglas 2 y 3: Cruce obligatorio con Catálogo Maestro (tolerante al orden)
+                resolved_code = get_flexible_master_barcode(clean_name, clean_pres)
 
                 cant_comprada = safe_float(item.get("cantidad") or 1, 1.0)
                 val_total_con_itbis_linea = safe_float(item.get("valor_con_itbis") or item.get("importe") or 0)
                 descuento_monto_linea = safe_float(item.get("descuento_monto") or 0)
                 
+                # Regla 5: Costos netos sin ITBIS
                 if val_total_con_itbis_linea > 0:
                     val_sin_itbis = val_total_con_itbis_linea / 1.18
                     val_neto_con_itbis = val_total_con_itbis_linea
@@ -331,12 +340,14 @@ if modulo == "📄 Factura Individual":
                 calc_subtotal_sin_itbis += val_sin_itbis
                 calc_total_con_itbis += val_neto_con_itbis
                 
+                # Regla 4: Empaque y cantidad total
                 empaque_val = parse_empaque_universal(prov_det, clean_pres, unidad_txt, clean_name)
                 total_unidades = int(cant_comprada * empaque_val)
 
                 costo_unitario_real = round(val_sin_itbis / total_unidades, 2) if total_unidades > 0 else 0.0
                 if costo_unitario_real <= 0: continue
 
+                # Regla 5: Precio Venta = (Costo + Ganancia) + 18% ITBIS
                 raw_pv = (costo_unitario_real * (1 + (margen_ganancia / 100.0))) * 1.18
                 precio_venta = round_to_nearest_5(raw_pv)
                 
@@ -369,7 +380,7 @@ if modulo == "📄 Factura Individual":
             st.markdown("---")
 
             if rows_preview:
-                st.markdown(f"### ✅ Productos Procesados y Cruzados ({total_productos_factura} productos)")
+                st.markdown(f"### ✅ Productos Procesados sin Duplicidad ({total_productos_factura} productos)")
                 df_resultado = pd.DataFrame(rows_preview)
                 df_resultado["Código EAN Maestro"] = df_resultado["Código EAN Maestro"].astype(str)
                 st.dataframe(df_resultado, use_container_width=True, hide_index=True)
@@ -399,7 +410,7 @@ if modulo == "📄 Factura Individual":
                 output = io.BytesIO()
                 wb.save(output)
                 
-                if st.download_button("📥 Descargar Excel WilPOS Cruce Inteligente", output.getvalue(), f"Inventario_{prov_det.replace('&', 'Y').replace(' ', '_')}.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"):
+                if st.download_button("📥 Descargar Excel WilPOS Blindado", output.getvalue(), f"Inventario_{prov_det.replace('&', 'Y').replace(' ', '_')}.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"):
                     history_entry = {
                         "fecha": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                         "proveedor": prov_det,
@@ -419,7 +430,7 @@ if modulo == "📄 Factura Individual":
 # ==========================================
 elif modulo == "📂 Múltiples Facturas (Lote)":
     try:
-        st.markdown("<h2>📂 Procesador por Lotes <span style='color: #0284c7;'>(Cruce Inteligente)</span></h2>", unsafe_allow_html=True)
+        st.markdown("<h2>📂 Procesador por Lotes <span style='color: #0284c7;'>(Reglas de Oro)</span></h2>", unsafe_allow_html=True)
         st.markdown("---")
         render_master_status_banner()
         st.markdown('<div class="card-container">', unsafe_allow_html=True)
@@ -443,7 +454,7 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
 
             processed_so_far = st.session_state["batch_processed_count"]
             b_col1, b_col2 = st.columns(2)
-            if b_col1.button("🚀 Iniciar Lote Inteligente", type="primary"):
+            if b_col1.button("🚀 Iniciar Lote Blindado", type="primary"):
                 st.session_state["is_live_processing"] = True
                 st.rerun()
             if b_col2.button("🔄 Reiniciar"):
@@ -488,7 +499,7 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
                     unidad_txt = str(item.get("unidad") or "")
                     
                     clean_name, clean_pres = clean_product_name_and_presentation(desc_raw, tamano_txt)
-                    resolved_code = get_flexible_master_barcode(clean_name)
+                    resolved_code = get_flexible_master_barcode(clean_name, clean_pres)
 
                     cant_comprada = safe_float(item.get("cantidad") or 1, 1.0)
                     val_total_con_itbis_linea = safe_float(item.get("valor_con_itbis") or item.get("importe") or 0)
