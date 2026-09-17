@@ -137,7 +137,6 @@ def get_strict_ean_code_and_name(description, invoice_ean="", supplier_name=""):
     master = st.session_state["master_catalog"]
     memory = st.session_state["barcode_memory"]
     
-    # Manejo específico multi-tamaño para Tequila Reserva Cristalino 1800
     if "1800" in desc_clean and "CRISTALINO" in desc_clean:
         if "1.75" in desc_clean or "175" in desc_clean or "1,75" in desc_clean:
             return "TEQUILA RESERVA CRISTALINO 1800 (1.75L)", "7501035013636"
@@ -162,7 +161,7 @@ def get_strict_ean_code_and_name(description, invoice_ean="", supplier_name=""):
     return desc_clean, "S/C (Sin Codigo)"
 
 # ==========================================
-# REGLA DE EMPAQUE UNIVERSAL PROTEGIDA
+# REGLA DE EMPAQUE UNIVERSAL REFORZADA (CON LECTURA DE TAMAÑO)
 # ==========================================
 def parse_empaque_universal(supplier_name="", tamano_txt="", unidad_txt="", descripcion_txt=""):
     combined = f"{str(tamano_txt)} {str(unidad_txt)} {str(descripcion_txt)}".upper()
@@ -171,6 +170,12 @@ def parse_empaque_universal(supplier_name="", tamano_txt="", unidad_txt="", desc
     
     if "REGAL PACK" in s_name:
         return 1
+
+    if "1800" in combined and "CRISTALINO" in combined:
+        if "1.75" in combined or "175" in combined or "1,75" in combined:
+            return 6
+        if "750" in combined or "0.75" in combined or "75 CL" in combined or "12/70" in combined:
+            return 12
 
     match_slash = re.search(r'\b(24|16|12|6|48|10|20|30)\s*/', combined)
     if match_slash:
@@ -254,11 +259,12 @@ def process_invoice_smart_router(file_obj, file_type, use_paid_gemini=False):
         "Para cada renglón extrae rigurosamente en un JSON bajo la clave 'items': "
         "1. 'codigo_ean': código de barras oficial impreso en la columna correspondiente. "
         "2. 'descripcion': nombre exacto del producto limpio (sin códigos numéricos iniciales o corchetes). "
-        "3. 'cantidad': cantidad comprada exactamente tal como aparece. "
-        "4. 'unidad': unidad de medida exacta impresa en la línea ('UN', 'PC', 'CAJA'). "
-        "5. 'valor': monto TOTAL NETO de toda la línea (sin incluir ITBIS). "
+        "3. 'tamano': texto exacto del tamaño o presentación (ej: '12/70 CL', '750 ML', '1.75L'). "
+        "4. 'cantidad': cantidad comprada exactamente tal como aparece. "
+        "5. 'unidad': unidad de medida exacta impresa en la línea ('UN', 'PC', 'CAJA'). "
+        "6. 'valor': monto TOTAL NETO de toda la línea (sin incluir ITBIS). "
         "Estructura JSON exacta: "
-        '{"proveedor": "' + supplier_detected + '", "items": [{"codigo_ean": "...", "descripcion": "...", "cantidad": 1.0, "unidad": "...", "valor": 0.0}]}. '
+        '{"proveedor": "' + supplier_detected + '", "items": [{"codigo_ean": "...", "descripcion": "...", "tamano": "...", "cantidad": 1.0, "unidad": "...", "valor": 0.0}]}. '
         "Respuesta JSON pura sin texto adicional."
     )
 
@@ -281,8 +287,8 @@ def process_invoice_smart_router(file_obj, file_type, use_paid_gemini=False):
 # ==========================================
 if modulo == "📄 Factura Individual":
     try:
-        st.markdown("<h2>📊 Automatizador con <span style='color: #0284c7;'>Costos Unitarios y EAN Validados</span></h2>", unsafe_allow_html=True)
-        st.markdown("<p style='color: #64748b;'>Cálculo exacto, EAN corregidos y nombres limpios.</p>", unsafe_allow_html=True)
+        st.markdown("<h2>📊 Automatizador con <span style='color: #0284c7;'>Empaques y Stock Garantizados</span></h2>", unsafe_allow_html=True)
+        st.markdown("<p style='color: #64748b;'>Lectura completa de tamaño, empaque y stock exacto.</p>", unsafe_allow_html=True)
         st.markdown("---")
         render_master_status_banner()
 
@@ -299,7 +305,7 @@ if modulo == "📄 Factura Individual":
         if uploaded_file is not None:
             if st.button("🚀 Procesar y Guardar en Historial"):
                 file_type = getattr(uploaded_file, 'type', 'image/jpeg')
-                with st.spinner("Procesando documento con validación EAN..."):
+                with st.spinner("Procesando documento con lectura de tamaño y empaques..."):
                     parsed_data, success_msg = process_invoice_smart_router(uploaded_file, file_type, use_paid_gemini=use_gemini_paid_api)
 
                 if success_msg == "QUOTA_EXCEEDED":
@@ -329,11 +335,13 @@ if modulo == "📄 Factura Individual":
                 invoice_ean = str(item.get("codigo_ean") or "")
                 resolved_name, resolved_code = get_strict_ean_code_and_name(desc_raw, invoice_ean, prov_det)
 
+                tamano_txt = str(item.get("tamano") or "")
                 cant_comprada = safe_float(item.get("cantidad") or 1, 1.0)
                 val_neto_linea = safe_float(item.get("valor") or 0)
                 unidad_txt = str(item.get("unidad") or "")
                 
-                empaque_val = parse_empaque_universal(prov_det, "", unidad_txt, resolved_name)
+                # ¡Aquí pasamos el tamaño real extraído de la factura!
+                empaque_val = parse_empaque_universal(prov_det, tamano_txt, unidad_txt, resolved_name)
                 total_unidades = int(cant_comprada * empaque_val)
 
                 costo_unitario_real = round(val_neto_linea / total_unidades, 2) if total_unidades > 0 else 0.0
@@ -349,6 +357,7 @@ if modulo == "📄 Factura Individual":
                     "Nombre Producto": resolved_name,
                     "Cant. Compra": cant_comprada,
                     "Unidad": unidad_txt,
+                    "Tamaño": tamano_txt,
                     "Empaque": empaque_val,
                     "Stock Unidades": total_unidades,
                     "Costo Unitario Real": costo_unitario_real,
@@ -366,7 +375,7 @@ if modulo == "📄 Factura Individual":
             st.markdown("---")
 
             if rows_preview:
-                st.markdown("### ✅ Artículos Procesados")
+                st.markdown("### ✅ Artículos Procesados con Stock y Empaques Correctos")
                 df_resultado = pd.DataFrame(rows_preview)
                 df_resultado["Código EAN Único"] = df_resultado["Código EAN Único"].astype(str)
                 st.dataframe(df_resultado, use_container_width=True, hide_index=True)
@@ -478,11 +487,12 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
                     prov_det = str(item.get("_prov") or "GENERAL")
                     resolved_name, resolved_code = get_strict_ean_code_and_name(desc_raw, invoice_ean, prov_det)
 
+                    tamano_txt = str(item.get("tamano") or "")
                     cant_comprada = safe_float(item.get("cantidad") or 1, 1.0)
                     val_neto_linea = safe_float(item.get("valor") or 0)
                     unidad_txt = str(item.get("unidad") or "")
                     
-                    empaque_val = parse_empaque_universal(prov_det, "", unidad_txt, resolved_name)
+                    empaque_val = parse_empaque_universal(prov_det, tamano_txt, unidad_txt, resolved_name)
                     total_unidades = int(cant_comprada * empaque_val)
                     costo_unitario_real = round(val_neto_linea / total_unidades, 2) if total_unidades > 0 else 0.0
                     if costo_unitario_real <= 0: continue
