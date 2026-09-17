@@ -217,13 +217,22 @@ use_gemini_paid_api = st.sidebar.checkbox("💎 Usar Gemini Paid (API de Pago)",
 
 def parse_empaque_from_tamano(tamano_txt, unidad_txt, descripcion_txt=""):
     u = str(unidad_txt).strip().upper()
+    d = str(descripcion_txt).strip().upper()
     
-    # Si la unidad es UND (unidades sueltas como FritoLay), el empaque es 1
     if "UND" in u or "UNIDAD" in u:
+        if "FRITOLAY" in d or "CHIZPA" in d:
+            match_f = re.search(r'(\d+)X\d+$', d)
+            if match_f:
+                return int(match_f.group(1))
         return 1
         
     if "BOT" in u and "CAJA" not in u:
         return 1
+        
+    # Extraer empaque de CND (ej: 24/12OZ -> 24, 6/473 -> 6, etc.)
+    match_cnd = re.search(r'\b(\d+)\s*/', d)
+    if match_cnd:
+        return int(match_cnd.group(1))
         
     t = str(tamano_txt).strip()
     match_t = re.search(r'^(\d+)\s*/', t)
@@ -234,19 +243,19 @@ def parse_empaque_from_tamano(tamano_txt, unidad_txt, descripcion_txt=""):
 def process_invoice_exact_18(file_obj, file_type, use_paid_gemini=False, use_openai_fallback=False):
     prompt_text = (
         "Analiza esta factura o tiquet con máxima precisión horizontal y vertical. "
-        "REGLA DE OBRERO ESTRICTA PARA LA DESCRIPCIÓN: En el campo 'descripcion' solo debe figurar el nombre limpio del producto y su presentación/gramaje (ej: 'RUFFLES CHEDDAR 120G' o 'LAYS SAL 110G'). "
-        "Elimina códigos numéricos iniciales, abreviaturas logísticas de caja (como 'CS', 'TA') y códigos de empaque múltiple internos. "
+        "REGLA DE OBRERO ESTRICTA PARA LA DESCRIPCIÓN: En el campo 'descripcion' solo debe figurar el nombre limpio del producto y su presentación/gramaje o empaque (ej: 'BRAHMA LIGHT 24/12OZ', 'GATORADE FRUIT PUNCH 24', 'ALOE PURE PLUS ORIGINAL'). "
+        "Elimina códigos numéricos iniciales o de proveedor (como 92713), manteniendo el nombre comercial claro. "
         "Para cada renglón extrae exactamente: "
-        "1. 'codigo_barras': código de barras oficial si lo trae impreso, de lo contrario déjalo vacío o S/C. "
+        "1. 'codigo_barras': código de barras oficial si lo trae impreso o el código numérico del producto si no hay otro. "
         "2. 'descripcion': nombre limpio y presentación del producto. "
-        "3. 'cantidad': número exacto de unidades de la columna 'Und' o 'Cant' (ej: 3, 12, 24). "
-        "4. 'unidad': 'UND' o 'CAJA' o 'BOT.'. "
-        "5. 'tamano': presentación o tamaño exacto (ej: 120G, 110G, 55G). "
-        "6. 'precio_lista': precio unitario de lista. "
-        "7. 'valor': monto total bruto de la línea. "
+        "3. 'cantidad': número exacto de piezas/cajas de la columna 'Cant' o 'PC' (ej: 10, 20). "
+        "4. 'unidad': 'PC' o 'CAJA' o 'UND' o 'BOT.'. "
+        "5. 'tamano': presentación o desglose exacto (ej: 24/12OZ, 6/473, 24). "
+        "6. 'precio_lista': precio unitario por caja/paquete tal como aparece en la factura. "
+        "7. 'valor': monto total neto de la línea. "
         "8. 'descuento_porcentaje': porcentaje de descuento si aplica. "
         "Devuelve un JSON puro bajo la clave 'items': "
-        '{"items": [{"codigo_barras": "...", "descripcion": "...", "cantidad": 3, "unidad": "UND", "tamano": "120G", "precio_lista": 87.40, "valor": 262.20, "descuento_porcentaje": 0.0}]}. '
+        '{"items": [{"codigo_barras": "...", "descripcion": "...", "cantidad": 10, "unidad": "PC", "tamano": "24/12OZ", "precio_lista": 2048.79, "valor": 20487.85, "descuento_porcentaje": 0.0}]}. '
         "Respuesta JSON pura sin texto adicional."
     )
 
@@ -307,7 +316,7 @@ def process_invoice_exact_18(file_obj, file_type, use_paid_gemini=False, use_ope
 # ==========================================
 if modulo == "📄 Factura Individual":
     st.markdown("<h2>📊 Automatizador de Facturas <span style='color: #0284c7;'>(Individual)</span></h2>", unsafe_allow_html=True)
-    st.markdown("<p style='color: #64748b;'>Procesamiento con unidades directas y nombres limpios.</p>", unsafe_allow_html=True)
+    st.markdown("<p style='color: #64748b;'>Procesamiento con cálculo correcto de costo unitario por caja/pieza.</p>", unsafe_allow_html=True)
     st.markdown("---")
 
     st.markdown('<div class="card-container">', unsafe_allow_html=True)
@@ -323,7 +332,7 @@ if modulo == "📄 Factura Individual":
         st.success(f"¡Archivo cargado: {uploaded_file.name}!")
         if st.button("🚀 Procesar Documento"):
             file_type = uploaded_file.type if hasattr(uploaded_file, 'type') else 'image/jpeg'
-            with st.spinner("Procesando cantidades y costos..."):
+            with st.spinner("Procesando y calculando costos unitarios reales..."):
                 parsed_data, success_msg = process_invoice_exact_18(uploaded_file, file_type, use_paid_gemini=use_gemini_paid_api, use_openai_fallback=use_openai_single)
 
             if success_msg == "QUOTA_EXCEEDED":
@@ -354,22 +363,38 @@ if modulo == "📄 Factura Individual":
                     cant_comprada = safe_int(item.get("cantidad") or 1, 1)
                     precio_lista = safe_float(item.get("precio_lista") or 0)
                     
-                    if precio_lista <= 0 and item.get("valor"):
-                        val_total = safe_float(item.get("valor"))
-                        costo = round(val_total / cant_comprada, 2) if cant_comprada > 0 else round(val_total, 2)
+                    unidad_txt = str(item.get("unidad") or "PC")
+                    tamano_txt = str(item.get("tamano") or "")
+                    empaque_val = parse_empaque_from_tamano(tamano_txt, unidad_txt, desc)
+
+                    # Si el precio_lista es por caja (ej: CND o Alvarez&Sanchez), calculamos el costo unitario dividiendo entre el empaque
+                    if empaque_val > 1 and ("PC" in unidad_txt.upper() or "CAJA" in unidad_txt.upper()):
+                        if precio_lista > 0:
+                            costo = round(precio_lista / empaque_val, 2)
+                        elif item.get("valor"):
+                            val_total = safe_float(item.get("valor"))
+                            total_unidades = cant_comprada * empaque_val
+                            costo = round(val_total / total_unidades, 2) if total_unidades > 0 else round(val_total, 2)
+                        else:
+                            costo = 0.0
                     else:
-                        costo = round(precio_lista, 2)
+                        if precio_lista > 0:
+                            costo = round(precio_lista, 2)
+                        elif item.get("valor"):
+                            val_total = safe_float(item.get("valor"))
+                            costo = round(val_total / cant_comprada, 2) if cant_comprada > 0 else round(val_total, 2)
+                        else:
+                            costo = 0.0
 
                     extracted_code = item.get("codigo_barras")
                     resolved_code = get_resolved_barcode(extracted_code, desc)
 
                     desc_pct = safe_float(item.get("descuento_porcentaje") or 0)
-                    unidad_txt = str(item.get("unidad") or "UND")
-                    tamano_txt = str(item.get("tamano") or "120G")
                     
-                    empaque_val = parse_empaque_from_tamano(tamano_txt, unidad_txt, desc)
-                    
-                    importe_bruto = costo * cant_comprada
+                    importe_bruto = (precio_lista if (empaque_val > 1 and "PC" in unidad_txt.upper()) else costo) * cant_comprada
+                    if "PC" in unidad_txt.upper() and empaque_val > 1 and item.get("valor"):
+                        importe_bruto = safe_float(item.get("valor"))
+
                     descuento_linea = importe_bruto * (desc_pct / 100.0)
                     importe_neto_linea = importe_bruto - descuento_linea
                     
@@ -447,7 +472,7 @@ if modulo == "📄 Factura Individual":
 # ==========================================
 elif modulo == "📂 Múltiples Facturas (Lote)":
     st.markdown("<h2>📂 Procesador por <span style='color: #0284c7;'>Lotes y Consolidación Oficial</span></h2>", unsafe_allow_html=True)
-    st.markdown("<p style='color: #64748b;'>Procesa múltiples facturas respetando unidades directas.</p>", unsafe_allow_html=True)
+    st.markdown("<p style='color: #64748b;'>Procesa múltiples facturas con cálculo correcto de costos unitarios.</p>", unsafe_allow_html=True)
     st.markdown("---")
 
     st.markdown('<div class="card-container">', unsafe_allow_html=True)
@@ -561,22 +586,30 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
                 
                 cant_comprada = safe_int(item.get("cantidad") or 1, 1)
                 precio_lista = safe_float(item.get("precio_lista") or 0)
-                if precio_lista <= 0 and item.get("valor"):
-                    val_total = safe_float(item.get("valor"))
-                    costo = round(val_total / cant_comprada, 2) if cant_comprada > 0 else round(val_total, 2)
+                
+                unidad_txt = str(item.get("unidad") or "PC")
+                tamano_txt = str(item.get("tamano") or "")
+                empaque_val = parse_empaque_from_tamano(tamano_txt, unidad_txt, desc)
+
+                if empaque_val > 1 and ("PC" in unidad_txt.upper() or "CAJA" in unidad_txt.upper()):
+                    if precio_lista > 0:
+                        costo = round(precio_lista / empaque_val, 2)
+                    elif item.get("valor"):
+                        val_total = safe_float(item.get("valor"))
+                        total_unidades = cant_comprada * empaque_val
+                        costo = round(val_total / total_unidades, 2) if total_unidades > 0 else round(val_total, 2)
+                    else:
+                        costo = 0.0
                 else:
-                    costo = round(precio_lista, 2)
+                    if precio_lista > 0:
+                        costo = round(precio_lista, 2)
+                    elif item.get("valor"):
+                        val_total = safe_float(item.get("valor"))
+                        costo = round(val_total / cant_comprada, 2) if cant_comprada > 0 else round(val_total, 2)
+                    else:
+                        costo = 0.0
 
                 desc_pct = safe_float(item.get("descuento_porcentaje") or 0)
-                unidad_txt = str(item.get("unidad") or "UND")
-                tamano_txt = str(item.get("tamano") or "120G")
-
-                empaque_val = parse_empaque_from_tamano(tamano_txt, unidad_txt, desc)
-                
-                importe_bruto = costo * cant_comprada
-                descuento_linea = importe_bruto * (desc_pct / 100.0)
-                importe_neto_linea = importe_bruto - descuento_linea
-                
                 if empaque_val == 1:
                     total_unidades_linea = cant_comprada
                 else:
