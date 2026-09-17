@@ -332,7 +332,13 @@ def process_invoice_exact_18(file_obj, file_type, use_paid_gemini=False, use_ope
             model = genai.GenerativeModel('gemini-3.6-flash')
             file_obj.seek(0)
             file_bytes = file_obj.read()
-            image_input = file_bytes if "pdf" in file_type.lower() else Image.open(io.BytesIO(file_bytes))
+            
+            # Corrección para evitar el error de Blob/bytes directos en Gemini
+            if "pdf" in file_type.lower():
+                image_input = {"mime_type": "application/pdf", "data": file_bytes}
+            else:
+                image_input = Image.open(io.BytesIO(file_bytes))
+
             response = model.generate_content([image_input, prompt_text])
             raw_text = response.text.strip()
             if raw_text.startswith("```json"): raw_text = raw_text[7:]
