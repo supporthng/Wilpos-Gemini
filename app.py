@@ -144,28 +144,28 @@ def get_strict_ean_code_and_name(description, invoice_ean="", supplier_name=""):
     return desc_clean, "S/C (Sin Codigo)"
 
 # ==========================================
-# REGLA DE EMPAQUE UNIVERSAL REFORZADA (CON VALIDACIÓN DE UNIDADES)
+# REGLA DE EMPAQUE UNIVERSAL REFORZADA Y DEFINITIVA
 # ==========================================
 def parse_empaque_universal(supplier_name="", tamano_txt="", unidad_txt="", descripcion_txt=""):
     combined = f"{str(tamano_txt)} {str(unidad_txt)} {str(descripcion_txt)}".upper()
     u_txt = str(unidad_txt).upper()
     
-    # Si la línea es explícitamente en unidades sueltas (UN), el empaque es 1
+    # 1. Si la línea es explícitamente en unidades sueltas (UN), el empaque es 1
     if "UN" in u_txt and not re.search(r'\b(24|16|12|6|48)\b', combined):
         return 1
 
-    # Excepciones específicas exactas para cajas/paquetes
+    # 2. Excepciones específicas fijas por producto
     if "CLAMATO" in combined:
         return 24
     if "ALOE PURE" in combined and "UN" not in u_txt:
         return 12
         
-    # 1. Buscar formatos con barra como 16/650, 24/12, 6/473, 12/
+    # 3. Buscar formatos con barra como 16/650, 24/12, 6/473, 12/
     match_slash = re.search(r'\b(24|16|12|6|48|10|20|30)\s*/', combined)
     if match_slash:
         return int(match_slash.group(1))
         
-    # 2. Buscar formato matriz como 4X6, 6X4, 4X (LP 4)
+    # 4. Buscar formato matriz como 4X6, 6X4, 4X (LP 4)
     match_nxn = re.search(r'\b(\d+)\s*[xX]\s*(\d+)\b', combined)
     if match_nxn:
         return int(match_nxn.group(1)) * int(match_nxn.group(2))
@@ -173,12 +173,12 @@ def parse_empaque_universal(supplier_name="", tamano_txt="", unidad_txt="", desc
     if re.search(r'\b4\s*[xX]\b', combined) or "LP 4" in combined:
         return 24
         
-    # 3. Buscar palabras explícitas de empaque
+    # 5. Buscar palabras explícitas de empaque
     match_words = re.search(r'\b(24|16|12|6|48)\s*(BOTS|BOTELLAS|PACK|PZA|UNIDADES|UN)\b', combined)
     if match_words:
         return int(match_words.group(1))
         
-    # 4. Reglas específicas para bebidas comunes
+    # 6. Reglas específicas para bebidas comunes
     if "GATORADE" in combined and "24" in combined:
         return 24
         
@@ -192,7 +192,7 @@ def parse_empaque_universal(supplier_name="", tamano_txt="", unidad_txt="", desc
 # MENÚ Y CONFIGURACIÓN LATERAL
 # ==========================================
 st.sidebar.markdown("<h3 style='color: #0284c7; text-align: center;'>⚡ WilPOS</h3>", unsafe_allow_html=True)
-st.sidebar.markdown("<p style='text-align: center; color: #64748b; font-size: 0.8rem;'>Sistema Universal de Empaques</p>", unsafe_allow_html=True)
+st.sidebar.markdown("<p style='text-align: center; color: #64748b; font-size: 0.8rem;'>Sistema Universal de Empaques Definitivo</p>", unsafe_allow_html=True)
 st.sidebar.markdown("---")
 
 modulo = st.sidebar.radio("Menú de Navegación", ["📄 Factura Individual", "📂 Múltiples Facturas (Lote)", "📁 Actualizar Catálogo Maestro", "🏢 Perfiles de Proveedores", "📜 Historial de Procesados", "📋 Códigos Almacenados"])
