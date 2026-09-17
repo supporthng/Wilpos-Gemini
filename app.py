@@ -122,7 +122,7 @@ def clean_ean_code(code_val):
     if s_val.lower() in ["nan", "none", "", "s/c", "sin codigo"]: return "S/C (Sin Codigo)"
     return s_val
 
-# Jerarquía estricta: Catálogo Maestro > Memoria. Para CND/BEES se ignoran códigos internos cortos.
+# Jerarquía estricta: Catálogo Maestro > Memoria. Se permite compartir códigos EAN entre múltiples renglones.
 def get_strict_ean_code_and_name(description, invoice_ean="", supplier_name=""):
     desc_clean = str(description).strip().upper()
     master = st.session_state["master_catalog"]
@@ -136,7 +136,6 @@ def get_strict_ean_code_and_name(description, invoice_ean="", supplier_name=""):
         coincidencias = difflib.get_close_matches(desc_clean, master_keys, n=1, cutoff=0.60)
         if coincidencias: return desc_clean, clean_ean_code(master[coincidencias[0]])
             
-    # Si es CND o BEES y el código de factura es un código interno corto (<= 6 dígitos), IGNORARLO
     s_name = str(supplier_name).upper()
     cleaned_invoice_ean = clean_ean_code(invoice_ean)
     if ("CND" in s_name or "BEES" in s_name) and len(cleaned_invoice_ean) <= 6:
@@ -164,7 +163,7 @@ def parse_empaque_isolated(supplier_name, tamano_txt="", unidad_txt="", descripc
 # MENÚ Y CONFIGURACIÓN LATERAL
 # ==========================================
 st.sidebar.markdown("<h3 style='color: #0284c7; text-align: center;'>⚡ WilPOS</h3>", unsafe_allow_html=True)
-st.sidebar.markdown("<p style='text-align: center; color: #64748b; font-size: 0.8rem;'>Sistema con Prioridad a Maestro EAN</p>", unsafe_allow_html=True)
+st.sidebar.markdown("<p style='text-align: center; color: #64748b; font-size: 0.8rem;'>Sistema sin Restricción de Duplicados</p>", unsafe_allow_html=True)
 st.sidebar.markdown("---")
 
 modulo = st.sidebar.radio("Menú de Navegación", ["📄 Factura Individual", "📂 Múltiples Facturas (Lote)", "📁 Actualizar Catálogo Maestro", "🏢 Perfiles de Proveedores", "📜 Historial de Procesados", "📋 Códigos Almacenados"])
@@ -203,7 +202,7 @@ def process_invoice_smart_router(file_obj, file_type, use_paid_gemini=False):
     prompt_main = (
         f"Analiza este documento de compra del proveedor '{supplier_detected}' con absoluta precisión. "
         "Para cada renglón extrae rigurosamente en un JSON bajo la clave 'items': "
-        "1. 'codigo_ean': código de barras oficial si existe (ignora códigos internos cortos). "
+        "1. 'codigo_ean': código de barras oficial si existe. "
         "2. 'descripcion': nombre exacto del producto. "
         "3. 'cantidad': cantidad comprada exactamente tal como aparece. "
         "4. 'valor': monto total neto de la línea. "
@@ -231,8 +230,8 @@ def process_invoice_smart_router(file_obj, file_type, use_paid_gemini=False):
 # ==========================================
 if modulo == "📄 Factura Individual":
     try:
-        st.markdown("<h2>📊 Automatizador con <span style='color: #0284c7;'>Prioridad a Catálogo Maestro</span></h2>", unsafe_allow_html=True)
-        st.markdown("<p style='color: #64748b;'>Cruce estricto con Catálogo Maestro y exclusión de códigos internos de CND.</p>", unsafe_allow_html=True)
+        st.markdown("<h2>📊 Automatizador con <span style='color: #0284c7;'>Catálogo Maestro Flexible</span></h2>", unsafe_allow_html=True)
+        st.markdown("<p style='color: #64748b;'>Permite códigos EAN compartidos entre diferentes renglones de la factura.</p>", unsafe_allow_html=True)
         st.markdown("---")
         render_master_status_banner()
 
@@ -271,8 +270,6 @@ if modulo == "📄 Factura Individual":
             multiplicador_ganancia = 1 + (margen_ganancia / 100.0)
             calc_subtotal = 0.0
 
-            assigned_barcodes = set()
-
             for idx, item in enumerate(data_items, start=1):
                 if not isinstance(item, dict): continue
                 desc_raw = str(item.get("descripcion") or "").strip()
@@ -280,12 +277,6 @@ if modulo == "📄 Factura Individual":
 
                 invoice_ean = str(item.get("codigo_ean") or "")
                 resolved_name, resolved_code = get_strict_ean_code_and_name(desc_raw, invoice_ean, prov_det)
-
-                if resolved_code in assigned_barcodes and resolved_code != "S/C (Sin Codigo)":
-                    resolved_code = "S/C (Duplicado - Revisar)"
-
-                if resolved_code != "S/C (Sin Codigo)" and "Duplicado" not in resolved_code:
-                    assigned_barcodes.add(resolved_code)
 
                 cant_comprada = safe_float(item.get("cantidad") or 1, 1.0)
                 val_neto_linea = safe_float(item.get("valor") or 0)
@@ -322,7 +313,7 @@ if modulo == "📄 Factura Individual":
             st.markdown("---")
 
             if rows_preview:
-                st.markdown("### ✅ Artículos Procesados con Catálogo Maestro")
+                st.markdown("### ✅ Artículos Procesados Correctamente")
                 df_resultado = pd.DataFrame(rows_preview)
                 df_resultado["Código EAN Único"] = df_resultado["Código EAN Único"].astype(str)
                 st.dataframe(df_resultado, use_container_width=True, hide_index=True)
@@ -334,7 +325,7 @@ if modulo == "📄 Factura Individual":
                 
                 for item_dict in rows_preview:
                     code_to_save = item_dict["Código EAN Único"]
-                    if "Duplicado" in code_to_save or "Sin Codigo" in code_to_save: code_to_save = "S/C"
+                    if "Sin Codigo" in code_to_save: code_to_save = "S/C"
                     ws_prod.append([
                         item_dict["Nombre Producto"], str(code_to_save),
                         "General", "producto", item_dict["Precio Venta"],
@@ -426,7 +417,6 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
                 raw_items = st.session_state["batch_accumulated_items"]
                 multiplicador_ganancia = 1 + (margen_ganancia_lote / 100.0)
                 processed_rows = []
-                batch_assigned_barcodes = set()
 
                 for item in raw_items:
                     desc_raw = str(item.get("descripcion") or "").strip()
@@ -434,11 +424,6 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
                     invoice_ean = str(item.get("codigo_ean") or "")
                     prov_det = str(item.get("_prov") or "GENERAL")
                     resolved_name, resolved_code = get_strict_ean_code_and_name(desc_raw, invoice_ean, prov_det)
-                    
-                    if resolved_code in batch_assigned_barcodes and resolved_code != "S/C (Sin Codigo)":
-                        resolved_code = "S/C"
-                    if resolved_code != "S/C (Sin Codigo)":
-                        batch_assigned_barcodes.add(resolved_code)
 
                     cant_comprada = safe_float(item.get("cantidad") or 1, 1.0)
                     val_neto_linea = safe_float(item.get("valor") or 0)
