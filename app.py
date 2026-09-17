@@ -121,7 +121,6 @@ def save_json_file(filepath, data):
     except Exception:
         pass
 
-# Inicializar Memoria y Catálogo Maestro en el Sistema
 if "barcode_memory" not in st.session_state:
     mem_data = load_json_file(BARCODE_MEMORY_FILE)
     mem_data.setdefault("WHISKY ESCOCES MALTA 12 AÑOS GLEN GRANT", "8000040630269")
@@ -138,9 +137,6 @@ if "master_catalog" not in st.session_state:
 
 if "master_meta" not in st.session_state:
     st.session_state["master_meta"] = load_json_file(MASTER_META_FILE)
-
-def save_memory_to_file():
-    save_json_file(BARCODE_MEMORY_FILE, st.session_state["barcode_memory"])
 
 def save_master_to_file():
     save_json_file(MASTER_CATALOG_FILE, st.session_state["master_catalog"])
@@ -187,7 +183,6 @@ def clean_barcode(code_val):
     return s_val
 
 def get_resolved_barcode_and_name(description):
-    """REGLA DE ORO BLINDADA: Búsqueda exacta, por palabras clave y difusa en el Maestro."""
     desc_upper = str(description).strip().upper()
     master = st.session_state["master_catalog"]
     memory = st.session_state["barcode_memory"]
@@ -231,33 +226,28 @@ def parse_empaque_from_tamano(tamano_txt, unidad_txt, descripcion_txt=""):
     d = str(descripcion_txt).strip().upper()
     t = str(tamano_txt).strip().upper()
     
-    combined = d + " " + t
+    combined = d + " " + t + " " + u
     
-    # REGLA BLINDADA PARA CERVEZAS Y PACKS CND (Corona, Presidente, Michelob, Brahma)
+    # 1. Buscar número explícito en la unidad o empaque (ej: "12 PZA", "6 PZA", "24 PZA")
+    match_pza = re.search(r'(\d+)\s*PZA', combined)
+    if match_pza:
+        return int(match_pza.group(1))
+
+    # 2. Detección específica para cervezas y packs CND
     if any(beer in combined for beer in ["CORONA", "MICHELOB", "PRESIDENTE", "BRAHMA"]):
         if "650" in combined or "650M" in combined:
             return 16
         if "22OZ" in combined or "22 OZ" in combined:
             return 24
-        # Si menciona packs tipo 4x6, 4x12 o LP (Lager Pack)
         if "4X" in combined or "LP" in combined or "4X6" in combined:
             return 24
         return 24
 
     match_4x6 = re.search(r'(\d+)\s*X\s*(\d+)', combined)
     if match_4x6:
-        val1 = int(match_4x6.group(1))
-        val2 = int(match_4x6.group(2))
-        return val1 * val2
+        return int(match_4x6.group(1)) * int(match_4x6.group(2))
 
     if "UND" in u or "UNIDAD" in u:
-        if "FRITOLAY" in d or "CHIZPA" in d:
-            match_f = re.search(r'(\d+)X\d+$', d)
-            if match_f:
-                return int(match_f.group(1))
-        return 1
-        
-    if "BOT" in u and "CAJA" not in u:
         return 1
         
     match_cnd = re.search(r'\b(\d+)\s*/', d)
@@ -289,18 +279,18 @@ use_gemini_paid_api = st.sidebar.checkbox("💎 Usar Gemini Paid (API de Pago)",
 def process_invoice_exact_18(file_obj, file_type, use_paid_gemini=False, use_openai_fallback=False):
     prompt_text = (
         "Analiza esta factura o tiquet con máxima precisión. "
-        "REGLA DE OBRERO ESTRICTA PARA LA DESCRIPCIÓN: En el campo 'descripcion' solo debe figurar el nombre limpio del producto y su presentación/gramaje o empaque (ej: 'CORONA EXTRA 330ML LP 4', 'MICHELOB ULTRA 355ML 4X', 'CORONA CERO 355ML 4X6 P', 'BRAHMA LIGHT 24/12OZ'). "
-        "Elimina códigos numéricos iniciales o de proveedor. "
+        "REGLA DE OBRERO ESTRICTA PARA LA DESCRIPCIÓN: En el campo 'descripcion' solo debe figurar el nombre limpio del producto y su presentación/gramaje (ej: 'SANTA HELENA MERLOT 75 CL', 'SANTIAGO RUIZ ALBARIÑO 1.5 LT'). "
+        "En el campo 'unidad' extrae exactamente la UMV de la factura (ej: '12 PZA', '6 PZA', '24 PZA'). "
         "Para cada renglón extrae exactamente: "
-        "1. 'descripcion': nombre limpio y presentación del producto. "
-        "2. 'cantidad': número exacto de piezas o cajas. "
-        "3. 'unidad': 'PC' or 'CAJA' or 'UND' or 'BOT.'. "
-        "4. 'tamano': presentación o desglose exacto. "
+        "1. 'descripcion': nombre limpio y presentación. "
+        "2. 'cantidad': número de cajas o unidades base compradas. "
+        "3. 'unidad': UMV exacta de la factura (ej. '12 PZA'). "
+        "4. 'tamano': tamaño o presentación. "
         "5. 'precio_lista': precio unitario. "
         "6. 'valor': monto total neto de la línea. "
         "7. 'descuento_porcentaje': porcentaje de descuento si aplica. "
         "Devuelve un JSON puro bajo la clave 'items': "
-        '{"items": [{"descripcion": "...", "cantidad": 10, "unidad": "PC", "tamano": "24/12OZ", "precio_lista": 2048.79, "valor": 20487.85, "descuento_porcentaje": 0.0}]}. '
+        '{"items": [{"descripcion": "...", "cantidad": 1, "unidad": "12 PZA", "tamano": "75 CL", "precio_lista": 4800.0, "valor": 4800.0, "descuento_porcentaje": 0.0}]}. '
         "Respuesta JSON pura sin texto adicional."
     )
 
@@ -361,7 +351,7 @@ def process_invoice_exact_18(file_obj, file_type, use_paid_gemini=False, use_ope
 # ==========================================
 if modulo == "📄 Factura Individual":
     st.markdown("<h2>📊 Automatizador de Facturas <span style='color: #0284c7;'>(Individual)</span></h2>", unsafe_allow_html=True)
-    st.markdown("<p style='color: #64748b;'>Procesamiento con Catálogo Maestro activo en la memoria del sistema.</p>", unsafe_allow_html=True)
+    st.markdown("<p style='color: #64748b;'>Procesamiento con lectura estricta de UMV y Catálogo Maestro en memoria.</p>", unsafe_allow_html=True)
     st.markdown("---")
 
     render_master_status_banner()
@@ -379,7 +369,7 @@ if modulo == "📄 Factura Individual":
         st.success(f"¡Archivo cargado: {uploaded_file.name}!")
         if st.button("🚀 Procesar Documento"):
             file_type = uploaded_file.type if hasattr(uploaded_file, 'type') else 'image/jpeg'
-            with st.spinner("Procesando documento aplicando Regla de Oro..."):
+            with st.spinner("Procesando documento aplicando Regla de Oro y UMV..."):
                 parsed_data, success_msg = process_invoice_exact_18(uploaded_file, file_type, use_paid_gemini=use_gemini_paid_api, use_openai_fallback=use_openai_single)
 
             if success_msg == "QUOTA_EXCEEDED":
@@ -412,11 +402,11 @@ if modulo == "📄 Factura Individual":
                     cant_comprada = safe_int(item.get("cantidad") or 1, 1)
                     val_neto_linea = safe_float(item.get("valor") or 0)
                     
-                    unidad_txt = str(item.get("unidad") or "PC")
+                    unidad_txt = str(item.get("unidad") or "12 PZA")
                     tamano_txt = str(item.get("tamano") or "")
                     empaque_val = parse_empaque_from_tamano(tamano_txt, unidad_txt, resolved_name)
 
-                    if empaque_val > 1 and ("PC" in unidad_txt.upper() or "CAJA" in unidad_txt.upper()):
+                    if empaque_val > 1:
                         total_unidades = cant_comprada * empaque_val
                         costo = round(val_neto_linea / total_unidades, 2) if total_unidades > 0 else 0.0
                     else:
@@ -442,8 +432,7 @@ if modulo == "📄 Factura Individual":
                         "Código Oficial POS": str(resolved_code),
                         "Nombre Maestro / Artículo": resolved_name,
                         "Cant. Compra": cant_comprada,
-                        "Unidad": unidad_txt,
-                        "Tamaño/Empaque": tamano_txt,
+                        "Unidad/UMV": unidad_txt,
                         "Empaque Num": empaque_val,
                         "Stock Total": total_unidades,
                         "Costo Unitario": costo,
@@ -500,7 +489,7 @@ if modulo == "📄 Factura Individual":
 # ==========================================
 elif modulo == "📂 Múltiples Facturas (Lote)":
     st.markdown("<h2>📂 Procesador por <span style='color: #0284c7;'>Lotes y Consolidación Oficial</span></h2>", unsafe_allow_html=True)
-    st.markdown("<p style='color: #64748b;'>Procesa múltiples facturas aplicando la Regla de Oro en memoria.</p>", unsafe_allow_html=True)
+    st.markdown("<p style='color: #64748b;'>Procesa múltiples facturas aplicando lectura estricta de UMV.</p>", unsafe_allow_html=True)
     st.markdown("---")
 
     render_master_status_banner()
@@ -616,11 +605,11 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
                 cant_comprada = safe_int(item.get("cantidad") or 1, 1)
                 val_neto_linea = safe_float(item.get("valor") or 0)
                 
-                unidad_txt = str(item.get("unidad") or "PC")
+                unidad_txt = str(item.get("unidad") or "12 PZA")
                 tamano_txt = str(item.get("tamano") or "")
                 empaque_val = parse_empaque_from_tamano(tamano_txt, unidad_txt, resolved_name)
 
-                if empaque_val > 1 and ("PC" in unidad_txt.upper() or "CAJA" in unidad_txt.upper()):
+                if empaque_val > 1:
                     total_unidades = cant_comprada * empaque_val
                     costo = round(val_neto_linea / total_unidades, 2) if total_unidades > 0 else 0.0
                 else:
