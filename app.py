@@ -101,7 +101,7 @@ def render_master_status_banner():
     master_dict = st.session_state["master_catalog"]
     meta = st.session_state.get("master_meta", {})
     supps = st.session_state.get("supplier_memory", {})
-    st.success(f"🟢 **WilPOS Blindado (Reglas de Oro)** | Maestro: **{len(master_dict):,}** prods | 🏢 Proveedores: **{len(supps)}**")
+    st.success(f"🟢 **WilPOS Reglas de Oro Activas** | Maestro: **{len(master_dict):,}** prods | 🏢 Proveedores: **{len(supps)}**")
 
 def safe_float(val, default=0.0):
     try: return float(val)
@@ -114,7 +114,7 @@ def safe_int(val, default=1):
 def round_to_nearest_5(x): return float(round(round(x / 5) * 5))
 
 # ==========================================
-# REGLAS DE ORO: LIMPIEZA, EAN Y CRUCE MAESTRO
+# REGLAS DE ORO: LIMPIEZA Y FORMATO ESTÁNDAR
 # ==========================================
 def clean_ean_code(code_val):
     if not code_val: return "S/C"
@@ -124,7 +124,7 @@ def clean_ean_code(code_val):
     return str(s_val)
 
 def clean_product_name_and_presentation(raw_name, raw_tamano=""):
-    """Regla 5: Nombres limpios (solo nombre y presentación separados)."""
+    """Regla 5 de Oro: Nombres limpios combinando Nombre + Presentación (ej. CHIVAS REGAL 25YO 700 ML)."""
     name = str(raw_name).strip()
     name = re.sub(r'^\d+[\s-]*', '', name)
     name = re.sub(r'^\[.*?\]\s*', '', name)
@@ -138,10 +138,17 @@ def clean_product_name_and_presentation(raw_name, raw_tamano=""):
             
     name = re.sub(r'\s+', ' ', name).strip().upper()
     presentation = re.sub(r'\s+', ' ', presentation).strip().upper()
-    return name, presentation
+    
+    # Formato unificado Regla 5
+    if presentation and presentation not in name:
+        clean_full_name = f"{name} {presentation}"
+    else:
+        clean_full_name = name
+        
+    return clean_full_name, presentation
 
 def get_flexible_master_barcode(clean_name, clean_pres=""):
-    """Reglas 2 y 3: Cruce inteligente con Catálogo Maestro por tokens (sin importar orden de palabras)."""
+    """Reglas 2 y 3 de Oro: Cruce inteligente con Catálogo Maestro por tokens (tolerante al orden)."""
     master_dict = st.session_state.get("master_catalog", {})
     if not master_dict: return "S/C"
     
@@ -151,7 +158,6 @@ def get_flexible_master_barcode(clean_name, clean_pres=""):
     if clean_name in master_dict:
         return clean_ean_code(master_dict[clean_name])
         
-    # Cruce por tokens (palabras clave independientes del orden)
     name_tokens = set(clean_name.split())
     if not name_tokens: return "S/C"
     
@@ -168,7 +174,7 @@ def get_flexible_master_barcode(clean_name, clean_pres=""):
     return best_code
 
 def parse_empaque_universal(supplier_name="", tamano_txt="", unidad_txt="", descripcion_txt=""):
-    """Regla 4: Identificación precisa de empaques y cantidades."""
+    """Regla 4 de Oro: Identificación precisa de empaques y cantidades."""
     combined = f"{str(tamano_txt)} {str(unidad_txt)} {str(descripcion_txt)}".upper()
     u_txt = str(unidad_txt).upper()
     
@@ -192,8 +198,8 @@ def parse_empaque_universal(supplier_name="", tamano_txt="", unidad_txt="", desc
 # ==========================================
 # MENÚ Y CONFIGURACIÓN LATERAL
 # ==========================================
-st.sidebar.markdown("<h3 style='color: #0284c7; text-align: center;'>⚡ WilPOS (Blindado)</h3>", unsafe_allow_html=True)
-st.sidebar.markdown("<p style='text-align: center; color: #64748b; font-size: 0.8rem;'>Reglas de Oro Activas</p>", unsafe_allow_html=True)
+st.sidebar.markdown("<h3 style='color: #0284c7; text-align: center;'>⚡ WilPOS (Reglas de Oro)</h3>", unsafe_allow_html=True)
+st.sidebar.markdown("<p style='text-align: center; color: #64748b; font-size: 0.8rem;'>Sistema 100% Blindado</p>", unsafe_allow_html=True)
 st.sidebar.markdown("---")
 
 modulo = st.sidebar.radio("Menú de Navegación", ["📄 Factura Individual", "📂 Múltiples Facturas (Lote)", "📁 Actualizar Catálogo Maestro", "🏢 Perfiles de Proveedores", "📜 Historial de Procesados", "📋 Códigos Almacenados"])
@@ -232,11 +238,11 @@ def process_invoice_smart_router(file_obj, file_type, use_paid_gemini=False):
             save_supplier_memory()
 
     prompt_main = (
-        f"Analiza este documento de compra del proveedor '{supplier_detected}' bajo las Reglas de Oro. "
+        f"Analiza este documento de compra del proveedor '{supplier_detected}' bajo las 5 Reglas de Oro. "
         "Extrae ABSOLUTAMENTE TODOS LOS RENGLONES/PRODUCTOS que aparecen en la factura, sin duplicar artificialmente ninguna línea y sin omitir ninguna. "
         "Para cada renglón extrae rigurosamente en un JSON bajo la clave 'items': "
-        "1. 'descripcion': nombre exacto del producto (sin tamaño ni presentación). "
-        "2. 'tamano': tamaño o presentación separada (ej: '750 CL', '1 LT', '6/75 CL'). "
+        "1. 'descripcion': nombre del producto. "
+        "2. 'tamano': presentación (ej: '750 ML', '700 ML', '1 LT'). "
         "3. 'cantidad': cantidad comprada (ej: 1.0). "
         "4. 'unidad': unidad de medida o empaque impreso (ej: '12 PZA', 'Caja-24', 'BOT'). "
         "5. 'valor_con_itbis': monto TOTAL INCLUYENDO ITBIS que aparece en la línea (importe final con impuestos y descuentos aplicados). "
@@ -283,7 +289,7 @@ if modulo == "📄 Factura Individual":
         if uploaded_file is not None:
             if st.button("🚀 Procesar bajo Reglas de Oro"):
                 file_type = getattr(uploaded_file, 'type', 'image/jpeg')
-                with st.spinner("Procesando factura y aplicando validación estandarizada..."):
+                with st.spinner("Procesando factura bajo las 5 Reglas de Oro..."):
                     parsed_data, success_msg = process_invoice_smart_router(uploaded_file, file_type, use_paid_gemini=use_gemini_paid_api)
 
                 if success_msg == "QUOTA_EXCEEDED":
@@ -315,11 +321,11 @@ if modulo == "📄 Factura Individual":
                 unidad_txt = str(item.get("unidad") or "")
                 tamano_txt = str(item.get("tamano") or "")
                 
-                # Regla 5: Nombres limpios y presentación separada
-                clean_name, clean_pres = clean_product_name_and_presentation(desc_raw, tamano_txt)
+                # Regla 5: Nombre limpio unificado (Nombre + Presentación)
+                clean_full_name, clean_pres = clean_product_name_and_presentation(desc_raw, tamano_txt)
                 
-                # Reglas 2 y 3: Cruce obligatorio con Catálogo Maestro (tolerante al orden)
-                resolved_code = get_flexible_master_barcode(clean_name, clean_pres)
+                # Reglas 2 y 3: Cruce obligatorio con Catálogo Maestro
+                resolved_code = get_flexible_master_barcode(clean_full_name, clean_pres)
 
                 cant_comprada = safe_float(item.get("cantidad") or 1, 1.0)
                 val_total_con_itbis_linea = safe_float(item.get("valor_con_itbis") or item.get("importe") or 0)
@@ -340,8 +346,8 @@ if modulo == "📄 Factura Individual":
                 calc_subtotal_sin_itbis += val_sin_itbis
                 calc_total_con_itbis += val_neto_con_itbis
                 
-                # Regla 4: Empaque y cantidad total
-                empaque_val = parse_empaque_universal(prov_det, clean_pres, unidad_txt, clean_name)
+                # Regla 4: Empaque y cantidad total de unidades
+                empaque_val = parse_empaque_universal(prov_det, clean_pres, unidad_txt, clean_full_name)
                 total_unidades = int(cant_comprada * empaque_val)
 
                 costo_unitario_real = round(val_sin_itbis / total_unidades, 2) if total_unidades > 0 else 0.0
@@ -354,7 +360,7 @@ if modulo == "📄 Factura Individual":
                 rows_preview.append({
                     "No.": idx,
                     "Código EAN Maestro": str(resolved_code),
-                    "Nombre Producto": clean_name,
+                    "Nombre Producto": clean_full_name,
                     "Presentación": clean_pres if clean_pres else "S/P",
                     "Cant. Compra": cant_comprada,
                     "Unidad": unidad_txt,
@@ -498,8 +504,8 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
                     tamano_txt = str(item.get("tamano") or "")
                     unidad_txt = str(item.get("unidad") or "")
                     
-                    clean_name, clean_pres = clean_product_name_and_presentation(desc_raw, tamano_txt)
-                    resolved_code = get_flexible_master_barcode(clean_name, clean_pres)
+                    clean_full_name, clean_pres = clean_product_name_and_presentation(desc_raw, tamano_txt)
+                    resolved_code = get_flexible_master_barcode(clean_full_name, clean_pres)
 
                     cant_comprada = safe_float(item.get("cantidad") or 1, 1.0)
                     val_total_con_itbis_linea = safe_float(item.get("valor_con_itbis") or item.get("importe") or 0)
@@ -512,7 +518,7 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
                         val_neto_con_itbis = val_bruto - descuento_monto_linea
                         val_sin_itbis = val_neto_con_itbis / 1.18
                     
-                    empaque_val = parse_empaque_universal(prov_det, clean_pres, unidad_txt, clean_name)
+                    empaque_val = parse_empaque_universal(prov_det, clean_pres, unidad_txt, clean_full_name)
                     total_unidades = int(cant_comprada * empaque_val)
                     costo_unitario_real = round(val_sin_itbis / total_unidades, 2) if total_unidades > 0 else 0.0
                     if costo_unitario_real <= 0: continue
@@ -521,7 +527,7 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
                     precio_venta = round_to_nearest_5(raw_pv)
 
                     processed_rows.append({
-                        "Nombre": clean_name, "Presentación": clean_pres, "Código Barra": str(resolved_code),
+                        "Nombre": clean_full_name, "Presentación": clean_pres, "Código Barra": str(resolved_code),
                         "Categoría": "General", "Tipo": "producto", "Precio Venta": precio_venta,
                         "Costo": costo_unitario_real, "Stock": total_unidades, "Stock Mínimo": 5,
                         "ITBIS": 0.18, "Unidad Medida": "unidad", "Venta Granel": "No",
