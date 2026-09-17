@@ -125,13 +125,7 @@ def clean_ean_code(code_val):
     s_val = str(code_val).strip()
     if s_val.endswith('.0'): s_val = s_val[:-2]
     if s_val.lower() in ["nan", "none", "", "s/c", "sin codigo"]: return "S/C (Sin Codigo)"
-    
-    # Si es puramente numérico, aseguramos conservar ceros a la izquierda si los tuviera o formatearlo como cadena pura
-    # (Ej: si viene '012345', se mantiene '012345' en lugar de volverse '12345')
-    if s_val.isdigit() and len(s_val) < 8:
-        # Mantener longitud si es EAN/UPC estándar rellenando con ceros si corresponde, o simplemente devolver el string exacto
-        return str(s_val)
-    return s_val
+    return str(s_val)
 
 def clean_product_description_name(raw_name):
     name = str(raw_name).strip()
@@ -162,7 +156,6 @@ def get_strict_ean_code_and_name(description, tamano="", invoice_ean="", supplie
             common = desc_tokens.intersection(m_tokens)
             union = desc_tokens.union(m_tokens)
             score = len(common) / len(union) if union else 0.0
-            
             if score > max_score:
                 max_score = score
                 best_match_name = m_name
@@ -261,8 +254,8 @@ def process_invoice_smart_router(file_obj, file_type, use_paid_gemini=False):
 # ==========================================
 if modulo == "📄 Factura Individual":
     try:
-        st.markdown("<h2>📊 Automatizador con <span style='color: #0284c7;'>Protección Global de Ceros y Costos Reales</span></h2>", unsafe_allow_html=True)
-        st.markdown("<p style='color: #64748b;'>Garantiza códigos EAN intactos con ceros a la izquierda y cálculo perfecto de stock y costos.</p>", unsafe_allow_html=True)
+        st.markdown("<h2>📊 Automatizador con <span style='color: #0284c7;'>Consolidación Inteligente y Ceros Protegidos</span></h2>", unsafe_allow_html=True)
+        st.markdown("<p style='color: #64748b;'>Evita duplicidades agrupando por código EAN y empaque, garantizando costos y stock reales.</p>", unsafe_allow_html=True)
         st.markdown("---")
         render_master_status_banner()
 
@@ -279,7 +272,7 @@ if modulo == "📄 Factura Individual":
         if uploaded_file is not None:
             if st.button("🚀 Procesar y Guardar en Historial"):
                 file_type = getattr(uploaded_file, 'type', 'image/jpeg')
-                with st.spinner("Procesando documento y protegiendo ceros a la izquierda..."):
+                with st.spinner("Procesando documento y consolidando productos..."):
                     parsed_data, success_msg = process_invoice_smart_router(uploaded_file, file_type, use_paid_gemini=use_gemini_paid_api)
 
                 if success_msg == "QUOTA_EXCEEDED":
@@ -297,7 +290,7 @@ if modulo == "📄 Factura Individual":
             prov_det = st.session_state["single_prov_det"]
             
             data_items = parsed_data.get("items", [])
-            rows_preview = []
+            raw_rows = []
             multiplicador_ganancia = 1 + (margen_ganancia / 100.0)
             calc_subtotal_bruto = 0.0
             calc_total_descuento = 0.0
@@ -338,7 +331,7 @@ if modulo == "📄 Factura Individual":
                 raw_pv = (costo_unitario_real * multiplicador_ganancia) * 1.18
                 precio_venta = round_to_nearest_5(raw_pv)
                 
-                rows_preview.append({
+                raw_rows.append({
                     "No.": idx,
                     "Código EAN Único": str(resolved_code),
                     "Nombre Producto": resolved_name,
@@ -350,6 +343,20 @@ if modulo == "📄 Factura Individual":
                     "Costo Unitario Real": costo_unitario_real,
                     "Precio Venta": precio_venta
                 })
+
+            # Consolidar filas con el mismo código EAN y empaque para evitar duplicados
+            df_raw = pd.DataFrame(raw_rows)
+            if not df_raw.empty:
+                df_grouped = df_raw.groupby(['Código EAN Único', 'Nombre Producto', 'Empaque', 'Unidad'], as_index=False).agg({
+                    'Cant. Compra': 'sum',
+                    'Stock Unidades': 'sum',
+                    'Descuento Monto': 'sum',
+                    'Costo Unitario Real': 'mean',
+                    'Precio Venta': 'mean'
+                })
+                rows_preview = df_grouped.to_dict('records')
+            else:
+                rows_preview = []
 
             calc_itbis = calc_total_con_itbis - calc_subtotal_sin_itbis
             porcentaje_desc_total = (calc_total_descuento / calc_subtotal_bruto * 100.0) if calc_subtotal_bruto > 0 else 0.0
@@ -364,7 +371,7 @@ if modulo == "📄 Factura Individual":
             st.markdown("---")
 
             if rows_preview:
-                st.markdown("### ✅ Artículos Procesados (Ceros a la Izquierda Protegidos)")
+                st.markdown("### ✅ Artículos Procesados (Consolidados y Sin Duplicados)")
                 df_resultado = pd.DataFrame(rows_preview)
                 df_resultado["Código EAN Único"] = df_resultado["Código EAN Único"].astype(str)
                 st.dataframe(df_resultado, use_container_width=True, hide_index=True)
@@ -374,7 +381,7 @@ if modulo == "📄 Factura Individual":
                 ws_prod.title = "Productos"
                 ws_prod.append(['Nombre', 'Código Barra', 'Categoría', 'Tipo', 'Precio Venta', 'Costo', 'Stock', 'Stock Mínimo', 'ITBIS', 'Unidad Medida', 'Venta Granel', 'Cantidad Empaque', 'Precio Variable', 'Descuento %', 'Descuento Monto', 'Precio Especial', 'Descuento Activo', 'Descuento Nota'])
                 
-                for item_dict in rows_preview:
+                for idx_item, item_dict in enumerate(rows_preview, start=1):
                     code_to_save = str(item_dict["Código EAN Único"])
                     if "Sin Codigo" in code_to_save: code_to_save = "S/C"
                     desc_val = item_dict["Descuento Monto"]
@@ -383,9 +390,9 @@ if modulo == "📄 Factura Individual":
                     row_idx = ws_prod.max_row + 1
                     ws_prod.append([
                         item_dict["Nombre Producto"], str(code_to_save),
-                        "General", "producto", item_dict["Precio Venta"],
-                        item_dict["Costo Unitario Real"], item_dict["Stock Unidades"],
-                        5, 0.18, "unidad", "No", item_dict["Empaque"], "No", 0, desc_val, None, desc_activo, f"Descuento aplicado: RD$ {desc_val:,.2f}" if desc_val > 0 else None
+                        "General", "producto", round_to_nearest_5(item_dict["Precio Venta"]),
+                        round(item_dict["Costo Unitario Real"], 2), int(item_dict["Stock Unidades"]),
+                        5, 0.18, "unidad", "No", int(item_dict["Empaque"]), "No", 0, round(desc_val, 2), None, desc_activo, f"Descuento aplicado: RD$ {desc_val:,.2f}" if desc_val > 0 else None
                     ])
                     # FUERZA BRUTA EXCEL: Forzar columna de código de barras (columna 2) como texto puro string
                     cell = ws_prod.cell(row=row_idx, column=2)
@@ -395,7 +402,7 @@ if modulo == "📄 Factura Individual":
                 output = io.BytesIO()
                 wb.save(output)
                 
-                if st.download_button("📥 Descargar Excel WilPOS Oficial (Con Ceros Protegidos)", output.getvalue(), f"Inventario_{prov_det.replace(' ', '_')}.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"):
+                if st.download_button("📥 Descargar Excel WilPOS Consolidado", output.getvalue(), f"Inventario_{prov_det.replace('&', 'Y').replace(' ', '_')}.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"):
                     history_entry = {
                         "fecha": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                         "proveedor": prov_det,
@@ -513,11 +520,11 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
 
                 if processed_rows:
                     df_temp = pd.DataFrame(processed_rows)
-                    df_grouped = df_temp.groupby(['Código Barra', 'Nombre'], as_index=False).agg({
+                    df_grouped = df_temp.groupby(['Código Barra', 'Nombre', 'Cantidad Empaque'], as_index=False).agg({
                         'Stock': 'sum', 'Costo': 'mean', 'Precio Venta': 'mean',
                         'Categoría': 'first', 'Tipo': 'first', 'Stock Mínimo': 'first',
                         'ITBIS': 'first', 'Unidad Medida': 'first', 'Venta Granel': 'first',
-                        'Cantidad Empaque': 'first', 'Precio Variable': 'first',
+                        'Precio Variable': 'first',
                         'Descuento %': 'first', 'Descuento Monto': 'sum',
                         'Precio Especial': 'first', 'Descuento Activo': 'first', 'Descuento Nota': 'first'
                     })
@@ -536,7 +543,7 @@ elif modulo == "📁 Actualizar Catálogo Maestro":
         st.markdown("---")
         master_file = st.file_uploader("📂 Sube tu Catálogo Maestro (Excel)", type=["xlsx"])
         if master_file is not None:
-            df_master = pd.read_excel(master_file, dtype=str) # Leer como string para preservar ceros
+            df_master = pd.read_excel(master_file, dtype=str)
             cols = df_master.columns.tolist()
             col_name = st.selectbox("Columna con Nombre", cols)
             col_code = st.selectbox("Columna con Código EAN", cols)
@@ -552,7 +559,7 @@ elif modulo == "📁 Actualizar Catálogo Maestro":
                 st.session_state["master_catalog"] = temp_dict
                 save_master_to_file()
                 save_meta_to_file(datetime.now().strftime("%Y-%m-%d %H:%M:%S"), count)
-                st.success(f"¡Catálogo EAN actualizado con {count} productos (ceros a la izquierda protegidos)!")
+                st.success(f"¡Catálogo EAN actualizado con {count} productos!")
                 st.rerun()
     except Exception as e:
         st.error("⚠️ Error en Maestro:")
