@@ -132,10 +132,12 @@ def clean_product_description_name(raw_name):
     name = re.sub(r'^\[.*?\]\s*', '', name)
     return name.strip().upper()
 
-def get_strict_ean_code_and_name(description, tamano="", invoice_ean="", supplier_name=""):
+def get_strict_ean_code_and_name(description, tamano="", invoice_ean="", supplier_name="", unidad_txt=""):
     desc_clean = clean_product_description_name(description)
     if tamano and str(tamano).strip() not in desc_clean:
         desc_clean = f"{desc_clean} {str(tamano).strip().upper()}"
+    elif unidad_txt and str(unidad_txt).strip() and not any(char.isdigit() for char in str(unidad_txt)):
+        pass
         
     master = st.session_state["master_catalog"]
     memory = st.session_state["barcode_memory"]
@@ -143,28 +145,15 @@ def get_strict_ean_code_and_name(description, tamano="", invoice_ean="", supplie
     if desc_clean in master: return desc_clean, clean_ean_code(master[desc_clean])
     if desc_clean in memory: return desc_clean, clean_ean_code(memory[desc_clean])
         
-    if master:
-        desc_tokens = set(re.findall(r'\b[A-Z0-9\.]+\b', desc_clean))
-        best_match_name = desc_clean
-        best_match_code = clean_ean_code(invoice_ean)
-        max_score = 0.0
-        
-        for m_name, m_code in master.items():
-            m_tokens = set(re.findall(r'\b[A-Z0-9\.]+\b', str(m_name).upper()))
-            if not desc_tokens or not m_tokens: continue
-            common = desc_tokens.intersection(m_tokens)
-            union = desc_tokens.union(m_tokens)
-            score = len(common) / len(union) if union else 0.0
-            if score > max_score:
-                max_score = score
-                best_match_name = m_name
-                best_match_code = clean_ean_code(m_code)
-                
-        if max_score >= 0.35 and best_match_code != "S/C (Sin Codigo)":
-            return best_match_name, best_match_code
-            
     cleaned_invoice_ean = clean_ean_code(invoice_ean)
-    if cleaned_invoice_ean != "S/C (Sin Codigo)": return desc_clean, cleaned_invoice_ean
+    if cleaned_invoice_ean != "S/C (Sin Codigo)": 
+        # Si el EAN se repite pero el empaque/presentación es diferente, añadimos el detalle al nombre para distinguirlo en el POS
+        if tamano and str(tamano).strip():
+            final_name = f"{desc_clean} ({str(tamano).strip().upper()})"
+        else:
+            final_name = desc_clean
+        return final_name, cleaned_invoice_ean
+        
     return desc_clean, "S/C (Sin Codigo)"
 
 def parse_empaque_universal(supplier_name="", tamano_txt="", unidad_txt="", descripcion_txt=""):
@@ -225,7 +214,7 @@ def process_invoice_smart_router(file_obj, file_type, use_paid_gemini=False):
         "Para cada renglón extrae rigurosamente en un JSON bajo la clave 'items': "
         "1. 'codigo_ean': código de barras oficial o EAN (IMPORTANTE: conserva todos los ceros a la izquierda exactamente como aparecen). "
         "2. 'descripcion': nombre exacto del producto limpio. "
-        "3. 'tamano': tamaño o presentación (ej: '750 CL', '1 LT'). "
+        "3. 'tamano': tamaño o presentación (ej: '750 CL', '1 LT', '6/75 CL'). "
         "4. 'cantidad': cantidad comprada (ej: 1.0). "
         "5. 'unidad': unidad de medida impresa (ej: '12 PZA', 'CAJA-12'). "
         "6. 'valor_con_itbis': monto TOTAL INCLUYENDO ITBIS que aparece en la línea. "
@@ -254,8 +243,8 @@ def process_invoice_smart_router(file_obj, file_type, use_paid_gemini=False):
 # ==========================================
 if modulo == "📄 Factura Individual":
     try:
-        st.markdown("<h2>📊 Automatizador con <span style='color: #0284c7;'>Listado Completo y Ceros Protegidos</span></h2>", unsafe_allow_html=True)
-        st.markdown("<p style='color: #64748b;'>Refleja todos los productos individuales de la factura sin omisiones.</p>", unsafe_allow_html=True)
+        st.markdown("<h2>📊 Automatizador con <span style='color: #0284c7;'>Detalle por Presentación y Ceros Protegidos</span></h2>", unsafe_allow_html=True)
+        st.markdown("<p style='color: #64748b;'>Mantiene todos los productos individuales diferenciando lotes y empaques.</p>", unsafe_allow_html=True)
         st.markdown("---")
         render_master_status_banner()
 
@@ -305,7 +294,7 @@ if modulo == "📄 Factura Individual":
                 unidad_txt = str(item.get("unidad") or "")
                 tamano_txt = str(item.get("tamano") or "")
                 
-                resolved_name, resolved_code = get_strict_ean_code_and_name(desc_raw, tamano_txt, invoice_ean, prov_det)
+                resolved_name, resolved_code = get_strict_ean_code_and_name(desc_raw, tamano_txt, invoice_ean, prov_det, unidad_txt)
 
                 cant_comprada = safe_float(item.get("cantidad") or 1, 1.0)
                 val_con_itbis = safe_float(item.get("valor_con_itbis") or item.get("valor") or 0)
@@ -475,15 +464,15 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
                     invoice_ean = str(item.get("codigo_ean") or "")
                     prov_det = str(item.get("_prov") or "GENERAL")
                     tamano_txt = str(item.get("tamano") or "")
+                    unidad_txt = str(item.get("unidad") or "")
                     
-                    resolved_name, resolved_code = get_strict_ean_code_and_name(desc_raw, tamano_txt, invoice_ean, prov_det)
+                    resolved_name, resolved_code = get_strict_ean_code_and_name(desc_raw, tamano_txt, invoice_ean, prov_det, unidad_txt)
 
                     cant_comprada = safe_float(item.get("cantidad") or 1, 1.0)
                     val_con_itbis = safe_float(item.get("valor_con_itbis") or item.get("valor") or 0)
                     descuento_monto_linea = safe_float(item.get("descuento_monto") or 0)
                     val_neto_con_itbis = val_con_itbis - descuento_monto_linea
                     val_sin_itbis = val_neto_con_itbis / 1.18
-                    unidad_txt = str(item.get("unidad") or "")
                     
                     empaque_val = parse_empaque_universal(prov_det, tamano_txt, unidad_txt, resolved_name)
                     total_unidades = int(cant_comprada * empaque_val)
