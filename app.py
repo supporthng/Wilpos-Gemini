@@ -140,41 +140,18 @@ def get_strict_ean_code_and_name(description, invoice_ean=""):
             
     return desc_clean, cleaned_invoice_ean
 
-# Regla de empaque definitiva para detectar cualquier mención de 24 o factores en CND/BEES
+# REGLA DE EMPAQUE LIMPIA Y DIRECTA: Por defecto es 1 (respeta la cantidad comprada), solo multiplica si el texto dice explícitamente 24/ o 24 BOTELLAS.
 def parse_empaque_isolated(supplier_name, tamano_txt="", unidad_txt="", descripcion_txt=""):
-    s_name = str(supplier_name).upper()
-    u = str(unidad_txt).strip().upper()
-    t = str(tamano_txt).strip().upper()
     d = str(descripcion_txt).strip().upper()
-    combined = f"{t} {u} {d}"
+    t = str(tamano_txt).strip().upper()
+    combined = f"{t} {d}"
 
-    # Si la unidad es explícitamente UN (unidad suelta), empaque es 1
-    if "UN" in u:
-        return 1
-
-    # Detección robusta de empaques en CND/BEES (ej: '24/', '24 BOTELLAS', '24 BOTS')
     if "24" in combined or "24/" in combined:
         if "24 BOTELLAS" in combined or "24/" in combined or "24 BOTS" in combined or "HUACAL" in combined or "PTE" in combined:
             return 24
-
-    match_explicit_slash = re.search(r'\b(24|12|6|48)\s*/', combined)
-    if match_explicit_slash:
-        return int(match_explicit_slash.group(1))
-
-    if "ALVAREZ" in s_name or "SANCHEZ" in s_name:
-        match_4x6 = re.search(r'(\d+)\s*X\s*(\d+)', combined)
-        if match_4x6: return int(match_4x6.group(1)) * int(match_4x6.group(2))
-    elif "GONZALEZ" in s_name or "CUESTA" in s_name:
-        if "CAJ" in u or "CAJA" in u:
-            if "12" in combined: return 12
-            if "6" in combined: return 6
-            if "24" in combined: return 24
-            if "48" in combined: return 48
-    elif "DEPOT" in s_name or "PRICESMART" in s_name:
-        return 1
-
-    match_pza = re.search(r'(\d+)\s*PZA', combined)
-    if match_pza: return int(match_pza.group(1))
+    if "12" in combined or "12/" in combined:
+        if "12 BOTELLAS" in combined or "12/" in combined:
+            return 12
 
     return 1
 
@@ -182,7 +159,7 @@ def parse_empaque_isolated(supplier_name, tamano_txt="", unidad_txt="", descripc
 # MENÚ Y CONFIGURACIÓN LATERAL
 # ==========================================
 st.sidebar.markdown("<h3 style='color: #0284c7; text-align: center;'>⚡ WilPOS</h3>", unsafe_allow_html=True)
-st.sidebar.markdown("<p style='text-align: center; color: #64748b; font-size: 0.8rem;'>Sistema con Empaque Definitivo</p>", unsafe_allow_html=True)
+st.sidebar.markdown("<p style='text-align: center; color: #64748b; font-size: 0.8rem;'>Sistema con Cálculo Directo</p>", unsafe_allow_html=True)
 st.sidebar.markdown("---")
 
 modulo = st.sidebar.radio("Menú de Navegación", ["📄 Factura Individual", "📂 Múltiples Facturas (Lote)", "📁 Actualizar Catálogo Maestro", "🏢 Perfiles de Proveedores", "📜 Historial de Procesados", "📋 Códigos Almacenados"])
@@ -220,16 +197,13 @@ def process_invoice_smart_router(file_obj, file_type, use_paid_gemini=False):
 
     prompt_main = (
         f"Analiza este documento de compra del proveedor '{supplier_detected}' con absoluta precisión. "
-        "REGLA DE ORO: Extrae la descripción completa tal cual aparece (incluyendo '24 BOTELLAS' o '24/12OZ'), la cantidad, la unidad ('UN' o 'PC'), y el valor total. "
-        "Para cada renglón extrae en un JSON bajo la clave 'items': "
+        "Para cada renglón extrae rigurosamente en un JSON bajo la clave 'items': "
         "1. 'codigo_ean': código de barras o código de artículo. "
-        "2. 'descripcion': nombre exacto del producto con todas sus especificaciones. "
-        "3. 'cantidad': cantidad comprada. "
-        "4. 'tamano': tamaño o presentación si aplica. "
-        "5. 'unidad': unidad de medida exacta ('UN', 'PC'). "
-        "6. 'valor': monto total neto de la línea. "
+        "2. 'descripcion': nombre exacto del producto (ej: 'OCEAN SPRAY 1/32 OZ', 'PTE. HU 24/12OZ', 'DEPOS. PT 24 BOTELLAS'). "
+        "3. 'cantidad': cantidad comprada exactamente tal como aparece (ej: 47.0 o 100.0). "
+        "4. 'valor': monto total neto de la línea. "
         "Estructura JSON exacta: "
-        '{"proveedor": "' + supplier_detected + '", "items": [{"codigo_ean": "...", "descripcion": "...", "cantidad": 1.0, "tamano": "...", "unidad": "...", "valor": 0.0}]}. '
+        '{"proveedor": "' + supplier_detected + '", "items": [{"codigo_ean": "...", "descripcion": "...", "cantidad": 1.0, "valor": 0.0}]}. '
         "Respuesta JSON pura sin texto adicional."
     )
 
@@ -252,8 +226,8 @@ def process_invoice_smart_router(file_obj, file_type, use_paid_gemini=False):
 # ==========================================
 if modulo == "📄 Factura Individual":
     try:
-        st.markdown("<h2>📊 Automatizador con <span style='color: #0284c7;'>Detección Definitiva de Empaques</span></h2>", unsafe_allow_html=True)
-        st.markdown("<p style='color: #64748b;'>Control absoluto de unidades y empaques de 24 botellas.</p>", unsafe_allow_html=True)
+        st.markdown("<h2>📊 Automatizador con <span style='color: #0284c7;'>Cálculo Directo y Exacto</span></h2>", unsafe_allow_html=True)
+        st.markdown("<p style='color: #64748b;'>Respetando la cantidad comprada y el costo real.</p>", unsafe_allow_html=True)
         st.markdown("---")
         render_master_status_banner()
 
@@ -270,7 +244,7 @@ if modulo == "📄 Factura Individual":
         if uploaded_file is not None:
             if st.button("🚀 Procesar y Guardar en Historial"):
                 file_type = getattr(uploaded_file, 'type', 'image/jpeg')
-                with st.spinner("Procesando documento y calculando stock..."):
+                with st.spinner("Procesando documento..."):
                     parsed_data, success_msg = process_invoice_smart_router(uploaded_file, file_type, use_paid_gemini=use_gemini_paid_api)
 
                 if success_msg == "QUOTA_EXCEEDED":
@@ -310,10 +284,8 @@ if modulo == "📄 Factura Individual":
 
                 cant_comprada = safe_float(item.get("cantidad") or 1, 1.0)
                 val_neto_linea = safe_float(item.get("valor") or 0)
-                tamano_txt = str(item.get("tamano") or "")
-                unidad_txt = str(item.get("unidad") or "")
                 
-                empaque_val = parse_empaque_isolated(prov_det, tamano_txt, unidad_txt, resolved_name)
+                empaque_val = parse_empaque_isolated(prov_det, "", "", resolved_name)
                 total_unidades = int(cant_comprada * empaque_val)
 
                 costo_unitario_real = round(val_neto_linea / total_unidades, 2) if total_unidades > 0 else 0.0
@@ -328,7 +300,6 @@ if modulo == "📄 Factura Individual":
                     "Código EAN Único": str(resolved_code),
                     "Nombre Producto": resolved_name,
                     "Cant. Compra": cant_comprada,
-                    "Unidad": unidad_txt,
                     "Empaque": empaque_val,
                     "Stock Unidades": total_unidades,
                     "Costo Unitario Real": costo_unitario_real,
@@ -346,7 +317,7 @@ if modulo == "📄 Factura Individual":
             st.markdown("---")
 
             if rows_preview:
-                st.markdown("### ✅ Artículos Procesados Correctamente")
+                st.markdown("### ✅ Artículos Procesados Exactamente")
                 df_resultado = pd.DataFrame(rows_preview)
                 df_resultado["Código EAN Único"] = df_resultado["Código EAN Único"].astype(str)
                 st.dataframe(df_resultado, use_container_width=True, hide_index=True)
@@ -466,10 +437,8 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
 
                     cant_comprada = safe_float(item.get("cantidad") or 1, 1.0)
                     val_neto_linea = safe_float(item.get("valor") or 0)
-                    tamano_txt = str(item.get("tamano") or "")
-                    unidad_txt = str(item.get("unidad") or "")
                     
-                    empaque_val = parse_empaque_isolated(prov_det, tamano_txt, unidad_txt, resolved_name)
+                    empaque_val = parse_empaque_isolated(prov_det, "", "", resolved_name)
                     total_unidades = int(cant_comprada * empaque_val)
                     costo_unitario_real = round(val_neto_linea / total_unidades, 2) if total_unidades > 0 else 0.0
                     if costo_unitario_real <= 0: continue
