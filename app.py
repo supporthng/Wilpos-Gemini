@@ -144,7 +144,7 @@ def get_strict_ean_code_and_name(description, invoice_ean="", supplier_name=""):
     return desc_clean, "S/C (Sin Codigo)"
 
 # ==========================================
-# REGLA DE EMPAQUE UNIVERSAL REFORZADA
+# REGLA DE EMPAQUE UNIVERSAL AMPLIADA (CON SOPORTE 4X / 4X6)
 # ==========================================
 def parse_empaque_universal(supplier_name="", tamano_txt="", unidad_txt="", descripcion_txt=""):
     combined = f"{str(tamano_txt)} {str(unidad_txt)} {str(descripcion_txt)}".upper()
@@ -154,17 +154,20 @@ def parse_empaque_universal(supplier_name="", tamano_txt="", unidad_txt="", desc
     if match_slash:
         return int(match_slash.group(1))
         
-    # 2. Buscar formato matriz como 4X6, 6X4
+    # 2. Buscar formato matriz como 4X6, 6X4, 4X (asumiendo 4x6 = 24 para cervezas tipo Corona/Michelob)
     match_nxn = re.search(r'\b(\d+)\s*[xX]\s*(\d+)\b', combined)
     if match_nxn:
         return int(match_nxn.group(1)) * int(match_nxn.group(2))
+        
+    if re.search(r'\b4\s*[xX]\b', combined) or "LP 4" in combined:
+        return 24 # 4 packs de 6 = 24 unidades
         
     # 3. Buscar palabras explícitas de empaque
     match_words = re.search(r'\b(24|16|12|6|48)\s*(BOTS|BOTELLAS|PACK|PZA|UNIDADES|UN)\b', combined)
     if match_words:
         return int(match_words.group(1))
         
-    # 4. Reglas específicas para bebidas comunes (ej. Gatorade 24)
+    # 4. Reglas específicas para bebidas comunes
     if "GATORADE" in combined and "24" in combined:
         return 24
         
@@ -218,7 +221,7 @@ def process_invoice_smart_router(file_obj, file_type, use_paid_gemini=False):
         f"Analiza este documento de compra del proveedor '{supplier_detected}' con absoluta precisión. "
         "Para cada renglón extrae rigurosamente en un JSON bajo la clave 'items': "
         "1. 'codigo_ean': código de barras oficial si existe. "
-        "2. 'descripcion': nombre exacto del producto con todas sus especificaciones (ej: 'BRAHMA LIGHT HU 16/650M', 'GATORADE FRUIT PUNCH 24'). "
+        "2. 'descripcion': nombre exacto del producto con todas sus especificaciones (ej: 'CORONA EXTRA 330ML LP 4', 'MICHELOB ULTRA 355ML 4X'). "
         "3. 'cantidad': cantidad comprada exactamente tal como aparece. "
         "4. 'unidad': unidad de medida exacta impresa en la línea ('UN', 'PC'). "
         "5. 'valor': monto total neto de la línea. "
@@ -246,8 +249,8 @@ def process_invoice_smart_router(file_obj, file_type, use_paid_gemini=False):
 # ==========================================
 if modulo == "📄 Factura Individual":
     try:
-        st.markdown("<h2>📊 Automatizador con <span style='color: #0284c7;'>Costos Unitarios Reales</span></h2>", unsafe_allow_html=True)
-        st.markdown("<p style='color: #64748b;'>Cálculo exacto de empaques y costos unitarios por botella o lata individual.</p>", unsafe_allow_html=True)
+        st.markdown("<h2>📊 Automatizador con <span style='color: #0284c7;'>Costos Unitarios Reales (4X / LP 4)</span></h2>", unsafe_allow_html=True)
+        st.markdown("<p style='color: #64748b;'>Cálculo exacto de empaques para Corona, Michelob y Cervezas.</p>", unsafe_allow_html=True)
         st.markdown("---")
         render_master_status_banner()
 
