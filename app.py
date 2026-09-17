@@ -124,13 +124,11 @@ def clean_ean_code(code_val):
     return s_val
 
 # ==========================================
-# LIMPIEZA ESTRICTA DE NOMBRES (SOLO DESCRIPCIÓN Y PRESENTACIÓN)
+# LIMPIEZA ESTRICTA DE NOMBRES
 # ==========================================
 def clean_product_description_name(raw_name):
     name = str(raw_name).strip()
-    # Eliminar códigos numéricos seguidos de guion al inicio (ej: 300055293-)
     name = re.sub(r'^\d+[\s-]*', '', name)
-    # Eliminar códigos entre corchetes al inicio (ej: [39203])
     name = re.sub(r'^\[.*?\]\s*', '', name)
     return name.strip().upper()
 
@@ -149,6 +147,11 @@ def get_strict_ean_code_and_name(description, invoice_ean="", supplier_name=""):
             
     s_name = str(supplier_name).upper()
     cleaned_invoice_ean = clean_ean_code(invoice_ean)
+    
+    # Corrección específica si el OCR lee mal el código de Álvarez & Sánchez del Tequila 1800
+    if "1800" in desc_clean and "CRISTALINO" in desc_clean:
+        return desc_clean, "7501035013483"
+
     if ("CND" in s_name or "BEES" in s_name) and len(cleaned_invoice_ean) <= 6:
         return desc_clean, "S/C (Sin Codigo)"
 
@@ -156,7 +159,7 @@ def get_strict_ean_code_and_name(description, invoice_ean="", supplier_name=""):
     return desc_clean, "S/C (Sin Codigo)"
 
 # ==========================================
-# REGLA DE EMPAQUE UNIVERSAL PROTEGIDA
+# REGLA DE EMPAQUE UNIVERSAL (ÁLVAREZ & SÁNCHEZ Y OTROS)
 # ==========================================
 def parse_empaque_universal(supplier_name="", tamano_txt="", unidad_txt="", descripcion_txt=""):
     combined = f"{str(tamano_txt)} {str(unidad_txt)} {str(descripcion_txt)}".upper()
@@ -165,6 +168,11 @@ def parse_empaque_universal(supplier_name="", tamano_txt="", unidad_txt="", desc
     
     if "REGAL PACK" in s_name:
         return 1
+
+    # Para Álvarez & Sánchez, formato tamaño con barra tipo 12/70 CL
+    match_slash = re.search(r'\b(24|16|12|6|48|10|20|30)\s*/', combined)
+    if match_slash:
+        return int(match_slash.group(1))
 
     if "UN" in u_txt and not re.search(r'\b(24|16|12|6|48)\b', combined):
         return 1
@@ -175,10 +183,6 @@ def parse_empaque_universal(supplier_name="", tamano_txt="", unidad_txt="", desc
         return 12
     if "FOUR LOKO" in combined:
         return 6
-        
-    match_slash = re.search(r'\b(24|16|12|6|48|10|20|30)\s*/', combined)
-    if match_slash:
-        return int(match_slash.group(1))
         
     match_nxn = re.search(r'\b(\d+)\s*[xX]\s*(\d+)\b', combined)
     if match_nxn:
@@ -246,11 +250,11 @@ def process_invoice_smart_router(file_obj, file_type, use_paid_gemini=False):
     prompt_main = (
         f"Analiza este documento de compra del proveedor '{supplier_detected}' con absoluta precisión. "
         "Para cada renglón extrae rigurosamente en un JSON bajo la clave 'items': "
-        "1. 'codigo_ean': código de barras oficial si existe. "
-        "2. 'descripcion': nombre exacto del producto (omitiendo códigos numéricos iniciales o corchetes para que quede solo la descripción y presentación). "
+        "1. 'codigo_ean': código de barras oficial impreso en la columna correspondiente. "
+        "2. 'descripcion': nombre exacto del producto limpio (sin códigos numéricos iniciales o corchetes). "
         "3. 'cantidad': cantidad comprada exactamente tal como aparece. "
-        "4. 'unidad': unidad de medida exacta impresa en la línea ('UN', 'PC'). "
-        "5. 'valor': monto TOTAL NETO de toda la línea. "
+        "4. 'unidad': unidad de medida exacta impresa en la línea ('UN', 'PC', 'CAJA'). "
+        "5. 'valor': monto TOTAL NETO de toda la línea (sin incluir ITBIS). "
         "Estructura JSON exacta: "
         '{"proveedor": "' + supplier_detected + '", "items": [{"codigo_ean": "...", "descripcion": "...", "cantidad": 1.0, "unidad": "...", "valor": 0.0}]}. '
         "Respuesta JSON pura sin texto adicional."
@@ -275,8 +279,8 @@ def process_invoice_smart_router(file_obj, file_type, use_paid_gemini=False):
 # ==========================================
 if modulo == "📄 Factura Individual":
     try:
-        st.markdown("<h2>📊 Automatizador con <span style='color: #0284c7;'>Nombres Limpios</span></h2>", unsafe_allow_html=True)
-        st.markdown("<p style='color: #64748b;'>Cálculo exacto y nombres limpios sin códigos ni corchetes.</p>", unsafe_allow_html=True)
+        st.markdown("<h2>📊 Automatizador con <span style='color: #0284c7;'>Costos Unitarios y EAN Validados</span></h2>", unsafe_allow_html=True)
+        st.markdown("<p style='color: #64748b;'>Cálculo exacto, EAN corregidos y nombres limpios.</p>", unsafe_allow_html=True)
         st.markdown("---")
         render_master_status_banner()
 
@@ -293,7 +297,7 @@ if modulo == "📄 Factura Individual":
         if uploaded_file is not None:
             if st.button("🚀 Procesar y Guardar en Historial"):
                 file_type = getattr(uploaded_file, 'type', 'image/jpeg')
-                with st.spinner("Procesando documento con limpieza de nombres..."):
+                with st.spinner("Procesando documento con validación EAN..."):
                     parsed_data, success_msg = process_invoice_smart_router(uploaded_file, file_type, use_paid_gemini=use_gemini_paid_api)
 
                 if success_msg == "QUOTA_EXCEEDED":
@@ -360,7 +364,7 @@ if modulo == "📄 Factura Individual":
             st.markdown("---")
 
             if rows_preview:
-                st.markdown("### ✅ Artículos Procesados (Nombres Limpios)")
+                st.markdown("### ✅ Artículos Procesados")
                 df_resultado = pd.DataFrame(rows_preview)
                 df_resultado["Código EAN Único"] = df_resultado["Código EAN Único"].astype(str)
                 st.dataframe(df_resultado, use_container_width=True, hide_index=True)
@@ -535,7 +539,7 @@ elif modulo == "📁 Actualizar Catálogo Maestro":
                 st.session_state["master_catalog"] = temp_dict
                 save_master_to_file()
                 save_meta_to_file(datetime.now().strftime("%Y-%m-%d %H:%M:%S"), count)
-                st.success(f"¡Catálogo EAN actualizado con {count} productos limpios!")
+                st.success(f"¡Catálogo EAN actualizado con {count} productos!")
                 st.rerun()
     except Exception as e:
         st.error("⚠️ Error en Maestro:")
