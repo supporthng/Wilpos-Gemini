@@ -2,6 +2,7 @@ import io
 import json
 import os
 import time
+from datetime import datetime
 import re
 import difflib
 import google.generativeai as genai
@@ -101,6 +102,7 @@ ACTIVE_OPENAI_KEY = next((k for k in openai_key_candidates if k and str(k).strip
 
 BARCODE_MEMORY_FILE = "codigos_escaneados_memoria.json"
 MASTER_CATALOG_FILE = "catalogo_maestro_sistema.json"
+MASTER_META_FILE = "catalogo_maestro_meta.json"
 
 def load_json_file(filepath):
     data = {}
@@ -132,14 +134,34 @@ if "barcode_memory" not in st.session_state:
     st.session_state["barcode_memory"] = mem_data
 
 if "master_catalog" not in st.session_state:
-    # Cargar automáticamente desde la memoria persistente del sistema
     st.session_state["master_catalog"] = load_json_file(MASTER_CATALOG_FILE)
+
+if "master_meta" not in st.session_state:
+    meta_data = load_json_file(MASTER_META_FILE)
+    st.session_state["master_meta"] = meta_data
 
 def save_memory_to_file():
     save_json_file(BARCODE_MEMORY_FILE, st.session_state["barcode_memory"])
 
 def save_master_to_file():
     save_json_file(MASTER_CATALOG_FILE, st.session_state["master_catalog"])
+
+def save_meta_to_file(timestamp_str, count):
+    meta = {"ultima_actualizacion": timestamp_str, "total_productos": count}
+    st.session_state["master_meta"] = meta
+    save_json_file(MASTER_META_FILE, meta)
+
+def render_master_status_banner():
+    """Muestra una notificación clara del estado del Catálogo Maestro y su última actualización."""
+    master_dict = st.session_state["master_catalog"]
+    meta = st.session_state.get("master_meta", {})
+    total_prod = len(master_dict)
+    ultima_act = meta.get("ultima_actualizacion", "Desconocida")
+
+    if total_prod > 0:
+        st.success(f"🟢 **Catálogo Maestro Activo en el Sistema** | Productos cargados: **{total_prod:,}** | 🕒 Última actualización: **{ultima_act}**")
+    else:
+        st.error(f"🔴 **Catálogo Maestro Vacío** | No hay productos cargados en la memoria del sistema. Ve a **'📁 Actualizar Catálogo Maestro'** para registrarlo.")
 
 def safe_float(val, default=0.0):
     try:
@@ -313,8 +335,8 @@ if modulo == "📄 Factura Individual":
     st.markdown("<p style='color: #64748b;'>Procesamiento con Catálogo Maestro activo en la memoria del sistema.</p>", unsafe_allow_html=True)
     st.markdown("---")
 
-    if not st.session_state["master_catalog"]:
-        st.warning("⚠️ **Aviso importante:** El Catálogo Maestro está vacío en el sistema. Ve a la sección **'📁 Actualizar Catálogo Maestro'** en la barra lateral para cargarlo.")
+    # Notificación de Estado del Maestro
+    render_master_status_banner()
 
     st.markdown('<div class="card-container">', unsafe_allow_html=True)
     c_col1, _ = st.columns([1, 3])
@@ -453,6 +475,9 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
     st.markdown("<h2>📂 Procesador por <span style='color: #0284c7;'>Lotes y Consolidación Oficial</span></h2>", unsafe_allow_html=True)
     st.markdown("<p style='color: #64748b;'>Procesa múltiples facturas aplicando la Regla de Oro en memoria.</p>", unsafe_allow_html=True)
     st.markdown("---")
+
+    # Notificación de Estado del Maestro
+    render_master_status_banner()
 
     st.markdown('<div class="card-container">', unsafe_allow_html=True)
     l_col1, _ = st.columns([1, 3])
@@ -649,6 +674,9 @@ elif modulo == "📁 Actualizar Catálogo Maestro":
     st.markdown("<p style='color: #64748b;'>Sube un nuevo archivo Excel para actualizar la base de datos oficial en la memoria del sistema.</p>", unsafe_allow_html=True)
     st.markdown("---")
 
+    render_master_status_banner()
+    st.markdown("---")
+
     master_file = st.file_uploader("📂 Sube tu Catálogo Maestro actualizado (Excel .xlsx)", type=["xlsx"], key="master_upload")
     
     if master_file is not None:
@@ -675,7 +703,13 @@ elif modulo == "📁 Actualizar Catálogo Maestro":
                 
                 st.session_state["master_catalog"] = temp_dict
                 save_master_to_file()
+                
+                # Guardar timestamp de actualización
+                timestamp_actual = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                save_meta_to_file(timestamp_actual, count)
+                
                 st.success(f"¡Catálogo maestro actualizado exitosamente con {count} productos en la memoria persistente del sistema!")
+                st.rerun()
         except Exception as e:
             st.error(f"Error al procesar el archivo Excel: {e}")
 
@@ -686,6 +720,7 @@ elif modulo == "📁 Actualizar Catálogo Maestro":
         if col_act2.button("🗑️ Vaciar Catálogo"):
             st.session_state["master_catalog"] = {}
             save_master_to_file()
+            save_meta_to_file("Nunca", 0)
             st.rerun()
             
         df_current_master = pd.DataFrame([{"Descripción": k, "Código de Barras": v} for k, v in st.session_state["master_catalog"].items()])
@@ -699,6 +734,9 @@ elif modulo == "📁 Actualizar Catálogo Maestro":
 elif modulo == "📋 Ver Códigos Almacenados":
     st.markdown("<h2>📋 Memoria de <span style='color: #0284c7;'>Códigos y Catálogo del Sistema</span></h2>", unsafe_allow_html=True)
     
+    render_master_status_banner()
+    st.markdown("---")
+
     col_m1, col_m2 = st.columns(2)
     with col_m1:
         st.markdown(f"### 📚 Catálogo Maestro ({len(st.session_state['master_catalog'])})")
