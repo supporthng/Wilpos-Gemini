@@ -138,7 +138,7 @@ def get_strict_ean_code_and_name(description, invoice_ean=""):
             
     return desc_clean, cleaned_invoice_ean
 
-# Reglas de empaque corregidas y optimizadas para CND / BEES y otros
+# Reglas de empaque corregidas y optimizadas para CND / BEES
 def parse_empaque_isolated(supplier_name, tamano_txt="", unidad_txt="", descripcion_txt=""):
     s_name = str(supplier_name).upper()
     u = str(unidad_txt).strip().upper()
@@ -146,9 +146,14 @@ def parse_empaque_isolated(supplier_name, tamano_txt="", unidad_txt="", descripc
     d = str(descripcion_txt).strip().upper()
     combined = f"{t} {u} {d}"
 
-    # REGLA ESPECÍFICA CND / BEES (CERVECERÍA)
+    # REGLA ESPECÍFICA CND / BEES
     if "CND" in s_name or "BEES" in s_name:
-        # Buscar patrón de empaque en la descripción como '24/12OZ' o '12/1L'
+        # 1. Revisar si el campo tamano_txt trae un número directo (ej: '12')
+        if t.isdigit():
+            val_t = int(t)
+            if val_t in [12, 24, 6, 48]: return val_t
+        
+        # 2. Buscar patrón de empaque en la descripción o combinado ej. '24/12OZ'
         match_cnd_desc = re.search(r'\b(24|12|6|48)\s*/', combined)
         if match_cnd_desc:
             return int(match_cnd_desc.group(1))
@@ -171,7 +176,6 @@ def parse_empaque_isolated(supplier_name, tamano_txt="", unidad_txt="", descripc
         if "5" in combined or "5CL" in combined or "5 CL" in combined: return 1
         if "GALON" in combined or "GAL" in combined: return 1
 
-    # Búsqueda general por si acaso
     match_general_slash = re.search(r'\b(24|12|6|48)\s*/', combined)
     if match_general_slash: return int(match_general_slash.group(1))
 
@@ -223,14 +227,15 @@ def process_invoice_smart_router(file_obj, file_type, use_paid_gemini=False):
         supp_mem[supplier_detected] = {"nombre": supplier_detected, "formato_empaque": "adaptativo", "descripcion": "Registrado automaticamente."}
         save_supplier_memory()
 
+    # Prompt mejorado para capturar correctamente el empaque o factor unitario en CND (ej: el 12 de Ocean Spray)
     prompt_main = (
         f"Analiza este documento de compra del proveedor '{supplier_detected}' con absoluta precisión. "
-        "REGLA DE ORO: Extrae el código o número de artículo, el código EAN si existe, la descripción completa, la cantidad comprada, y el empaque si viene en la línea. "
+        "REGLA DE ORO: Extrae el código, la descripción exacta, la cantidad, el factor de empaque o presentación (por ejemplo, si aparece un 12 solitario al final de la línea como en Ocean Spray, ponlo en 'tamano'), y el valor total. "
         "Para cada renglón extrae rigurosamente en un JSON bajo la clave 'items': "
-        "1. 'codigo_ean': código de barras o código de artículo si está disponible. "
-        "2. 'descripcion': nombre exacto del producto (ej: 'OCEAN SPRAY 1/32 OZ', 'PTE. HU 24/12OZ'). "
-        "3. 'cantidad': cantidad comprada (ej: 47.0 o 100.0). "
-        "4. 'tamano': empaque o tamaño especificado (ej: '12', '24'). "
+        "1. 'codigo_ean': código de barras o código de artículo. "
+        "2. 'descripcion': nombre exacto del producto. "
+        "3. 'cantidad': cantidad comprada. "
+        "4. 'tamano': empaque o factor numérico indicado al final de la línea (ej: '12'). "
         "5. 'unidad': unidad de medida (ej: 'UN', 'PC'). "
         "6. 'valor': monto total neto de la línea. "
         "Estructura JSON exacta: "
