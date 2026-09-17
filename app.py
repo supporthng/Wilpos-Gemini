@@ -114,7 +114,7 @@ def safe_int(val, default=1):
 def round_to_nearest_5(x): return float(round(round(x / 5) * 5))
 
 # ==========================================
-# REGLA GLOBAL INQUEBRANTABLE: CEROS A LA IZQUIERDA Y CRUCE MAESTRO
+# REGLA GLOBAL INQUEBRANTABLE: CEROS A LA IZQUIERDA Y CRUCE INTELIGENTE
 # ==========================================
 def clean_ean_code(code_val):
     if not code_val: return "S/C"
@@ -139,21 +139,31 @@ def clean_product_name_and_presentation(raw_name, raw_tamano=""):
     presentation = re.sub(r'\s+', ' ', presentation).strip().upper()
     return name, presentation
 
-def get_master_barcode_match(clean_name):
-    """Consulta obligatoria en el Catálogo Maestro para obtener el EAN oficial."""
+def get_flexible_master_barcode(clean_name):
+    """Busca en el Catálogo Maestro ignorando el orden de las palabras (por coincidencia de tokens)."""
     master_dict = st.session_state.get("master_catalog", {})
-    if not master_dict: return None
+    if not master_dict: return "S/C"
     
-    # Búsqueda exacta
+    # 1. Búsqueda exacta
     if clean_name in master_dict:
         return clean_ean_code(master_dict[clean_name])
         
-    # Búsqueda parcial por coincidencia de nombre
+    # 2. Búsqueda flexible por intersección de palabras clave (sin importar el orden)
+    name_tokens = set(clean_name.split())
+    if not name_tokens: return "S/C"
+    
+    best_code = "S/C"
+    max_intersection = 0
+    
     for m_name, m_code in master_dict.items():
-        if m_name in clean_name or clean_name in m_name:
-            return clean_ean_code(m_code)
+        m_tokens = set(m_name.split())
+        intersection = len(name_tokens.intersection(m_tokens))
+        # Si coinciden al menos el 50% de las palabras y es el mejor puntaje
+        if intersection > max_intersection and intersection >= len(name_tokens) * 0.5:
+            max_intersection = intersection
+            best_code = clean_ean_code(m_code)
             
-    return None
+    return best_code
 
 def parse_empaque_universal(supplier_name="", tamano_txt="", unidad_txt="", descripcion_txt=""):
     combined = f"{str(tamano_txt)} {str(unidad_txt)} {str(descripcion_txt)}".upper()
@@ -248,8 +258,8 @@ def process_invoice_smart_router(file_obj, file_type, use_paid_gemini=False):
 # ==========================================
 if modulo == "📄 Factura Individual":
     try:
-        st.markdown("<h2>📊 Automatizador con <span style='color: #0284c7;'>Cruce Obligatorio al Maestro EAN</span></h2>", unsafe_allow_html=True)
-        st.markdown("<p style='color: #64748b;'>Cada producto procesado consulta automáticamente su código de barras oficial en el maestro.</p>", unsafe_allow_html=True)
+        st.markdown("<h2>📊 Automatizador con <span style='color: #0284c7;'>Cruce Maestro Flexible por Palabras</span></h2>", unsafe_allow_html=True)
+        st.markdown("<p style='color: #64748b;'>Consulta automática al maestro sin importar el orden de las palabras en el texto del proveedor.</p>", unsafe_allow_html=True)
         st.markdown("---")
         render_master_status_banner()
 
@@ -264,9 +274,9 @@ if modulo == "📄 Factura Individual":
         st.markdown('</div>', unsafe_allow_html=True)
 
         if uploaded_file is not None:
-            if st.button("🚀 Procesar y Cruce con Maestro"):
+            if st.button("🚀 Procesar y Cruce Inteligente"):
                 file_type = getattr(uploaded_file, 'type', 'image/jpeg')
-                with st.spinner("Procesando factura y cruzando códigos con el Catálogo Maestro..."):
+                with st.spinner("Procesando factura y consultando Catálogo Maestro..."):
                     parsed_data, success_msg = process_invoice_smart_router(uploaded_file, file_type, use_paid_gemini=use_gemini_paid_api)
 
                 if success_msg == "QUOTA_EXCEEDED":
@@ -300,10 +310,8 @@ if modulo == "📄 Factura Individual":
                 
                 clean_name, clean_pres = clean_product_name_and_presentation(desc_raw, tamano_txt)
                 
-                # CONSULTA OBLIGATORIA AL CATÁLOGO MAESTRO
-                resolved_code = get_master_barcode_match(clean_name)
-                if not resolved_code:
-                    resolved_code = "S/C"
+                # CRUCE INTELIGENTE CON EL MAESTRO (INDEPENDIENTE DEL ORDEN DE PALABRAS)
+                resolved_code = get_flexible_master_barcode(clean_name)
 
                 cant_comprada = safe_float(item.get("cantidad") or 1, 1.0)
                 val_total_con_itbis_linea = safe_float(item.get("valor_con_itbis") or item.get("importe") or 0)
@@ -391,7 +399,7 @@ if modulo == "📄 Factura Individual":
                 output = io.BytesIO()
                 wb.save(output)
                 
-                if st.download_button("📥 Descargar Excel WilPOS con Cruce de Maestro", output.getvalue(), f"Inventario_{prov_det.replace('&', 'Y').replace(' ', '_')}.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"):
+                if st.download_button("📥 Descargar Excel WilPOS Cruce Inteligente", output.getvalue(), f"Inventario_{prov_det.replace('&', 'Y').replace(' ', '_')}.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"):
                     history_entry = {
                         "fecha": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                         "proveedor": prov_det,
@@ -411,7 +419,7 @@ if modulo == "📄 Factura Individual":
 # ==========================================
 elif modulo == "📂 Múltiples Facturas (Lote)":
     try:
-        st.markdown("<h2>📂 Procesador por Lotes <span style='color: #0284c7;'>(Cruce Maestro)</span></h2>", unsafe_allow_html=True)
+        st.markdown("<h2>📂 Procesador por Lotes <span style='color: #0284c7;'>(Cruce Inteligente)</span></h2>", unsafe_allow_html=True)
         st.markdown("---")
         render_master_status_banner()
         st.markdown('<div class="card-container">', unsafe_allow_html=True)
@@ -435,7 +443,7 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
 
             processed_so_far = st.session_state["batch_processed_count"]
             b_col1, b_col2 = st.columns(2)
-            if b_col1.button("🚀 Iniciar Lote Maestro", type="primary"):
+            if b_col1.button("🚀 Iniciar Lote Inteligente", type="primary"):
                 st.session_state["is_live_processing"] = True
                 st.rerun()
             if b_col2.button("🔄 Reiniciar"):
@@ -480,8 +488,7 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
                     unidad_txt = str(item.get("unidad") or "")
                     
                     clean_name, clean_pres = clean_product_name_and_presentation(desc_raw, tamano_txt)
-                    resolved_code = get_master_barcode_match(clean_name)
-                    if not resolved_code: resolved_code = "S/C"
+                    resolved_code = get_flexible_master_barcode(clean_name)
 
                     cant_comprada = safe_float(item.get("cantidad") or 1, 1.0)
                     val_total_con_itbis_linea = safe_float(item.get("valor_con_itbis") or item.get("importe") or 0)
@@ -510,7 +517,7 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
                         "Cantidad Empaque": empaque_val, "Precio Variable": "No",
                         "Descuento %": 0, "Descuento Monto": descuento_monto_linea, "Precio Especial": None,
                         "Descuento Activo": "Sí" if descuento_monto_linea > 0 else "No",
-                        "Descuento Nota": f"Descuento aplicado: RD$ {desc_val:,.2f}" if descuento_monto_linea > 0 else None
+                        "Descuento Nota": f"Descuento aplicado: RD$ {descuento_monto_linea:,.2f}" if descuento_monto_linea > 0 else None
                     })
 
                 if processed_rows:
