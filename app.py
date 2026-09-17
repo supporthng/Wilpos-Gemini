@@ -121,12 +121,11 @@ def clean_ean_code(code_val):
     s_val = str(code_val).strip()
     if s_val.endswith('.0'): s_val = s_val[:-2]
     if s_val.lower() in ["nan", "none", "", "s/c", "sin codigo"]: return "S/C (Sin Codigo)"
-    # Ignorar códigos internos cortos de 5 dígitos o menos que no sean EAN reales
     if len(s_val) <= 5 and not s_val.startswith("S/C"): return "S/C (Sin Codigo)"
     return s_val
 
 # ==========================================
-# BÚSQUEDA UNIVERSAL FLEXIBLE POR TOKENS
+# BÚSQUEDA UNIVERSAL FLEXIBLE POR TOKENS + TAMAÑOS
 # ==========================================
 def clean_product_description_name(raw_name):
     name = str(raw_name).strip()
@@ -134,15 +133,18 @@ def clean_product_description_name(raw_name):
     name = re.sub(r'^\[.*?\]\s*', '', name)
     return name.strip().upper()
 
-def get_strict_ean_code_and_name(description, invoice_ean="", supplier_name=""):
+def get_strict_ean_code_and_name(description, tamano="", invoice_ean="", supplier_name=""):
     desc_clean = clean_product_description_name(description)
+    if tamano and str(tamano).strip() not in desc_clean:
+        desc_clean = f"{desc_clean} {str(tamano).strip().upper()}"
+        
     master = st.session_state["master_catalog"]
     memory = st.session_state["barcode_memory"]
     
     if desc_clean in master: return desc_clean, clean_ean_code(master[desc_clean])
     if desc_clean in memory: return desc_clean, clean_ean_code(memory[desc_clean])
         
-    # Coincidencia flexible por tokens (independiente del orden de las palabras)
+    # Coincidencia flexible por tokens considerando tamaños diferentes (ej. 175 ML vs 125 ML)
     if master:
         desc_tokens = set(re.findall(r'\b[A-Z0-9\.]+\b', desc_clean))
         best_match_name = desc_clean
@@ -152,24 +154,24 @@ def get_strict_ean_code_and_name(description, invoice_ean="", supplier_name=""):
         for m_name, m_code in master.items():
             m_tokens = set(re.findall(r'\b[A-Z0-9\.]+\b', str(m_name).upper()))
             if not desc_tokens or not m_tokens: continue
+            
             common = desc_tokens.intersection(m_tokens)
             union = desc_tokens.union(m_tokens)
             score = len(common) / len(union) if union else 0.0
             
+            # Penalizar si los mililitros/tamaños difieren explícitamente para evitar cruzar presentaciones
+            desc_mls = re.findall(r'\d+\s*(?:ML|CL|L)', desc_clean)
+            master_mls = re.findall(r'\d+\s*(?:ML|CL|L)', str(m_name).upper())
+            if desc_mls and master_mls and desc_mls != master_mls:
+                score *= 0.5
+                
             if score > max_score:
                 max_score = score
                 best_match_name = m_name
                 best_match_code = clean_ean_code(m_code)
                 
-        if max_score >= 0.30 and best_match_code != "S/C (Sin Codigo)":
+        if max_score >= 0.35 and best_match_code != "S/C (Sin Codigo)":
             return best_match_name, best_match_code
-            
-        # Backup con difflib
-        master_keys = list(master.keys())
-        coincidencias = difflib.get_close_matches(desc_clean, master_keys, n=1, cutoff=0.45)
-        if coincidencias:
-            matched = coincidencias[0]
-            return matched, clean_ean_code(master[matched])
             
     cleaned_invoice_ean = clean_ean_code(invoice_ean)
     if cleaned_invoice_ean != "S/C (Sin Codigo)": return desc_clean, cleaned_invoice_ean
@@ -243,11 +245,11 @@ def process_invoice_smart_router(file_obj, file_type, use_paid_gemini=False):
         f"Analiza este documento de compra del proveedor '{supplier_detected}' con absoluta precisión. "
         "Para cada renglón extrae rigurosamente en un JSON bajo la clave 'items': "
         "1. 'codigo_ean': código de barras oficial o ID de artículo si aparece. "
-        "2. 'descripcion': nombre exacto del producto limpio. "
-        "3. 'tamano': texto exacto del tamaño o presentación (ej: '750 ML', '375ML'). "
+        "2. 'descripcion': nombre exacto del producto limpio (incluyendo tamaño o mililitros si los tiene, ej: 175 ML o 125 ML). "
+        "3. 'tamano': texto exacto del tamaño o presentación (ej: '175 ML', '125 ML'). "
         "4. 'cantidad': cantidad comprada (ej: 1.0). "
-        "5. 'unidad': unidad de medida exacta impresa en la línea (ej: 'Caja-24', 'Caja-12', 'UN'). "
-        "6. 'valor': monto TOTAL NETO de la línea antes de ITBIS (si la línea dice el precio total de la caja, extrae ese monto total). "
+        "5. 'unidad': unidad de medida exacta impresa en la línea (ej: 'Caja-24', 'Caja-48'). "
+        "6. 'valor': monto TOTAL NETO de la línea antes de ITBIS (el precio total de la caja). "
         "Estructura JSON exacta: "
         '{"proveedor": "' + supplier_detected + '", "items": [{"codigo_ean": "...", "descripcion": "...", "tamano": "...", "cantidad": 1.0, "unidad": "...", "valor": 0.0}]}. '
         "Respuesta JSON pura sin texto adicional."
@@ -272,8 +274,8 @@ def process_invoice_smart_router(file_obj, file_type, use_paid_gemini=False):
 # ==========================================
 if modulo == "📄 Factura Individual":
     try:
-        st.markdown("<h2>📊 Automatizador con <span style='color: #0284c7;'>Costos Unitarios y Stock Exactos por Caja</span></h2>", unsafe_allow_html=True)
-        st.markdown("<p style='color: #64748b;'>Cálculo correcto de costo por unidad y stock total multiplicado por empaque.</p>", unsafe_allow_html=True)
+        st.markdown("<h2>📊 Automatizador con <span style='color: #0284c7;'>Protección Multi-Presentación y Stock Exacto</span></h2>", unsafe_allow_html=True)
+        st.markdown("<p style='color: #64748b;'>Diferenciación exacta de tamaños (ej. 175 ML vs 125 ML), costos unitarios y stock.</p>", unsafe_allow_html=True)
         st.markdown("---")
         render_master_status_banner()
 
@@ -290,7 +292,7 @@ if modulo == "📄 Factura Individual":
         if uploaded_file is not None:
             if st.button("🚀 Procesar y Guardar en Historial"):
                 file_type = getattr(uploaded_file, 'type', 'image/jpeg')
-                with st.spinner("Procesando documento con recálculo de costos y stock..."):
+                with st.spinner("Procesando documento con separación de presentaciones..."):
                     parsed_data, success_msg = process_invoice_smart_router(uploaded_file, file_type, use_paid_gemini=use_gemini_paid_api)
 
                 if success_msg == "QUOTA_EXCEEDED":
@@ -321,7 +323,7 @@ if modulo == "📄 Factura Individual":
                 unidad_txt = str(item.get("unidad") or "")
                 tamano_txt = str(item.get("tamano") or "")
                 
-                resolved_name, resolved_code = get_strict_ean_code_and_name(desc_raw, invoice_ean, prov_det)
+                resolved_name, resolved_code = get_strict_ean_code_and_name(desc_raw, tamano_txt, invoice_ean, prov_det)
 
                 cant_comprada = safe_float(item.get("cantidad") or 1, 1.0)
                 val_neto_linea = safe_float(item.get("valor") or 0)
@@ -359,7 +361,7 @@ if modulo == "📄 Factura Individual":
             st.markdown("---")
 
             if rows_preview:
-                st.markdown("### ✅ Artículos Procesados (Costos y Stock Correctos)")
+                st.markdown("### ✅ Artículos Procesados (Presentaciones Distinguidas)")
                 df_resultado = pd.DataFrame(rows_preview)
                 df_resultado["Código EAN Único"] = df_resultado["Código EAN Único"].astype(str)
                 st.dataframe(df_resultado, use_container_width=True, hide_index=True)
@@ -469,9 +471,10 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
                     if not desc_raw: continue
                     invoice_ean = str(item.get("codigo_ean") or "")
                     prov_det = str(item.get("_prov") or "GENERAL")
-                    resolved_name, resolved_code = get_strict_ean_code_and_name(desc_raw, invoice_ean, prov_det)
-
                     tamano_txt = str(item.get("tamano") or "")
+                    
+                    resolved_name, resolved_code = get_strict_ean_code_and_name(desc_raw, tamano_txt, invoice_ean, prov_det)
+
                     cant_comprada = safe_float(item.get("cantidad") or 1, 1.0)
                     val_neto_linea = safe_float(item.get("valor") or 0)
                     unidad_txt = str(item.get("unidad") or "")
