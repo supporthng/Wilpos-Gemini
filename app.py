@@ -144,15 +144,20 @@ def get_strict_ean_code_and_name(description, invoice_ean="", supplier_name=""):
     return desc_clean, "S/C (Sin Codigo)"
 
 # ==========================================
-# REGLA DE EMPAQUE UNIVERSAL REFORZADA (CON EXCEPCIONES FIJAS)
+# REGLA DE EMPAQUE UNIVERSAL REFORZADA (CON VALIDACIÓN DE UNIDADES)
 # ==========================================
 def parse_empaque_universal(supplier_name="", tamano_txt="", unidad_txt="", descripcion_txt=""):
     combined = f"{str(tamano_txt)} {str(unidad_txt)} {str(descripcion_txt)}".upper()
+    u_txt = str(unidad_txt).upper()
     
-    # Excepciones específicas exactas
+    # Si la línea es explícitamente en unidades sueltas (UN), el empaque es 1
+    if "UN" in u_txt and not re.search(r'\b(24|16|12|6|48)\b', combined):
+        return 1
+
+    # Excepciones específicas exactas para cajas/paquetes
     if "CLAMATO" in combined:
         return 24
-    if "ALOE PURE" in combined:
+    if "ALOE PURE" in combined and "UN" not in u_txt:
         return 12
         
     # 1. Buscar formatos con barra como 16/650, 24/12, 6/473, 12/
