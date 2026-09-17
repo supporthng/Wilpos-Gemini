@@ -327,7 +327,9 @@ if modulo == "📄 Factura Individual":
             data_items = parsed_data.get("items", [])
             rows_preview = []
             multiplicador_ganancia = 1 + (margen_ganancia / 100.0)
-            calc_subtotal = 0.0
+            calc_subtotal_bruto = 0.0
+            calc_total_descuento = 0.0
+            calc_subtotal_neto = 0.0
 
             for idx, item in enumerate(data_items, start=1):
                 if not isinstance(item, dict): continue
@@ -339,8 +341,9 @@ if modulo == "📄 Factura Individual":
 
                 tamano_txt = str(item.get("tamano") or "")
                 cant_comprada = safe_float(item.get("cantidad") or 1, 1.0)
-                val_neto_linea = safe_float(item.get("valor") or 0)
+                val_bruto_linea = safe_float(item.get("valor_bruto") or item.get("valor") or 0)
                 descuento_monto_linea = safe_float(item.get("descuento_monto") or 0)
+                val_neto_linea = safe_float(item.get("valor") or (val_bruto_linea - descuento_monto_linea))
                 unidad_txt = str(item.get("unidad") or "")
                 
                 empaque_val = parse_empaque_universal(prov_det, tamano_txt, unidad_txt, resolved_name)
@@ -349,7 +352,10 @@ if modulo == "📄 Factura Individual":
                 costo_unitario_real = round(val_neto_linea / total_unidades, 2) if total_unidades > 0 else 0.0
                 if costo_unitario_real <= 0: continue
 
-                calc_subtotal += val_neto_linea
+                calc_subtotal_bruto += val_bruto_linea
+                calc_total_descuento += descuento_monto_linea
+                calc_subtotal_neto += val_neto_linea
+
                 raw_pv = (costo_unitario_real * multiplicador_ganancia) * 1.18
                 precio_venta = round_to_nearest_5(raw_pv)
                 
@@ -367,14 +373,17 @@ if modulo == "📄 Factura Individual":
                     "Precio Venta": precio_venta
                 })
 
-            calc_itbis = calc_subtotal * 0.18
-            calc_total_factura = calc_subtotal + calc_itbis
+            calc_itbis = calc_subtotal_neto * 0.18
+            calc_total_factura = calc_subtotal_neto + calc_itbis
+            porcentaje_desc_total = (calc_total_descuento / calc_subtotal_bruto * 100.0) if calc_subtotal_bruto > 0 else 0.0
 
             st.markdown("### 📑 Totales del Documento (Con Descuentos Aplicados)")
-            t1, t2, t3 = st.columns(3)
-            t1.metric("Subtotal Neto", f"RD$ {calc_subtotal:,.2f}")
-            t2.metric("ITBIS Total (18%)", f"RD$ {calc_itbis:,.2f}")
-            t3.metric("Total Neto", f"RD$ {calc_total_factura:,.2f}")
+            t1, t2, t3, t4, t5 = st.columns(5)
+            t1.metric("Subtotal Bruto", f"RD$ {calc_subtotal_bruto:,.2f}")
+            t2.metric("Descuento Aplicado", f"{porcentaje_desc_total:.1f}% / RD$ {calc_total_descuento:,.2f}")
+            t3.metric("Subtotal Neto", f"RD$ {calc_subtotal_neto:,.2f}")
+            t4.metric("ITBIS Total (18%)", f"RD$ {calc_itbis:,.2f}")
+            t5.metric("Total Neto", f"RD$ {calc_total_factura:,.2f}")
             st.markdown("---")
 
             if rows_preview:
@@ -409,7 +418,7 @@ if modulo == "📄 Factura Individual":
                         "fecha": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                         "proveedor": prov_det,
                         "archivo": st.session_state["single_filename"] or "Factura Individual",
-                        "subtotal": round(calc_subtotal, 2),
+                        "subtotal": round(calc_subtotal_neto, 2),
                         "itbis": round(calc_itbis, 2),
                         "total": round(calc_total_factura, 2),
                         "total_items": len(rows_preview)
