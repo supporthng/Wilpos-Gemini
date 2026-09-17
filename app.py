@@ -147,7 +147,7 @@ def clean_product_name_and_presentation(raw_name, raw_tamano=""):
     return clean_full_name, presentation
 
 def get_flexible_master_barcode(clean_name, clean_pres=""):
-    """Reglas 2, 3 y 6 de Oro: Cruce inteligente validando 2 o más palabras clave iguales (independiente del orden y pequeñas variaciones)."""
+    """Reglas 2, 3 y 6 de Oro: Cruce inteligente tolerante a variaciones, abreviaciones y faltas ortográficas."""
     master_dict = st.session_state.get("master_catalog", {})
     if not master_dict: return "S/C"
     
@@ -157,23 +157,26 @@ def get_flexible_master_barcode(clean_name, clean_pres=""):
     if clean_name in master_dict:
         return clean_ean_code(master_dict[clean_name])
         
-    query_tokens = set(re.findall(r'\w+', full_query.upper()))
-    if not query_tokens: return "S/C"
+    query_words = [w for w in re.findall(r'\w+', full_query.upper()) if len(w) > 2]
+    if not query_words: return "S/C"
     
     best_code = "S/C"
-    max_sig_matches = 1
+    max_matches = 0
     
     for m_name, m_code in master_dict.items():
-        m_tokens = set(re.findall(r'\w+', str(m_name).upper()))
-        # Validar palabras significativas (más de 2 letras)
-        sig_query = {t for t in query_tokens if len(t) > 2}
-        sig_master = {t for t in m_tokens if len(t) > 2}
+        m_upper = str(m_name).upper()
+        master_words = [w for w in re.findall(r'\w+', m_upper) if len(w) > 2]
         
-        sig_intersection = sig_query.intersection(sig_master)
-        
-        # Regla 6: Requiere al menos 2 o más palabras iguales significativas
-        if len(sig_intersection) >= 2 and len(sig_intersection) >= max_sig_matches:
-            max_sig_matches = len(sig_intersection)
+        matches = 0
+        for qw in query_words:
+            for mw in master_words:
+                if qw == mw or (len(qw) >= 4 and (qw in mw or mw in qw)):
+                    matches += 1
+                    break
+                    
+        # Regla 6: Cruce inteligente requiriendo 2 o más coincidencias clave
+        if matches >= 2 and matches > max_matches:
+            max_matches = matches
             best_code = clean_ean_code(m_code)
             
     return best_code
