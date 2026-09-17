@@ -45,6 +45,13 @@ st.markdown("""
         box-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.05);
         margin-bottom: 20px;
     }
+    /* Estilo adaptativo para que los montos grandes de los totales nunca se corten */
+    [data-testid="stMetricValue"] {
+        font-size: 1.25rem !important;
+        font-weight: 700;
+        white-space: nowrap;
+        overflow: visible;
+    }
     .stButton>button {
         background: #0284c7;
         color: white;
@@ -228,11 +235,9 @@ def parse_empaque_from_tamano(tamano_txt, unidad_txt, descripcion_txt=""):
     
     combined = d + " " + t + " " + u
     
-    # REGLA CLAVE: Si la unidad de medida es BOT (botella suelta), UND o UNIDAD, el empaque es 1 unidad.
     if "BOT" in u or "UND" in u or "UNIDAD" in u:
         return 1
 
-    # Detección de formato Álvarez & Sánchez (Ej: "12/75", "6/75", "24/37.5")
     match_slash = re.search(r'\b(\d+)\s*/', combined)
     if match_slash:
         val = int(match_slash.group(1))
@@ -277,13 +282,13 @@ use_gemini_paid_api = st.sidebar.checkbox("💎 Usar Gemini Paid (API de Pago)",
 def process_invoice_exact_18(file_obj, file_type, use_paid_gemini=False, use_openai_fallback=False):
     prompt_text = (
         "Analiza esta factura o tiquet con máxima precisión. "
-        "REGLA DE OBRERO ESTRICTA PARA LA DESCRIPCIÓN: En el campo 'descripcion' solo debe figurar el nombre limpio del producto y su presentación/gramaje (ej: 'VODKA SKYY', 'VODKA INFUSIONS CITRUS SKYY'). "
+        "REGLA DE OBRERO ESTRICTA PARA LA DESCRIPCIÓN: En el campo 'descripcion' solo debe figurar el nombre limpio del producto y su presentación/gramaje. "
         "En el campo 'unidad' extrae exactamente la UMV de la factura (ej: 'CAJA', 'BOT.', 'PZA', 'UND'). "
         "Para cada renglón extrae exactamente: "
         "1. 'descripcion': nombre limpio y presentación. "
-        "2. 'cantidad': número de cajas o unidades compradas (ej. 6 BOT. = 6). "
+        "2. 'cantidad': número de cajas o unidades compradas. "
         "3. 'unidad': 'CAJA' o 'BOT.' o 'PZA' o 'UND'. "
-        "4. 'tamano': tamaño o presentación exacta (ej. '75 CL.'). "
+        "4. 'tamano': tamaño o presentación exacta. "
         "5. 'precio_lista': precio unitario. "
         "6. 'valor': monto total neto de la línea. "
         "7. 'descuento_porcentaje': porcentaje de descuento si aplica. "
@@ -349,7 +354,7 @@ def process_invoice_exact_18(file_obj, file_type, use_paid_gemini=False, use_ope
 # ==========================================
 if modulo == "📄 Factura Individual":
     st.markdown("<h2>📊 Automatizador de Facturas <span style='color: #0284c7;'>(Individual)</span></h2>", unsafe_allow_html=True)
-    st.markdown("<p style='color: #64748b;'>Procesamiento con lectura estricta de unidades BOT y Catálogo Maestro.</p>", unsafe_allow_html=True)
+    st.markdown("<p style='color: #64748b;'>Procesamiento con visualización completa de montos grandes.</p>", unsafe_allow_html=True)
     st.markdown("---")
 
     render_master_status_banner()
@@ -367,7 +372,7 @@ if modulo == "📄 Factura Individual":
         st.success(f"¡Archivo cargado: {uploaded_file.name}!")
         if st.button("🚀 Procesar Documento"):
             file_type = uploaded_file.type if hasattr(uploaded_file, 'type') else 'image/jpeg'
-            with st.spinner("Procesando documento aplicando Regla de Oro y Botellas Sueltas..."):
+            with st.spinner("Procesando documento..."):
                 parsed_data, success_msg = process_invoice_exact_18(uploaded_file, file_type, use_paid_gemini=use_gemini_paid_api, use_openai_fallback=use_openai_single)
 
             if success_msg == "QUOTA_EXCEEDED":
@@ -487,7 +492,7 @@ if modulo == "📄 Factura Individual":
 # ==========================================
 elif modulo == "📂 Múltiples Facturas (Lote)":
     st.markdown("<h2>📂 Procesador por <span style='color: #0284c7;'>Lotes y Consolidación Oficial</span></h2>", unsafe_allow_html=True)
-    st.markdown("<p style='color: #64748b;'>Procesamiento con manejo exacto de unidades BOT y Cajas.</p>", unsafe_allow_html=True)
+    st.markdown("<p style='color: #64748b;'>Procesamiento con visualización completa de montos grandes.</p>", unsafe_allow_html=True)
     st.markdown("---")
 
     render_master_status_banner()
