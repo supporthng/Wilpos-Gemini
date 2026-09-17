@@ -151,26 +151,22 @@ def clean_barcode(code_val):
     return s_val
 
 def extract_size_token(text):
-    """Extrae patrones de tamaño/volumen como 5CL, 50ML, 750ML, GALON, etc."""
-    match = re.search(r'\b(?:\d+\s*(?:CL|ML|L|LT|OZ)|GALON)\b', str(text).upper())
+    match = re.search(r'\b(?:\d+\s*(?:CL|ML|L|LT|OZ|G|GR)|GALON)\b', str(text).upper())
     return match.group(0).replace(" ", "") if match else None
 
 def get_resolved_barcode(extracted_code, description):
     cleaned = clean_barcode(extracted_code)
     desc_upper = str(description).strip().upper()
     
-    # 1. Si el código extraído de la factura es válido, se guarda y se usa
     if cleaned != "S/C (Sin Código)":
         st.session_state["barcode_memory"][desc_upper] = cleaned
         return cleaned
     
-    # 2. Búsqueda exacta en Catálogo Maestro o Memoria
     if desc_upper in st.session_state["master_catalog"]:
         return st.session_state["master_catalog"][desc_upper]
     if desc_upper in st.session_state["barcode_memory"]:
         return st.session_state["barcode_memory"][desc_upper]
         
-    # Extraer tamaño y palabras clave principales (excluyendo conectores genéricos)
     target_size = extract_size_token(desc_upper)
     palabras_desc = set(w for w in re.findall(r'\b\w+\b', desc_upper) if len(w) > 2 and w not in ['GALON', 'MIN', 'CON', 'LOS', 'LAS', 'DEL'])
 
@@ -178,23 +174,17 @@ def get_resolved_barcode(extracted_code, description):
         validos = []
         for k in keys_list:
             k_upper = k.upper()
-            
-            # Filtro estricto por tamaño si está presente
             if target_size:
                 norm_target = target_size.replace("5CL", "50ML")
                 norm_k = k_upper.replace("5CL", "50ML")
                 if norm_target not in norm_k:
                     continue
-            
-            # Validar coincidencia de al menos una palabra clave principal y significativa
             palabras_k = set(w for w in re.findall(r'\b\w+\b', k_upper) if len(w) > 2)
             interseccion = palabras_desc.intersection(palabras_k)
-            
             if len(interseccion) > 0:
                 validos.append(k)
         return validos
 
-    # 3. Búsqueda difusa altamente restrictiva (cutoff elevado a 0.55 para evitar falsos positivos)
     master_keys = strict_match_filter(list(st.session_state["master_catalog"].keys()))
     if master_keys:
         coincidencias = difflib.get_close_matches(desc_upper, master_keys, n=1, cutoff=0.55)
@@ -246,17 +236,19 @@ def parse_empaque_from_tamano(tamano_txt, unidad_txt, descripcion_txt=""):
 def process_invoice_exact_18(file_obj, file_type, use_paid_gemini=False, use_openai_fallback=False):
     prompt_text = (
         "Analiza esta factura o tiquet con máxima precisión horizontal y vertical. "
-        "Extrae cada renglón de producto detallando: "
+        "REGLA DE OBRERO ESTRICTA PARA LA DESCRIPCIÓN: En el campo 'descripcion' solo debe figurar el nombre limpio del producto y su presentación/gramaje (ej: 'RUFFLES CHEDDAR 120G' o 'ACEITUNA FIGARO GALON'). "
+        "Elimina códigos numéricos iniciales, abreviaturas logísticas de caja (como 'CS', 'TA') y códigos de empaque múltiple internos. "
+        "Para cada renglón extrae exactamente: "
         "1. 'codigo_barras': código de barras oficial si lo trae impreso, de lo contrario déjalo vacío o S/C. "
-        "2. 'descripcion': texto completo de la descripción (incluyendo tamaño o volumen como 5CL, 50ML, 750ML, GALON, etc.). "
+        "2. 'descripcion': nombre limpio y presentación del producto. "
         "3. 'cantidad': número exacto de unidades o cantidad comprada. "
-        "4. 'unidad': 'CAJA' o 'BOT.' o 'UNIDAD'. "
-        "5. 'tamano': presentación o tamaño exacto (ej: 5 CL., 50 ML., 750 ML., GALON). "
+        "4. 'unidad': 'CAJA' o 'BOT.' o 'UND'. "
+        "5. 'tamano': presentación o tamaño exacto (ej: 120G, 75 CL., GALON). "
         "6. 'precio_lista': precio unitario o precio base. "
         "7. 'valor': monto total de la línea si no hay precio unitario explícito. "
         "8. 'descuento_porcentaje': porcentaje de descuento si aplica. "
         "Devuelve un JSON puro bajo la clave 'items': "
-        '{"items": [{"codigo_barras": "...", "descripcion": "...", "cantidad": 1, "unidad": "BOT.", "tamano": "75 CL.", "precio_lista": 0.0, "valor": 0.0, "descuento_porcentaje": 0.0}]}. '
+        '{"items": [{"codigo_barras": "...", "descripcion": "...", "cantidad": 1, "unidad": "UND", "tamano": "120G", "precio_lista": 0.0, "valor": 0.0, "descuento_porcentaje": 0.0}]}. '
         "Respuesta JSON pura sin texto adicional."
     )
 
@@ -317,7 +309,7 @@ def process_invoice_exact_18(file_obj, file_type, use_paid_gemini=False, use_ope
 # ==========================================
 if modulo == "📄 Factura Individual":
     st.markdown("<h2>📊 Automatizador de Facturas <span style='color: #0284c7;'>(Individual)</span></h2>", unsafe_allow_html=True)
-    st.markdown("<p style='color: #64748b;'>Extracción inteligente con validación estricta y segura de códigos.</p>", unsafe_allow_html=True)
+    st.markdown("<p style='color: #64748b;'>Extracción con limpieza estricta de nombres y presentaciones.</p>", unsafe_allow_html=True)
     st.markdown("---")
 
     st.markdown('<div class="card-container">', unsafe_allow_html=True)
@@ -333,7 +325,7 @@ if modulo == "📄 Factura Individual":
         st.success(f"¡Archivo cargado: {uploaded_file.name}!")
         if st.button("🚀 Procesar Documento"):
             file_type = uploaded_file.type if hasattr(uploaded_file, 'type') else 'image/jpeg'
-            with st.spinner("Procesando y validando códigos..."):
+            with st.spinner("Procesando y limpiando nombres de productos..."):
                 parsed_data, success_msg = process_invoice_exact_18(uploaded_file, file_type, use_paid_gemini=use_gemini_paid_api, use_openai_fallback=use_openai_single)
 
             if success_msg == "QUOTA_EXCEEDED":
@@ -371,7 +363,7 @@ if modulo == "📄 Factura Individual":
 
                     desc_pct = safe_float(item.get("descuento_porcentaje") or 0)
                     cant_comprada = safe_int(item.get("cantidad") or 1, 1)
-                    unidad_txt = str(item.get("unidad") or "BOT.")
+                    unidad_txt = str(item.get("unidad") or "UND")
                     tamano_txt = str(item.get("tamano") or "75 CL.")
                     
                     empaque_val = parse_empaque_from_tamano(tamano_txt, unidad_txt, desc)
@@ -456,7 +448,7 @@ if modulo == "📄 Factura Individual":
 # ==========================================
 elif modulo == "📂 Múltiples Facturas (Lote)":
     st.markdown("<h2>📂 Procesador por <span style='color: #0284c7;'>Lotes y Consolidación Oficial</span></h2>", unsafe_allow_html=True)
-    st.markdown("<p style='color: #64748b;'>Procesa múltiples facturas y tiquets con validación estricta de códigos.</p>", unsafe_allow_html=True)
+    st.markdown("<p style='color: #64748b;'>Procesa múltiples facturas y tiquets con nombres limpios.</p>", unsafe_allow_html=True)
     st.markdown("---")
 
     st.markdown('<div class="card-container">', unsafe_allow_html=True)
@@ -575,7 +567,7 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
 
                 desc_pct = safe_float(item.get("descuento_porcentaje") or 0)
                 cant_comprada = safe_int(item.get("cantidad") or 1, 1)
-                unidad_txt = str(item.get("unidad") or "BOT.")
+                unidad_txt = str(item.get("unidad") or "UND")
                 tamano_txt = str(item.get("tamano") or "75 CL.")
 
                 empaque_val = parse_empaque_from_tamano(tamano_txt, unidad_txt, desc)
