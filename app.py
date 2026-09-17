@@ -181,8 +181,8 @@ def clean_barcode(code_val):
         return "S/C (Sin Código)"
     return s_val
 
-def get_strict_barcode_and_name(description, invoice_code=""):
-    """Prioriza el código de barras EAN extraído de la factura, luego catálogo maestro o memoria."""
+def get_adaptive_barcode_and_name(description, invoice_code=""):
+    """Buscador adaptativo que respeta el código detectado en el proveedor y contrasta con catálogo maestro/memoria."""
     if invoice_code and str(invoice_code).strip() not in ["", "nan", "None", "S/C"]:
         return str(description).strip().upper(), clean_barcode(invoice_code)
 
@@ -204,20 +204,30 @@ def get_strict_barcode_and_name(description, invoice_code=""):
             
     return desc_clean, "S/C (Sin Código)"
 
-def parse_empaque_from_umv(umv_txt, descripcion_txt=""):
+def parse_empaque_adaptive(umv_txt, descripcion_txt="", tamano_txt=""):
     u = str(umv_txt).strip().upper()
     d = str(descripcion_txt).strip().upper()
-    combined = d + " " + u
+    t = str(tamano_txt).strip().upper()
+    combined = d + " " + t + " " + u
     
     match_pza = re.search(r'(\d+)\s*PZA', combined)
     if match_pza:
         return int(match_pza.group(1))
+
+    match_slash = re.search(r'\b(\d+)\s*/', combined)
+    if match_slash:
+        val = int(match_slash.group(1))
+        if val in [1, 3, 6, 12, 16, 20, 24, 48]:
+            return val
 
     if "CAJ" in u or "CAJA" in u:
         if "12" in combined: return 12
         if "6" in combined: return 6
         if "24" in combined: return 24
         if "48" in combined: return 48
+
+    if "BOT" in u or "UND" in u or "UNIDAD" in u or "EA" in u:
+        return 1
 
     return 1
 
@@ -237,19 +247,20 @@ st.sidebar.markdown("---")
 st.sidebar.markdown("### ⚙️ Configuración de API")
 use_gemini_paid_api = st.sidebar.checkbox("💎 Usar Gemini Paid (API de Pago)", value=bool(ACTIVE_GEMINI_PAID_KEY))
 
-def process_invoice_exact_18(file_obj, file_type, use_paid_gemini=False, use_openai_fallback=False):
+def process_invoice_adaptive(file_obj, file_type, use_paid_gemini=False, use_openai_fallback=False):
     prompt_text = (
-        "Analiza esta factura de proveedor con máxima precisión quirúrgica. "
-        "REGLA CRÍTICA DE CÓDIGO DE BARRAS: En cada renglón de la izquierda hay dos códigos (SAP arriba y EAN/código de barras largo abajo de 13 dígitos). "
-        "Debes extraer estrictamente el **código de barras EAN (el número largo)** para el campo 'codigo_barras'. "
+        "Analiza esta factura de proveedor con máxima precisión, adaptándote a la estructura visual del documento. "
+        "REGLA ADAPTATIVA DE CÓDIGO: Extrae el identificador de producto principal que viene en la línea del renglón "
+        "(priorizando código de barras EAN largo de 13 dígitos si existe, o código SAP/artículo si es el formato del proveedor). "
         "Para cada renglón extrae rigurosamente: "
-        "1. 'codigo_barras': el código EAN largo de 13 dígitos impreso debajo del SAP. Si no está, usa el SAP. "
-        "2. 'descripcion': texto literal exacto del producto impreso en la factura. "
+        "1. 'codigo_identificador': el código numérico o identificador del producto en la factura. "
+        "2. 'descripcion': texto literal exacto del producto impreso en la factura (sin inventar ni alterar nombres). "
         "3. 'cantidad': cantidad numérica de cajas o unidades compradas. "
-        "4. 'umv': unidad de medida de venta (ej: 'CAJ / 12 PZA'). "
-        "5. 'valor': monto total neto de la línea. "
+        "4. 'umv': unidad de medida de venta o presentación (ej: 'CAJ / 12 PZA', 'EA', 'BOT.'). "
+        "5. 'tamano': tamaño o gramaje si lo indica. "
+        "6. 'valor': monto total neto de la línea. "
         "Devuelve un JSON puro bajo la clave 'items': "
-        '{"items": [{"codigo_barras": "7804300150082", "descripcion": "SANTA HELENA MERLOT 75 CL VEB19056", "cantidad": 1.0, "umv": "CAJ / 12 PZA", "valor": 4814.40}]}. '
+        '{"items": [{"codigo_identificador": "7804300150082", "descripcion": "SANTA HELENA MERLOT 75 CL VEB19056", "cantidad": 1.0, "umv": "CAJ / 12 PZA", "tamano": "75 CL", "valor": 4814.40}]}. '
         "Respuesta JSON pura sin texto adicional."
     )
 
@@ -316,7 +327,7 @@ def process_invoice_exact_18(file_obj, file_type, use_paid_gemini=False, use_ope
 if modulo == "📄 Factura Individual":
     try:
         st.markdown("<h2>📊 Automatizador de Facturas <span style='color: #0284c7;'>(Individual)</span></h2>", unsafe_allow_html=True)
-        st.markdown("<p style='color: #64748b;'>Procesamiento con prioridad de código EAN y cálculo exacto de empaques.</p>", unsafe_allow_html=True)
+        st.markdown("<p style='color: #64748b;'>Procesamiento adaptativo por proveedor con cálculo exacto.</p>", unsafe_allow_html=True)
         st.markdown("---")
 
         render_master_status_banner()
@@ -334,8 +345,8 @@ if modulo == "📄 Factura Individual":
             st.success(f"¡Archivo cargado: {uploaded_file.name}!")
             if st.button("🚀 Procesar Documento"):
                 file_type = getattr(uploaded_file, 'type', 'image/jpeg')
-                with st.spinner("Procesando documento..."):
-                    parsed_data, success_msg = process_invoice_exact_18(uploaded_file, file_type, use_paid_gemini=use_gemini_paid_api, use_openai_fallback=use_openai_single)
+                with st.spinner("Procesando documento con adaptador de proveedor..."):
+                    parsed_data, success_msg = process_invoice_adaptive(uploaded_file, file_type, use_paid_gemini=use_gemini_paid_api, use_openai_fallback=use_openai_single)
 
                 if success_msg == "QUOTA_EXCEEDED":
                     st.error("⚠️ **Límite de cuota alcanzado.** Activa la casilla de 'Gemini Paid (API de Pago)' en la barra lateral.")
@@ -359,14 +370,15 @@ if modulo == "📄 Factura Individual":
                         if not desc_raw:
                             continue
 
-                        invoice_code = str(item.get("codigo_barras") or item.get("codigo_sap") or "")
-                        resolved_name, resolved_code = get_strict_barcode_and_name(desc_raw, invoice_code)
+                        invoice_code = str(item.get("codigo_identificador") or "")
+                        resolved_name, resolved_code = get_adaptive_barcode_and_name(desc_raw, invoice_code)
 
                         cant_comprada = safe_float(item.get("cantidad") or 1, 1.0)
                         val_neto_linea = safe_float(item.get("valor") or 0)
                         umv_txt = str(item.get("umv") or "")
+                        tamano_txt = str(item.get("tamano") or "")
                         
-                        empaque_val = parse_empaque_from_umv(umv_txt, resolved_name)
+                        empaque_val = parse_empaque_adaptive(umv_txt, resolved_name, tamano_txt)
                         total_unidades = int(cant_comprada * empaque_val)
 
                         costo = round(val_neto_linea / total_unidades, 2) if total_unidades > 0 else 0.0
@@ -380,9 +392,9 @@ if modulo == "📄 Factura Individual":
                         
                         rows_preview.append({
                             "No.": idx,
-                            "Código de Barras (EAN)": str(resolved_code),
+                            "Código Identificador / Proveedor": str(resolved_code),
                             "Nombre Factura / Artículo": resolved_name,
-                            "Cant. Caja": cant_comprada,
+                            "Cant. Compra": cant_comprada,
                             "UMV": umv_txt,
                             "Empaque": empaque_val,
                             "Stock Total Unidades": total_unidades,
@@ -403,7 +415,7 @@ if modulo == "📄 Factura Individual":
                     if rows_preview:
                         st.markdown("### ✅ Artículos Procesados Exitosamente")
                         df_resultado = pd.DataFrame(rows_preview)
-                        df_resultado["Código de Barras (EAN)"] = df_resultado["Código de Barras (EAN)"].astype(str)
+                        df_resultado["Código Identificador / Proveedor"] = df_resultado["Código Identificador / Proveedor"].astype(str)
                         
                         altura_tabla = min(max(len(rows_preview) * 35 + 40, 200), 850)
                         st.dataframe(df_resultado, use_container_width=True, hide_index=True, height=altura_tabla)
@@ -416,7 +428,7 @@ if modulo == "📄 Factura Individual":
                         for item_dict in rows_preview:
                             ws_prod.append([
                                 item_dict["Nombre Factura / Artículo"],
-                                str(item_dict["Código de Barras (EAN)"]),
+                                str(item_dict["Código Identificador / Proveedor"]),
                                 "General", "producto",
                                 item_dict["Precio Venta"],
                                 item_dict["Costo Unitario"],
@@ -504,7 +516,7 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
                     st.progress(processed_so_far / total_files)
 
                     file_bytes_io = io.BytesIO(file_info["bytes"])
-                    parsed_data, err_msg = process_invoice_exact_18(file_bytes_io, file_info["type"], use_paid_gemini=use_gemini_paid_api, use_openai_fallback=False)
+                    parsed_data, err_msg = process_invoice_adaptive(file_bytes_io, file_info["type"], use_paid_gemini=use_gemini_paid_api, use_openai_fallback=False)
                     time.sleep(1.0)
 
                     if err_msg == "QUOTA_EXCEEDED":
@@ -545,14 +557,15 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
                     if not desc_raw:
                         continue
 
-                    invoice_code = str(item.get("codigo_barras") or item.get("codigo_sap") or "")
-                    resolved_name, resolved_code = get_strict_barcode_and_name(desc_raw, invoice_code)
+                    invoice_code = str(item.get("codigo_identificador") or "")
+                    resolved_name, resolved_code = get_adaptive_barcode_and_name(desc_raw, invoice_code)
                     
                     cant_comprada = safe_float(item.get("cantidad") or 1, 1.0)
                     val_neto_linea = safe_float(item.get("valor") or 0)
                     umv_txt = str(item.get("umv") or "")
+                    tamano_txt = str(item.get("tamano") or "")
                     
-                    empaque_val = parse_empaque_from_umv(umv_txt, resolved_name)
+                    empaque_val = parse_empaque_adaptive(umv_txt, resolved_name, tamano_txt)
                     total_unidades = int(cant_comprada * empaque_val)
 
                     costo = round(val_neto_linea / total_unidades, 2) if total_unidades > 0 else 0.0
@@ -642,7 +655,7 @@ elif modulo == "📁 Actualizar Catálogo Maestro":
                 st.markdown("### Selecciona las columnas correspondientes")
                 cols = df_master.columns.tolist()
                 col_name = st.selectbox("Columna con el Nombre / Descripción del Producto", cols)
-                col_code = st.selectbox("Columna con el Código de Barras EAN Oficial", cols)
+                col_code = st.selectbox("Columna con el Código Oficial", cols)
                 
                 if st.button("🔄 Sobrescribir y Actualizar Maestro en el Sistema"):
                     count = 0
@@ -675,7 +688,7 @@ elif modulo == "📁 Actualizar Catálogo Maestro":
                 save_meta_to_file("Nunca", 0)
                 st.rerun()
                 
-            df_current_master = pd.DataFrame([{"Descripción": k, "Código de Barras (EAN)": v} for k, v in st.session_state["master_catalog"].items()])
+            df_current_master = pd.DataFrame([{"Descripción": k, "Código Oficial": v} for k, v in st.session_state["master_catalog"].items()])
             st.dataframe(df_current_master, use_container_width=True, hide_index=True, height=400)
     except Exception as e:
         st.error("⚠️ Ocurrió un error inesperado en Catálogo Maestro:")
@@ -694,7 +707,7 @@ elif modulo == "📋 Ver Códigos Almacenados":
         with col_m1:
             st.markdown(f"### 📚 Catálogo Maestro ({len(st.session_state['master_catalog'])})")
             if st.session_state["master_catalog"]:
-                df_m_mem = pd.DataFrame([{"Producto": k, "Código de Barras (EAN)": v} for k, v in st.session_state["master_catalog"].items()])
+                df_m_mem = pd.DataFrame([{"Producto": k, "Código Oficial": v} for k, v in st.session_state["master_catalog"].items()])
                 st.dataframe(df_m_mem, use_container_width=True, hide_index=True, height=400)
             else:
                 st.warning("⚠️ No hay Catálogo Maestro cargado.")
