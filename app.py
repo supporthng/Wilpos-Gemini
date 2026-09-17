@@ -101,7 +101,7 @@ def render_master_status_banner():
     master_dict = st.session_state["master_catalog"]
     meta = st.session_state.get("master_meta", {})
     supps = st.session_state.get("supplier_memory", {})
-    st.success(f"🟢 **WilPOS Activo** | Catálogo: **{len(master_dict):,}** prods | 🏢 Proveedores: **{len(supps)}** | 🕒 Última act: **{meta.get('ultima_actualizacion', 'Desconocida')}**")
+    st.success(f"🟢 **WilPOS Activo** | Catálogo Maestro: **{len(master_dict):,}** prods | 🏢 Proveedores: **{len(supps)}** | 🕒 Última act: **{meta.get('ultima_actualizacion', 'Desconocida')}**")
 
 def safe_float(val, default=0.0):
     try: return float(val)
@@ -114,7 +114,7 @@ def safe_int(val, default=1):
 def round_to_nearest_5(x): return float(round(round(x / 5) * 5))
 
 # ==========================================
-# REGLA GLOBAL INQUEBRANTABLE: CEROS A LA IZQUIERDA Y PURA FACTURA
+# REGLA GLOBAL INQUEBRANTABLE: CEROS A LA IZQUIERDA Y CRUCE MAESTRO
 # ==========================================
 def clean_ean_code(code_val):
     if not code_val: return "S/C"
@@ -138,6 +138,22 @@ def clean_product_name_and_presentation(raw_name, raw_tamano=""):
     name = re.sub(r'\s+', ' ', name).strip().upper()
     presentation = re.sub(r'\s+', ' ', presentation).strip().upper()
     return name, presentation
+
+def get_master_barcode_match(clean_name):
+    """Consulta obligatoria en el Catálogo Maestro para obtener el EAN oficial."""
+    master_dict = st.session_state.get("master_catalog", {})
+    if not master_dict: return None
+    
+    # Búsqueda exacta
+    if clean_name in master_dict:
+        return clean_ean_code(master_dict[clean_name])
+        
+    # Búsqueda parcial por coincidencia de nombre
+    for m_name, m_code in master_dict.items():
+        if m_name in clean_name or clean_name in m_name:
+            return clean_ean_code(m_code)
+            
+    return None
 
 def parse_empaque_universal(supplier_name="", tamano_txt="", unidad_txt="", descripcion_txt=""):
     combined = f"{str(tamano_txt)} {str(unidad_txt)} {str(descripcion_txt)}".upper()
@@ -202,15 +218,14 @@ def process_invoice_smart_router(file_obj, file_type, use_paid_gemini=False):
         f"Analiza este documento de compra del proveedor '{supplier_detected}' con absoluta precisión. "
         "Extrae ABSOLUTAMENTE TODOS LOS RENGLONES/PRODUCTOS que aparecen en la factura, sin omitir ninguno. "
         "Para cada renglón extrae rigurosamente en un JSON bajo la clave 'items': "
-        "1. 'codigo_ean': código de barras oficial o EAN que APARECE IMPRESO en la factura para este producto (si la factura no trae código impreso, devuelve 'S/C'. NUNCA inventes ni traigas códigos de otros lados). IMPORTANTE: conserva todos los ceros a la izquierda exactamente como aparecen. "
-        "2. 'descripcion': nombre exacto del producto (sin tamaño ni presentación). "
-        "3. 'tamano': tamaño o presentación separada (ej: '750 CL', '1 LT', '6/75 CL'). "
-        "4. 'cantidad': cantidad comprada de cajas o unidades (ej: 2.0). "
-        "5. 'unidad': unidad de medida impresa (ej: '12 PZA', 'CAJA-12'). "
-        "6. 'valor_con_itbis': monto TOTAL INCLUYENDO ITBIS que aparece en la línea (el importe final con impuestos y descuentos ya aplicados). "
-        "7. 'descuento_monto': monto del descuento aplicado a esta línea (si existe, ej: 0.0). "
+        "1. 'descripcion': nombre exacto del producto (sin tamaño ni presentación). "
+        "2. 'tamano': tamaño o presentación separada (ej: '750 CL', '1 LT', '6/75 CL'). "
+        "3. 'cantidad': cantidad comprada de cajas o unidades (ej: 1.0). "
+        "4. 'unidad': unidad de medida impresa (ej: '12 PZA', 'Caja-12'). "
+        "5. 'valor_con_itbis': monto TOTAL INCLUYENDO ITBIS que aparece en la línea (el importe final con impuestos y descuentos ya aplicados). "
+        "6. 'descuento_monto': monto del descuento aplicado a esta línea (si existe, ej: 0.0). "
         "Estructura JSON exacta: "
-        '{"proveedor": "' + supplier_detected + '", "items": [{"codigo_ean": "...", "descripcion": "...", "tamano": "...", "cantidad": 1.0, "unidad": "...", "valor_con_itbis": 0.0, "descuento_monto": 0.0}]}. '
+        '{"proveedor": "' + supplier_detected + '", "items": [{"descripcion": "...", "tamano": "...", "cantidad": 1.0, "unidad": "...", "valor_con_itbis": 0.0, "descuento_monto": 0.0}]}. '
         "Respuesta JSON pura sin texto adicional."
     )
 
@@ -233,8 +248,8 @@ def process_invoice_smart_router(file_obj, file_type, use_paid_gemini=False):
 # ==========================================
 if modulo == "📄 Factura Individual":
     try:
-        st.markdown("<h2>📊 Automatizador con <span style='color: #0284c7;'>Códigos Exclusivos de Factura</span></h2>", unsafe_allow_html=True)
-        st.markdown("<p style='color: #64748b;'>Extracción limpia y directa de códigos impresos en el documento sin interferencia del maestro.</p>", unsafe_allow_html=True)
+        st.markdown("<h2>📊 Automatizador con <span style='color: #0284c7;'>Cruce Obligatorio al Maestro EAN</span></h2>", unsafe_allow_html=True)
+        st.markdown("<p style='color: #64748b;'>Cada producto procesado consulta automáticamente su código de barras oficial en el maestro.</p>", unsafe_allow_html=True)
         st.markdown("---")
         render_master_status_banner()
 
@@ -249,9 +264,9 @@ if modulo == "📄 Factura Individual":
         st.markdown('</div>', unsafe_allow_html=True)
 
         if uploaded_file is not None:
-            if st.button("🚀 Procesar y Guardar en Historial"):
+            if st.button("🚀 Procesar y Cruce con Maestro"):
                 file_type = getattr(uploaded_file, 'type', 'image/jpeg')
-                with st.spinner("Procesando factura y extrayendo códigos fieles al documento..."):
+                with st.spinner("Procesando factura y cruzando códigos con el Catálogo Maestro..."):
                     parsed_data, success_msg = process_invoice_smart_router(uploaded_file, file_type, use_paid_gemini=use_gemini_paid_api)
 
                 if success_msg == "QUOTA_EXCEEDED":
@@ -280,14 +295,15 @@ if modulo == "📄 Factura Individual":
                 desc_raw = str(item.get("descripcion") or "").strip()
                 if not desc_raw: continue
 
-                invoice_ean = str(item.get("codigo_ean") or "")
                 unidad_txt = str(item.get("unidad") or "")
                 tamano_txt = str(item.get("tamano") or "")
                 
                 clean_name, clean_pres = clean_product_name_and_presentation(desc_raw, tamano_txt)
                 
-                # CÓDIGO ESTRICTAMENTE DE LA FACTURA (SIN CRUZAR CON EL MAESTRO)
-                resolved_code = clean_ean_code(invoice_ean)
+                # CONSULTA OBLIGATORIA AL CATÁLOGO MAESTRO
+                resolved_code = get_master_barcode_match(clean_name)
+                if not resolved_code:
+                    resolved_code = "S/C"
 
                 cant_comprada = safe_float(item.get("cantidad") or 1, 1.0)
                 val_total_con_itbis_linea = safe_float(item.get("valor_con_itbis") or item.get("importe") or 0)
@@ -318,7 +334,7 @@ if modulo == "📄 Factura Individual":
                 
                 rows_preview.append({
                     "No.": idx,
-                    "Código EAN Único": str(resolved_code),
+                    "Código EAN Maestro": str(resolved_code),
                     "Nombre Producto": clean_name,
                     "Presentación": clean_pres if clean_pres else "S/P",
                     "Cant. Compra": cant_comprada,
@@ -345,9 +361,9 @@ if modulo == "📄 Factura Individual":
             st.markdown("---")
 
             if rows_preview:
-                st.markdown(f"### ✅ Productos Procesados ({total_productos_factura} productos individuales)")
+                st.markdown(f"### ✅ Productos Procesados y Cruzados ({total_productos_factura} productos)")
                 df_resultado = pd.DataFrame(rows_preview)
-                df_resultado["Código EAN Único"] = df_resultado["Código EAN Único"].astype(str)
+                df_resultado["Código EAN Maestro"] = df_resultado["Código EAN Maestro"].astype(str)
                 st.dataframe(df_resultado, use_container_width=True, hide_index=True)
                 
                 wb = openpyxl.Workbook()
@@ -356,7 +372,7 @@ if modulo == "📄 Factura Individual":
                 ws_prod.append(['Nombre', 'Presentación', 'Código Barra', 'Categoría', 'Tipo', 'Precio Venta', 'Costo', 'Stock', 'Stock Mínimo', 'ITBIS', 'Unidad Medida', 'Venta Granel', 'Cantidad Empaque', 'Precio Variable', 'Descuento %', 'Descuento Monto', 'Precio Especial', 'Descuento Activo', 'Descuento Nota'])
                 
                 for idx_item, item_dict in enumerate(rows_preview, start=1):
-                    code_to_save = str(item_dict["Código EAN Único"])
+                    code_to_save = str(item_dict["Código EAN Maestro"])
                     if "Sin Codigo" in code_to_save: code_to_save = "S/C"
                     desc_val = item_dict["Descuento Monto"]
                     desc_activo = "Sí" if desc_val > 0 else "No"
@@ -375,7 +391,7 @@ if modulo == "📄 Factura Individual":
                 output = io.BytesIO()
                 wb.save(output)
                 
-                if st.download_button("📥 Descargar Excel WilPOS Fiel a Factura", output.getvalue(), f"Inventario_{prov_det.replace('&', 'Y').replace(' ', '_')}.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"):
+                if st.download_button("📥 Descargar Excel WilPOS con Cruce de Maestro", output.getvalue(), f"Inventario_{prov_det.replace('&', 'Y').replace(' ', '_')}.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"):
                     history_entry = {
                         "fecha": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                         "proveedor": prov_det,
@@ -395,7 +411,7 @@ if modulo == "📄 Factura Individual":
 # ==========================================
 elif modulo == "📂 Múltiples Facturas (Lote)":
     try:
-        st.markdown("<h2>📂 Procesador por Lotes <span style='color: #0284c7;'>(Sin Interferencias)</span></h2>", unsafe_allow_html=True)
+        st.markdown("<h2>📂 Procesador por Lotes <span style='color: #0284c7;'>(Cruce Maestro)</span></h2>", unsafe_allow_html=True)
         st.markdown("---")
         render_master_status_banner()
         st.markdown('<div class="card-container">', unsafe_allow_html=True)
@@ -419,7 +435,7 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
 
             processed_so_far = st.session_state["batch_processed_count"]
             b_col1, b_col2 = st.columns(2)
-            if b_col1.button("🚀 Iniciar Lote Fiel", type="primary"):
+            if b_col1.button("🚀 Iniciar Lote Maestro", type="primary"):
                 st.session_state["is_live_processing"] = True
                 st.rerun()
             if b_col2.button("🔄 Reiniciar"):
@@ -459,13 +475,13 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
                 for item in raw_items:
                     desc_raw = str(item.get("descripcion") or "").strip()
                     if not desc_raw: continue
-                    invoice_ean = str(item.get("codigo_ean") or "")
                     prov_det = str(item.get("_prov") or "GENERAL")
                     tamano_txt = str(item.get("tamano") or "")
                     unidad_txt = str(item.get("unidad") or "")
                     
                     clean_name, clean_pres = clean_product_name_and_presentation(desc_raw, tamano_txt)
-                    resolved_code = clean_ean_code(invoice_ean)
+                    resolved_code = get_master_barcode_match(clean_name)
+                    if not resolved_code: resolved_code = "S/C"
 
                     cant_comprada = safe_float(item.get("cantidad") or 1, 1.0)
                     val_total_con_itbis_linea = safe_float(item.get("valor_con_itbis") or item.get("importe") or 0)
@@ -494,7 +510,7 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
                         "Cantidad Empaque": empaque_val, "Precio Variable": "No",
                         "Descuento %": 0, "Descuento Monto": descuento_monto_linea, "Precio Especial": None,
                         "Descuento Activo": "Sí" if descuento_monto_linea > 0 else "No",
-                        "Descuento Nota": f"Descuento aplicado: RD$ {descuento_monto_linea:,.2f}" if descuento_monto_linea > 0 else None
+                        "Descuento Nota": f"Descuento aplicado: RD$ {desc_val:,.2f}" if descuento_monto_linea > 0 else None
                     })
 
                 if processed_rows:
