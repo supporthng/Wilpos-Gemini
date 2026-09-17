@@ -144,7 +144,6 @@ def get_strict_ean_code_and_name(description, tamano="", invoice_ean="", supplie
     if desc_clean in master: return desc_clean, clean_ean_code(master[desc_clean])
     if desc_clean in memory: return desc_clean, clean_ean_code(memory[desc_clean])
         
-    # Coincidencia flexible por tokens considerando tamaños diferentes (ej. 175 ML vs 125 ML)
     if master:
         desc_tokens = set(re.findall(r'\b[A-Z0-9\.]+\b', desc_clean))
         best_match_name = desc_clean
@@ -159,7 +158,6 @@ def get_strict_ean_code_and_name(description, tamano="", invoice_ean="", supplie
             union = desc_tokens.union(m_tokens)
             score = len(common) / len(union) if union else 0.0
             
-            # Penalizar si los mililitros/tamaños difieren explícitamente para evitar cruzar presentaciones
             desc_mls = re.findall(r'\d+\s*(?:ML|CL|L)', desc_clean)
             master_mls = re.findall(r'\d+\s*(?:ML|CL|L)', str(m_name).upper())
             if desc_mls and master_mls and desc_mls != master_mls:
@@ -249,9 +247,10 @@ def process_invoice_smart_router(file_obj, file_type, use_paid_gemini=False):
         "3. 'tamano': texto exacto del tamaño o presentación (ej: '175 ML', '125 ML'). "
         "4. 'cantidad': cantidad comprada (ej: 1.0). "
         "5. 'unidad': unidad de medida exacta impresa en la línea (ej: 'Caja-24', 'Caja-48'). "
-        "6. 'valor': monto TOTAL NETO de la línea antes de ITBIS (el precio total de la caja). "
+        "6. 'valor_con_itbis': monto TOTAL INCLUYENDO ITBIS que aparece en la línea (el precio total de la caja en la factura). "
+        "7. 'descuento_monto': monto del descuento aplicado a esta línea (si existe, ej: 0.0). "
         "Estructura JSON exacta: "
-        '{"proveedor": "' + supplier_detected + '", "items": [{"codigo_ean": "...", "descripcion": "...", "tamano": "...", "cantidad": 1.0, "unidad": "...", "valor": 0.0}]}. '
+        '{"proveedor": "' + supplier_detected + '", "items": [{"codigo_ean": "...", "descripcion": "...", "tamano": "...", "cantidad": 1.0, "unidad": "...", "valor_con_itbis": 0.0, "descuento_monto": 0.0}]}. '
         "Respuesta JSON pura sin texto adicional."
     )
 
@@ -274,8 +273,8 @@ def process_invoice_smart_router(file_obj, file_type, use_paid_gemini=False):
 # ==========================================
 if modulo == "📄 Factura Individual":
     try:
-        st.markdown("<h2>📊 Automatizador con <span style='color: #0284c7;'>Protección Multi-Presentación y Stock Exacto</span></h2>", unsafe_allow_html=True)
-        st.markdown("<p style='color: #64748b;'>Diferenciación exacta de tamaños (ej. 175 ML vs 125 ML), costos unitarios y stock.</p>", unsafe_allow_html=True)
+        st.markdown("<h2>📊 Automatizador con <span style='color: #0284c7;'>Desglose de Descuentos, ITBIS y Costos Netos</span></h2>", unsafe_allow_html=True)
+        st.markdown("<p style='color: #64748b;'>Extracción de base sin ITBIS, descuentos y costos reales por unidad.</p>", unsafe_allow_html=True)
         st.markdown("---")
         render_master_status_banner()
 
@@ -292,7 +291,7 @@ if modulo == "📄 Factura Individual":
         if uploaded_file is not None:
             if st.button("🚀 Procesar y Guardar en Historial"):
                 file_type = getattr(uploaded_file, 'type', 'image/jpeg')
-                with st.spinner("Procesando documento con separación de presentaciones..."):
+                with st.spinner("Procesando documento, descuentos y desglosando ITBIS..."):
                     parsed_data, success_msg = process_invoice_smart_router(uploaded_file, file_type, use_paid_gemini=use_gemini_paid_api)
 
                 if success_msg == "QUOTA_EXCEEDED":
@@ -312,7 +311,10 @@ if modulo == "📄 Factura Individual":
             data_items = parsed_data.get("items", [])
             rows_preview = []
             multiplicador_ganancia = 1 + (margen_ganancia / 100.0)
-            calc_subtotal = 0.0
+            calc_subtotal_bruto = 0.0
+            calc_total_descuento = 0.0
+            calc_subtotal_sin_itbis = 0.0
+            calc_total_con_itbis = 0.0
 
             for idx, item in enumerate(data_items, start=1):
                 if not isinstance(item, dict): continue
@@ -326,15 +328,25 @@ if modulo == "📄 Factura Individual":
                 resolved_name, resolved_code = get_strict_ean_code_and_name(desc_raw, tamano_txt, invoice_ean, prov_det)
 
                 cant_comprada = safe_float(item.get("cantidad") or 1, 1.0)
-                val_neto_linea = safe_float(item.get("valor") or 0)
+                val_con_itbis = safe_float(item.get("valor_con_itbis") or item.get("valor") or 0)
+                descuento_monto_linea = safe_float(item.get("descuento_monto") or 0)
+                
+                val_bruto_linea = val_con_itbis
+                calc_subtotal_bruto += val_bruto_linea
+                calc_total_descuento += descuento_monto_linea
+
+                val_neto_con_itbis = val_con_itbis - descuento_monto_linea
+                val_sin_itbis = val_neto_con_itbis / 1.18
                 
                 empaque_val = parse_empaque_universal(prov_det, tamano_txt, unidad_txt, resolved_name)
                 total_unidades = int(cant_comprada * empaque_val)
 
-                costo_unitario_real = round(val_neto_linea / total_unidades, 2) if total_unidades > 0 else 0.0
+                costo_unitario_real = round(val_sin_itbis / total_unidades, 2) if total_unidades > 0 else 0.0
                 if costo_unitario_real <= 0: continue
 
-                calc_subtotal += val_neto_linea
+                calc_subtotal_sin_itbis += val_sin_itbis
+                calc_total_con_itbis += val_neto_con_itbis
+
                 raw_pv = (costo_unitario_real * multiplicador_ganancia) * 1.18
                 precio_venta = round_to_nearest_5(raw_pv)
                 
@@ -346,22 +358,25 @@ if modulo == "📄 Factura Individual":
                     "Unidad": unidad_txt,
                     "Empaque": empaque_val,
                     "Stock Unidades": total_unidades,
+                    "Descuento Monto": descuento_monto_linea,
                     "Costo Unitario Real": costo_unitario_real,
                     "Precio Venta": precio_venta
                 })
 
-            calc_itbis = calc_subtotal * 0.18
-            calc_total_factura = calc_subtotal + calc_itbis
+            calc_itbis = calc_total_con_itbis - calc_subtotal_sin_itbis
+            porcentaje_desc_total = (calc_total_descuento / calc_subtotal_bruto * 100.0) if calc_subtotal_bruto > 0 else 0.0
 
-            st.markdown("### 📑 Totales del Documento")
-            t1, t2, t3 = st.columns(3)
-            t1.metric("Subtotal Factura", f"RD$ {calc_subtotal:,.2f}")
-            t2.metric("ITBIS Total (18%)", f"RD$ {calc_itbis:,.2f}")
-            t3.metric("Total Neto", f"RD$ {calc_total_factura:,.2f}")
+            st.markdown("### 📑 Totales del Documento (Desglose con Descuentos e ITBIS)")
+            t1, t2, t3, t4, t5 = st.columns(5)
+            t1.metric("Subtotal Bruto", f"RD$ {calc_subtotal_bruto:,.2f}")
+            t2.metric("Descuento Aplicado", f"{porcentaje_desc_total:.1f}% / RD$ {calc_total_descuento:,.2f}")
+            t3.metric("Subtotal Neto (Sin ITBIS)", f"RD$ {calc_subtotal_sin_itbis:,.2f}")
+            t4.metric("ITBIS Total (18%)", f"RD$ {calc_itbis:,.2f}")
+            t5.metric("Total Neto", f"RD$ {calc_total_con_itbis:,.2f}")
             st.markdown("---")
 
             if rows_preview:
-                st.markdown("### ✅ Artículos Procesados (Presentaciones Distinguidas)")
+                st.markdown("### ✅ Artículos Procesados (Costos Reales y Descuentos)")
                 df_resultado = pd.DataFrame(rows_preview)
                 df_resultado["Código EAN Único"] = df_resultado["Código EAN Único"].astype(str)
                 st.dataframe(df_resultado, use_container_width=True, hide_index=True)
@@ -374,11 +389,13 @@ if modulo == "📄 Factura Individual":
                 for item_dict in rows_preview:
                     code_to_save = item_dict["Código EAN Único"]
                     if "Sin Codigo" in code_to_save: code_to_save = "S/C"
+                    desc_val = item_dict["Descuento Monto"]
+                    desc_activo = "Sí" if desc_val > 0 else "No"
                     ws_prod.append([
                         item_dict["Nombre Producto"], str(code_to_save),
                         "General", "producto", item_dict["Precio Venta"],
                         item_dict["Costo Unitario Real"], item_dict["Stock Unidades"],
-                        5, 0.18, "unidad", "No", item_dict["Empaque"], "No", 0, 0, None, "No", None
+                        5, 0.18, "unidad", "No", item_dict["Empaque"], "No", 0, desc_val, None, desc_activo, f"Descuento aplicado: RD$ {desc_val:,.2f}" if desc_val > 0 else None
                     ])
                     ws_prod.cell(row=ws_prod.max_row, column=2).number_format = '@'
                 
@@ -390,9 +407,9 @@ if modulo == "📄 Factura Individual":
                         "fecha": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                         "proveedor": prov_det,
                         "archivo": st.session_state["single_filename"] or "Factura Individual",
-                        "subtotal": round(calc_subtotal, 2),
+                        "subtotal": round(calc_subtotal_sin_itbis, 2),
                         "itbis": round(calc_itbis, 2),
-                        "total": round(calc_total_factura, 2),
+                        "total": round(calc_total_con_itbis, 2),
                         "total_items": len(rows_preview)
                     }
                     add_to_history(history_entry)
@@ -476,12 +493,15 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
                     resolved_name, resolved_code = get_strict_ean_code_and_name(desc_raw, tamano_txt, invoice_ean, prov_det)
 
                     cant_comprada = safe_float(item.get("cantidad") or 1, 1.0)
-                    val_neto_linea = safe_float(item.get("valor") or 0)
+                    val_con_itbis = safe_float(item.get("valor_con_itbis") or item.get("valor") or 0)
+                    descuento_monto_linea = safe_float(item.get("descuento_monto") or 0)
+                    val_neto_con_itbis = val_con_itbis - descuento_monto_linea
+                    val_sin_itbis = val_neto_con_itbis / 1.18
                     unidad_txt = str(item.get("unidad") or "")
                     
                     empaque_val = parse_empaque_universal(prov_det, tamano_txt, unidad_txt, resolved_name)
                     total_unidades = int(cant_comprada * empaque_val)
-                    costo_unitario_real = round(val_neto_linea / total_unidades, 2) if total_unidades > 0 else 0.0
+                    costo_unitario_real = round(val_sin_itbis / total_unidades, 2) if total_unidades > 0 else 0.0
                     if costo_unitario_real <= 0: continue
 
                     raw_pv = (costo_unitario_real * multiplicador_ganancia) * 1.18
@@ -493,8 +513,9 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
                         "Costo": costo_unitario_real, "Stock": total_unidades, "Stock Mínimo": 5,
                         "ITBIS": 0.18, "Unidad Medida": "unidad", "Venta Granel": "No",
                         "Cantidad Empaque": empaque_val, "Precio Variable": "No",
-                        "Descuento %": 0, "Descuento Monto": 0, "Precio Especial": None,
-                        "Descuento Activo": "No", "Descuento Nota": None
+                        "Descuento %": 0, "Descuento Monto": descuento_monto_linea, "Precio Especial": None,
+                        "Descuento Activo": "Sí" if descuento_monto_linea > 0 else "No",
+                        "Descuento Nota": f"Descuento aplicado: RD$ {descuento_monto_linea:,.2f}" if descuento_monto_linea > 0 else None
                     })
 
                 if processed_rows:
@@ -504,7 +525,7 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
                         'Categoría': 'first', 'Tipo': 'first', 'Stock Mínimo': 'first',
                         'ITBIS': 'first', 'Unidad Medida': 'first', 'Venta Granel': 'first',
                         'Cantidad Empaque': 'first', 'Precio Variable': 'first',
-                        'Descuento %': 'first', 'Descuento Monto': 'first',
+                        'Descuento %': 'first', 'Descuento Monto': 'sum',
                         'Precio Especial': 'first', 'Descuento Activo': 'first', 'Descuento Nota': 'first'
                     })
                     st.dataframe(df_grouped, use_container_width=True, hide_index=True)
