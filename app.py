@@ -195,7 +195,6 @@ def process_invoice_smart_router(file_obj, file_type, use_paid_gemini=False):
     except Exception:
         supplier_detected = "GENERAL"
 
-    # Save supplier to supplier memory automatically
     if supplier_detected and supplier_detected != "GENERAL":
         supps = st.session_state["supplier_memory"]
         if supplier_detected not in supps:
@@ -212,7 +211,7 @@ def process_invoice_smart_router(file_obj, file_type, use_paid_gemini=False):
         "3. 'tamano': tamaño o presentación separada (ej: '750 CL', '1 LT', '6/75 CL'). "
         "4. 'cantidad': cantidad comprada de cajas o unidades (ej: 2.0). "
         "5. 'unidad': unidad de medida impresa (ej: '12 PZA', 'CAJA-12'). "
-        "6. 'valor_con_itbis': monto TOTAL INCLUYENDO ITBIS que aparece en la línea. "
+        "6. 'valor_con_itbis': monto TOTAL INCLUYENDO ITBIS que aparece en la línea (el importe final con impuestos y descuentos ya aplicados). "
         "7. 'descuento_monto': monto del descuento aplicado a esta línea (si existe, ej: 0.0). "
         "Estructura JSON exacta: "
         '{"proveedor": "' + supplier_detected + '", "items": [{"codigo_ean": "...", "descripcion": "...", "tamano": "...", "cantidad": 1.0, "unidad": "...", "valor_con_itbis": 0.0, "descuento_monto": 0.0}]}. '
@@ -238,8 +237,8 @@ def process_invoice_smart_router(file_obj, file_type, use_paid_gemini=False):
 # ==========================================
 if modulo == "📄 Factura Individual":
     try:
-        st.markdown("<h2>📊 Automatizador con <span style='color: #0284c7;'>Nombres Limpios, Costos Precisos y Proveedor Guardado</span></h2>", unsafe_allow_html=True)
-        st.markdown("<p style='color: #64748b;'>Registro automático de proveedores, nombres limpios y cálculo exacto por botella.</p>", unsafe_allow_html=True)
+        st.markdown("<h2>📊 Automatizador con <span style='color: #0284c7;'>Costos Estandarizados Universales</span></h2>", unsafe_allow_html=True)
+        st.markdown("<p style='color: #64748b;'>Cálculo robusto y universal para cualquier proveedor basado en el importe neto con ITBIS.</p>", unsafe_allow_html=True)
         st.markdown("---")
         render_master_status_banner()
 
@@ -256,7 +255,7 @@ if modulo == "📄 Factura Individual":
         if uploaded_file is not None:
             if st.button("🚀 Procesar y Guardar en Historial"):
                 file_type = getattr(uploaded_file, 'type', 'image/jpeg')
-                with st.spinner("Procesando factura, guardando proveedor y calculando costos..."):
+                with st.spinner("Procesando factura y aplicando costo universal exacto..."):
                     parsed_data, success_msg = process_invoice_smart_router(uploaded_file, file_type, use_paid_gemini=use_gemini_paid_api)
 
                 if success_msg == "QUOTA_EXCEEDED":
@@ -267,7 +266,7 @@ if modulo == "📄 Factura Individual":
                     st.session_state["single_processed_data"] = parsed_data
                     st.session_state["single_prov_det"] = parsed_data.get("proveedor", "GENERAL")
                     st.session_state["single_filename"] = uploaded_file.name
-                    st.success(f"{success_msg} | 🏢 Proveedor registrado y guardado: **{st.session_state['single_prov_det']}**")
+                    st.success(f"{success_msg} | 🏢 Proveedor registrado: **{st.session_state['single_prov_det']}**")
 
         if st.session_state["single_processed_data"] is not None:
             parsed_data = st.session_state["single_processed_data"]
@@ -293,24 +292,30 @@ if modulo == "📄 Factura Individual":
                 resolved_code = clean_ean_code(invoice_ean)
 
                 cant_comprada = safe_float(item.get("cantidad") or 1, 1.0)
-                val_con_itbis = safe_float(item.get("valor_con_itbis") or item.get("valor") or 0)
+                val_total_con_itbis_linea = safe_float(item.get("valor_con_itbis") or item.get("importe") or 0)
                 descuento_monto_linea = safe_float(item.get("descuento_monto") or 0)
                 
-                val_bruto_linea = val_con_itbis
+                # CÁLCULO UNIVERSAL ROBUSTO PARA TODOS LOS PROVEEDORES
+                if val_total_con_itbis_linea > 0:
+                    val_sin_itbis = val_total_con_itbis_linea / 1.18
+                    val_neto_con_itbis = val_total_con_itbis_linea
+                    val_bruto_linea = val_neto_con_itbis + descuento_monto_linea
+                else:
+                    val_bruto_linea = safe_float(item.get("valor_bruto") or 0)
+                    val_neto_con_itbis = val_bruto_linea - descuento_monto_linea
+                    val_sin_itbis = val_neto_con_itbis / 1.18
+
                 calc_subtotal_bruto += val_bruto_linea
                 calc_total_descuento += descuento_monto_linea
-
-                val_neto_con_itbis = val_con_itbis - descuento_monto_linea
-                val_sin_itbis = val_neto_con_itbis / 1.18
+                calc_subtotal_sin_itbis += val_sin_itbis
+                calc_total_con_itbis += val_neto_con_itbis
                 
                 empaque_val = parse_empaque_universal(prov_det, clean_pres, unidad_txt, clean_name)
                 total_unidades = int(cant_comprada * empaque_val)
 
+                # COSTO UNITARIO REAL UNIVERSAL POR BOTELLA (SIN ITBIS)
                 costo_unitario_real = round(val_sin_itbis / total_unidades, 2) if total_unidades > 0 else 0.0
                 if costo_unitario_real <= 0: continue
-
-                calc_subtotal_sin_itbis += val_sin_itbis
-                calc_total_con_itbis += val_neto_con_itbis
 
                 raw_pv = (costo_unitario_real * (1 + (margen_ganancia / 100.0))) * 1.18
                 precio_venta = round_to_nearest_5(raw_pv)
@@ -367,14 +372,14 @@ if modulo == "📄 Factura Individual":
                         round(item_dict["Costo Unitario Real"], 2), int(item_dict["Stock Unidades"]),
                         5, 0.18, "unidad", "No", int(item_dict["Empaque"]), "No", 0, round(desc_val, 2), None, desc_activo, f"Descuento aplicado: RD$ {desc_val:,.2f}" if desc_val > 0 else None
                     ])
-                    cell = ws_prod.cell(row=row_idx, column=3) # Columna de código de barras
+                    cell = ws_prod.cell(row=row_idx, column=3)
                     cell.number_format = '@'
                     cell.value = str(code_to_save)
                 
                 output = io.BytesIO()
                 wb.save(output)
                 
-                if st.download_button("📥 Descargar Excel WilPOS Definitivo", output.getvalue(), f"Inventario_{prov_det.replace('&', 'Y').replace(' ', '_')}.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"):
+                if st.download_button("📥 Descargar Excel WilPOS Universal", output.getvalue(), f"Inventario_{prov_det.replace('&', 'Y').replace(' ', '_')}.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"):
                     history_entry = {
                         "fecha": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                         "proveedor": prov_det,
@@ -394,7 +399,7 @@ if modulo == "📄 Factura Individual":
 # ==========================================
 elif modulo == "📂 Múltiples Facturas (Lote)":
     try:
-        st.markdown("<h2>📂 Procesador por Lotes <span style='color: #0284c7;'>(Protegido)</span></h2>", unsafe_allow_html=True)
+        st.markdown("<h2>📂 Procesador por Lotes <span style='color: #0284c7;'>(Universal)</span></h2>", unsafe_allow_html=True)
         st.markdown("---")
         render_master_status_banner()
         st.markdown('<div class="card-container">', unsafe_allow_html=True)
@@ -418,7 +423,7 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
 
             processed_so_far = st.session_state["batch_processed_count"]
             b_col1, b_col2 = st.columns(2)
-            if b_col1.button("🚀 Iniciar Lote Seguro", type="primary"):
+            if b_col1.button("🚀 Iniciar Lote Universal", type="primary"):
                 st.session_state["is_live_processing"] = True
                 st.rerun()
             if b_col2.button("🔄 Reiniciar"):
@@ -467,10 +472,15 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
                     resolved_code = clean_ean_code(invoice_ean)
 
                     cant_comprada = safe_float(item.get("cantidad") or 1, 1.0)
-                    val_con_itbis = safe_float(item.get("valor_con_itbis") or item.get("valor") or 0)
+                    val_total_con_itbis_linea = safe_float(item.get("valor_con_itbis") or item.get("importe") or 0)
                     descuento_monto_linea = safe_float(item.get("descuento_monto") or 0)
-                    val_neto_con_itbis = val_con_itbis - descuento_monto_linea
-                    val_sin_itbis = val_neto_con_itbis / 1.18
+                    
+                    if val_total_con_itbis_linea > 0:
+                        val_sin_itbis = val_total_con_itbis_linea / 1.18
+                    else:
+                        val_bruto = safe_float(item.get("valor_bruto") or 0)
+                        val_neto_con_itbis = val_bruto - descuento_monto_linea
+                        val_sin_itbis = val_neto_con_itbis / 1.18
                     
                     empaque_val = parse_empaque_universal(prov_det, clean_pres, unidad_txt, clean_name)
                     total_unidades = int(cant_comprada * empaque_val)
