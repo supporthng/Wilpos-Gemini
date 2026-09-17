@@ -79,8 +79,8 @@ if "supplier_memory" not in st.session_state:
         loaded_suppliers = {
             "ALVAREZ & SANCHEZ": {"nombre": "ALVAREZ & SANCHEZ", "formato_empaque": "formula_tamano_slash_4x6"},
             "GONZALEZ CUESTA": {"nombre": "GONZALEZ CUESTA", "formato_empaque": "caj_pza_estandar"},
-            "CND": {"nombre": "CND", "formato_empaque": "cnd_bees_extractor"},
-            "BEES": {"nombre": "BEES", "formato_empaque": "cnd_bees_extractor"}
+            "CND": {"nombre": "CND", "formato_empaque": "cnd_direct_extractor"},
+            "BEES": {"nombre": "BEES", "formato_empaque": "cnd_direct_extractor"}
         }
         save_json_file(SUPPLIER_MEMORY_FILE, loaded_suppliers)
     st.session_state["supplier_memory"] = loaded_suppliers
@@ -122,25 +122,30 @@ def clean_ean_code(code_val):
     if s_val.lower() in ["nan", "none", "", "s/c", "sin codigo"]: return "S/C (Sin Codigo)"
     return s_val
 
-def get_strict_ean_code_and_name(description, invoice_ean=""):
+# Jerarquía estricta: Catálogo Maestro > Memoria. Para CND/BEES se ignoran códigos internos cortos.
+def get_strict_ean_code_and_name(description, invoice_ean="", supplier_name=""):
     desc_clean = str(description).strip().upper()
     master = st.session_state["master_catalog"]
     memory = st.session_state["barcode_memory"]
     
     if desc_clean in master: return desc_clean, clean_ean_code(master[desc_clean])
     if desc_clean in memory: return desc_clean, clean_ean_code(memory[desc_clean])
-    
-    cleaned_invoice_ean = clean_ean_code(invoice_ean)
-    if cleaned_invoice_ean != "S/C (Sin Codigo)": return desc_clean, cleaned_invoice_ean
         
     master_keys = list(master.keys())
     if master_keys:
         coincidencias = difflib.get_close_matches(desc_clean, master_keys, n=1, cutoff=0.60)
         if coincidencias: return desc_clean, clean_ean_code(master[coincidencias[0]])
             
-    return desc_clean, cleaned_invoice_ean
+    # Si es CND o BEES y el código de factura es un código interno corto (<= 6 dígitos), IGNORARLO
+    s_name = str(supplier_name).upper()
+    cleaned_invoice_ean = clean_ean_code(invoice_ean)
+    if ("CND" in s_name or "BEES" in s_name) and len(cleaned_invoice_ean) <= 6:
+        return desc_clean, "S/C (Sin Codigo)"
 
-# REGLA DE EMPAQUE LIMPIA Y DIRECTA: Por defecto es 1 (respeta la cantidad comprada), solo multiplica si el texto dice explícitamente 24/ o 24 BOTELLAS.
+    if cleaned_invoice_ean != "S/C (Sin Codigo)": return desc_clean, cleaned_invoice_ean
+    return desc_clean, "S/C (Sin Codigo)"
+
+# Regla de empaque limpia y directa para CND/BEES
 def parse_empaque_isolated(supplier_name, tamano_txt="", unidad_txt="", descripcion_txt=""):
     d = str(descripcion_txt).strip().upper()
     t = str(tamano_txt).strip().upper()
@@ -159,7 +164,7 @@ def parse_empaque_isolated(supplier_name, tamano_txt="", unidad_txt="", descripc
 # MENÚ Y CONFIGURACIÓN LATERAL
 # ==========================================
 st.sidebar.markdown("<h3 style='color: #0284c7; text-align: center;'>⚡ WilPOS</h3>", unsafe_allow_html=True)
-st.sidebar.markdown("<p style='text-align: center; color: #64748b; font-size: 0.8rem;'>Sistema con Cálculo Directo</p>", unsafe_allow_html=True)
+st.sidebar.markdown("<p style='text-align: center; color: #64748b; font-size: 0.8rem;'>Sistema con Prioridad a Maestro EAN</p>", unsafe_allow_html=True)
 st.sidebar.markdown("---")
 
 modulo = st.sidebar.radio("Menú de Navegación", ["📄 Factura Individual", "📂 Múltiples Facturas (Lote)", "📁 Actualizar Catálogo Maestro", "🏢 Perfiles de Proveedores", "📜 Historial de Procesados", "📋 Códigos Almacenados"])
@@ -198,9 +203,9 @@ def process_invoice_smart_router(file_obj, file_type, use_paid_gemini=False):
     prompt_main = (
         f"Analiza este documento de compra del proveedor '{supplier_detected}' con absoluta precisión. "
         "Para cada renglón extrae rigurosamente en un JSON bajo la clave 'items': "
-        "1. 'codigo_ean': código de barras o código de artículo. "
-        "2. 'descripcion': nombre exacto del producto (ej: 'OCEAN SPRAY 1/32 OZ', 'PTE. HU 24/12OZ', 'DEPOS. PT 24 BOTELLAS'). "
-        "3. 'cantidad': cantidad comprada exactamente tal como aparece (ej: 47.0 o 100.0). "
+        "1. 'codigo_ean': código de barras oficial si existe (ignora códigos internos cortos). "
+        "2. 'descripcion': nombre exacto del producto. "
+        "3. 'cantidad': cantidad comprada exactamente tal como aparece. "
         "4. 'valor': monto total neto de la línea. "
         "Estructura JSON exacta: "
         '{"proveedor": "' + supplier_detected + '", "items": [{"codigo_ean": "...", "descripcion": "...", "cantidad": 1.0, "valor": 0.0}]}. '
@@ -226,8 +231,8 @@ def process_invoice_smart_router(file_obj, file_type, use_paid_gemini=False):
 # ==========================================
 if modulo == "📄 Factura Individual":
     try:
-        st.markdown("<h2>📊 Automatizador con <span style='color: #0284c7;'>Cálculo Directo y Exacto</span></h2>", unsafe_allow_html=True)
-        st.markdown("<p style='color: #64748b;'>Respetando la cantidad comprada y el costo real.</p>", unsafe_allow_html=True)
+        st.markdown("<h2>📊 Automatizador con <span style='color: #0284c7;'>Prioridad a Catálogo Maestro</span></h2>", unsafe_allow_html=True)
+        st.markdown("<p style='color: #64748b;'>Cruce estricto con Catálogo Maestro y exclusión de códigos internos de CND.</p>", unsafe_allow_html=True)
         st.markdown("---")
         render_master_status_banner()
 
@@ -244,7 +249,7 @@ if modulo == "📄 Factura Individual":
         if uploaded_file is not None:
             if st.button("🚀 Procesar y Guardar en Historial"):
                 file_type = getattr(uploaded_file, 'type', 'image/jpeg')
-                with st.spinner("Procesando documento..."):
+                with st.spinner("Procesando documento y cruzando Catálogo Maestro..."):
                     parsed_data, success_msg = process_invoice_smart_router(uploaded_file, file_type, use_paid_gemini=use_gemini_paid_api)
 
                 if success_msg == "QUOTA_EXCEEDED":
@@ -274,7 +279,7 @@ if modulo == "📄 Factura Individual":
                 if not desc_raw: continue
 
                 invoice_ean = str(item.get("codigo_ean") or "")
-                resolved_name, resolved_code = get_strict_ean_code_and_name(desc_raw, invoice_ean)
+                resolved_name, resolved_code = get_strict_ean_code_and_name(desc_raw, invoice_ean, prov_det)
 
                 if resolved_code in assigned_barcodes and resolved_code != "S/C (Sin Codigo)":
                     resolved_code = "S/C (Duplicado - Revisar)"
@@ -317,7 +322,7 @@ if modulo == "📄 Factura Individual":
             st.markdown("---")
 
             if rows_preview:
-                st.markdown("### ✅ Artículos Procesados Exactamente")
+                st.markdown("### ✅ Artículos Procesados con Catálogo Maestro")
                 df_resultado = pd.DataFrame(rows_preview)
                 df_resultado["Código EAN Único"] = df_resultado["Código EAN Único"].astype(str)
                 st.dataframe(df_resultado, use_container_width=True, hide_index=True)
@@ -428,7 +433,7 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
                     if not desc_raw: continue
                     invoice_ean = str(item.get("codigo_ean") or "")
                     prov_det = str(item.get("_prov") or "GENERAL")
-                    resolved_name, resolved_code = get_strict_ean_code_and_name(desc_raw, invoice_ean)
+                    resolved_name, resolved_code = get_strict_ean_code_and_name(desc_raw, invoice_ean, prov_det)
                     
                     if resolved_code in batch_assigned_barcodes and resolved_code != "S/C (Sin Codigo)":
                         resolved_code = "S/C"
