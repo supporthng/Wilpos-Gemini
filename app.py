@@ -155,18 +155,21 @@ def extract_size_token(text):
     return match.group(0).replace(" ", "") if match else None
 
 def get_resolved_barcode(extracted_code, description):
-    cleaned = clean_barcode(extracted_code)
     desc_upper = str(description).strip().upper()
     
-    if cleaned != "S/C (Sin Código)":
-        st.session_state["barcode_memory"][desc_upper] = cleaned
-        return cleaned
-    
+    # REGLA DE ORO 1: Buscar PRIMERO de manera exacta en el Catálogo Maestro o Memoria
     if desc_upper in st.session_state["master_catalog"]:
         return st.session_state["master_catalog"][desc_upper]
     if desc_upper in st.session_state["barcode_memory"]:
         return st.session_state["barcode_memory"][desc_upper]
         
+    cleaned = clean_barcode(extracted_code)
+    # REGLA DE ORO 2: Si el código extraído de la factura es un código de barras real (largo), se usa y se guarda
+    if cleaned != "S/C (Sin Código)" and len(cleaned) > 5:
+        st.session_state["barcode_memory"][desc_upper] = cleaned
+        return cleaned
+    
+    # REGLA DE ORO 3: Búsqueda difusa altamente restrictiva contrastando con el Catálogo Maestro
     target_size = extract_size_token(desc_upper)
     palabras_desc = set(w for w in re.findall(r'\b\w+\b', desc_upper) if len(w) > 2 and w not in ['GALON', 'MIN', 'CON', 'LOS', 'LAS', 'DEL'])
 
@@ -229,7 +232,6 @@ def parse_empaque_from_tamano(tamano_txt, unidad_txt, descripcion_txt=""):
     if "BOT" in u and "CAJA" not in u:
         return 1
         
-    # Extraer empaque de CND (ej: 24/12OZ -> 24, 6/473 -> 6, etc.)
     match_cnd = re.search(r'\b(\d+)\s*/', d)
     if match_cnd:
         return int(match_cnd.group(1))
@@ -242,16 +244,16 @@ def parse_empaque_from_tamano(tamano_txt, unidad_txt, descripcion_txt=""):
 
 def process_invoice_exact_18(file_obj, file_type, use_paid_gemini=False, use_openai_fallback=False):
     prompt_text = (
-        "Analiza esta factura o tiquet con máxima precisión horizontal y vertical. "
+        "Analiza esta factura o tiquet con máxima precisión. "
         "REGLA DE OBRERO ESTRICTA PARA LA DESCRIPCIÓN: En el campo 'descripcion' solo debe figurar el nombre limpio del producto y su presentación/gramaje o empaque (ej: 'BRAHMA LIGHT 24/12OZ', 'GATORADE FRUIT PUNCH 24', 'ALOE PURE PLUS ORIGINAL'). "
-        "Elimina códigos numéricos iniciales o de proveedor (como 92713), manteniendo el nombre comercial claro. "
+        "Elimina códigos numéricos iniciales o de proveedor. "
         "Para cada renglón extrae exactamente: "
-        "1. 'codigo_barras': código de barras oficial si lo trae impreso o el código numérico del producto si no hay otro. "
+        "1. 'codigo_barras': código de barras oficial si lo trae impreso, de lo contrario déjalo vacío o S/C. "
         "2. 'descripcion': nombre limpio y presentación del producto. "
-        "3. 'cantidad': número exacto de piezas/cajas de la columna 'Cant' o 'PC' (ej: 10, 20). "
+        "3. 'cantidad': número exacto de piezas o cajas. "
         "4. 'unidad': 'PC' o 'CAJA' o 'UND' o 'BOT.'. "
-        "5. 'tamano': presentación o desglose exacto (ej: 24/12OZ, 6/473, 24). "
-        "6. 'precio_lista': precio unitario por caja/paquete tal como aparece en la factura. "
+        "5. 'tamano': presentación o desglose exacto. "
+        "6. 'precio_lista': precio unitario. "
         "7. 'valor': monto total neto de la línea. "
         "8. 'descuento_porcentaje': porcentaje de descuento si aplica. "
         "Devuelve un JSON puro bajo la clave 'items': "
@@ -316,7 +318,7 @@ def process_invoice_exact_18(file_obj, file_type, use_paid_gemini=False, use_ope
 # ==========================================
 if modulo == "📄 Factura Individual":
     st.markdown("<h2>📊 Automatizador de Facturas <span style='color: #0284c7;'>(Individual)</span></h2>", unsafe_allow_html=True)
-    st.markdown("<p style='color: #64748b;'>Procesamiento con cálculo correcto de costo unitario por caja/pieza.</p>", unsafe_allow_html=True)
+    st.markdown("<p style='color: #64748b;'>Procesamiento con validación estricta de Catálogo Maestro y costos precisos.</p>", unsafe_allow_html=True)
     st.markdown("---")
 
     st.markdown('<div class="card-container">', unsafe_allow_html=True)
@@ -332,7 +334,7 @@ if modulo == "📄 Factura Individual":
         st.success(f"¡Archivo cargado: {uploaded_file.name}!")
         if st.button("🚀 Procesar Documento"):
             file_type = uploaded_file.type if hasattr(uploaded_file, 'type') else 'image/jpeg'
-            with st.spinner("Procesando y calculando costos unitarios reales..."):
+            with st.spinner("Procesando documento aplicando regla de oro..."):
                 parsed_data, success_msg = process_invoice_exact_18(uploaded_file, file_type, use_paid_gemini=use_gemini_paid_api, use_openai_fallback=use_openai_single)
 
             if success_msg == "QUOTA_EXCEEDED":
@@ -367,7 +369,6 @@ if modulo == "📄 Factura Individual":
                     tamano_txt = str(item.get("tamano") or "")
                     empaque_val = parse_empaque_from_tamano(tamano_txt, unidad_txt, desc)
 
-                    # Si el precio_lista es por caja (ej: CND o Alvarez&Sanchez), calculamos el costo unitario dividiendo entre el empaque
                     if empaque_val > 1 and ("PC" in unidad_txt.upper() or "CAJA" in unidad_txt.upper()):
                         if precio_lista > 0:
                             costo = round(precio_lista / empaque_val, 2)
@@ -385,6 +386,10 @@ if modulo == "📄 Factura Individual":
                             costo = round(val_total / cant_comprada, 2) if cant_comprada > 0 else round(val_total, 2)
                         else:
                             costo = 0.0
+
+                    if costo <= 0:
+                        omitted_items.append({"Item #": idx, "Descripción": desc, "Razón": "Costo cero o inválido"})
+                        continue
 
                     extracted_code = item.get("codigo_barras")
                     resolved_code = get_resolved_barcode(extracted_code, desc)
@@ -472,7 +477,7 @@ if modulo == "📄 Factura Individual":
 # ==========================================
 elif modulo == "📂 Múltiples Facturas (Lote)":
     st.markdown("<h2>📂 Procesador por <span style='color: #0284c7;'>Lotes y Consolidación Oficial</span></h2>", unsafe_allow_html=True)
-    st.markdown("<p style='color: #64748b;'>Procesa múltiples facturas con cálculo correcto de costos unitarios.</p>", unsafe_allow_html=True)
+    st.markdown("<p style='color: #64748b;'>Procesa múltiples facturas aplicando la regla de oro de códigos oficiales.</p>", unsafe_allow_html=True)
     st.markdown("---")
 
     st.markdown('<div class="card-container">', unsafe_allow_html=True)
@@ -608,6 +613,9 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
                         costo = round(val_total / cant_comprada, 2) if cant_comprada > 0 else round(val_total, 2)
                     else:
                         costo = 0.0
+
+                if costo <= 0:
+                    continue
 
                 desc_pct = safe_float(item.get("descuento_porcentaje") or 0)
                 if empaque_val == 1:
