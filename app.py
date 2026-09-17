@@ -154,53 +154,35 @@ def extract_size_token(text):
     match = re.search(r'\b(?:\d+\s*(?:CL|ML|L|LT|OZ|G|GR)|GALON)\b', str(text).upper())
     return match.group(0).replace(" ", "") if match else None
 
-def get_resolved_barcode(extracted_code, description):
+def get_resolved_barcode_and_name(description):
+    """REGLA DE ORO: Busca obligatoriamente en el Catálogo Maestro y Memoria. 
+       Devuelve (Nombre Oficial Unificado, Código Oficial EAN)."""
     desc_upper = str(description).strip().upper()
     
-    # REGLA DE ORO 1: Buscar PRIMERO de manera exacta en el Catálogo Maestro o Memoria
+    # 1. Búsqueda exacta en Catálogo Maestro
     if desc_upper in st.session_state["master_catalog"]:
-        return st.session_state["master_catalog"][desc_upper]
+        return desc_upper, st.session_state["master_catalog"][desc_upper]
+        
+    # 2. Búsqueda exacta en Memoria
     if desc_upper in st.session_state["barcode_memory"]:
-        return st.session_state["barcode_memory"][desc_upper]
+        return desc_upper, st.session_state["barcode_memory"][desc_upper]
         
-    cleaned = clean_barcode(extracted_code)
-    # REGLA DE ORO 2: Si el código extraído de la factura es un código de barras real (largo), se usa y se guarda
-    if cleaned != "S/C (Sin Código)" and len(cleaned) > 5:
-        st.session_state["barcode_memory"][desc_upper] = cleaned
-        return cleaned
-    
-    # REGLA DE ORO 3: Búsqueda difusa altamente restrictiva contrastando con el Catálogo Maestro
-    target_size = extract_size_token(desc_upper)
-    palabras_desc = set(w for w in re.findall(r'\b\w+\b', desc_upper) if len(w) > 2 and w not in ['GALON', 'MIN', 'CON', 'LOS', 'LAS', 'DEL'])
-
-    def strict_match_filter(keys_list):
-        validos = []
-        for k in keys_list:
-            k_upper = k.upper()
-            if target_size:
-                norm_target = target_size.replace("5CL", "50ML")
-                norm_k = k_upper.replace("5CL", "50ML")
-                if norm_target not in norm_k:
-                    continue
-            palabras_k = set(w for w in re.findall(r'\b\w+\b', k_upper) if len(w) > 2)
-            interseccion = palabras_desc.intersection(palabras_k)
-            if len(interseccion) > 0:
-                validos.append(k)
-        return validos
-
-    master_keys = strict_match_filter(list(st.session_state["master_catalog"].keys()))
+    # 3. Búsqueda difusa altamente restrictiva contrastando con el Catálogo Maestro
+    master_keys = list(st.session_state["master_catalog"].keys())
     if master_keys:
-        coincidencias = difflib.get_close_matches(desc_upper, master_keys, n=1, cutoff=0.55)
+        coincidencias = difflib.get_close_matches(desc_upper, master_keys, n=1, cutoff=0.45)
         if coincidencias:
-            return st.session_state["master_catalog"][coincidencias[0]]
+            matched_name = coincidencias[0]
+            return matched_name, st.session_state["master_catalog"][matched_name]
             
-    memory_keys = strict_match_filter(list(st.session_state["barcode_memory"].keys()))
+    memory_keys = list(st.session_state["barcode_memory"].keys())
     if memory_keys:
-        coincidencias_mem = difflib.get_close_matches(desc_upper, memory_keys, n=1, cutoff=0.55)
+        coincidencias_mem = difflib.get_close_matches(desc_upper, memory_keys, n=1, cutoff=0.45)
         if coincidencias_mem:
-            return st.session_state["barcode_memory"][coincidencias_mem[0]]
+            matched_name = coincidencias_mem[0]
+            return matched_name, st.session_state["barcode_memory"][matched_name]
         
-    return "S/C (Sin Código)"
+    return desc_upper, "S/C (Sin Código)"
 
 # ==========================================
 # MENÚ Y CONFIGURACIÓN LATERAL
@@ -248,16 +230,15 @@ def process_invoice_exact_18(file_obj, file_type, use_paid_gemini=False, use_ope
         "REGLA DE OBRERO ESTRICTA PARA LA DESCRIPCIÓN: En el campo 'descripcion' solo debe figurar el nombre limpio del producto y su presentación/gramaje o empaque (ej: 'BRAHMA LIGHT 24/12OZ', 'GATORADE FRUIT PUNCH 24', 'ALOE PURE PLUS ORIGINAL'). "
         "Elimina códigos numéricos iniciales o de proveedor. "
         "Para cada renglón extrae exactamente: "
-        "1. 'codigo_barras': código de barras oficial si lo trae impreso, de lo contrario déjalo vacío o S/C. "
-        "2. 'descripcion': nombre limpio y presentación del producto. "
-        "3. 'cantidad': número exacto de piezas o cajas. "
-        "4. 'unidad': 'PC' o 'CAJA' o 'UND' o 'BOT.'. "
-        "5. 'tamano': presentación o desglose exacto. "
-        "6. 'precio_lista': precio unitario. "
-        "7. 'valor': monto total neto de la línea. "
-        "8. 'descuento_porcentaje': porcentaje de descuento si aplica. "
+        "1. 'descripcion': nombre limpio y presentación del producto. "
+        "2. 'cantidad': número exacto de piezas o cajas. "
+        "3. 'unidad': 'PC' or 'CAJA' or 'UND' or 'BOT.'. "
+        "4. 'tamano': presentación o desglose exacto. "
+        "5. 'precio_lista': precio unitario. "
+        "6. 'valor': monto total neto de la línea. "
+        "7. 'descuento_porcentaje': porcentaje de descuento si aplica. "
         "Devuelve un JSON puro bajo la clave 'items': "
-        '{"items": [{"codigo_barras": "...", "descripcion": "...", "cantidad": 10, "unidad": "PC", "tamano": "24/12OZ", "precio_lista": 2048.79, "valor": 20487.85, "descuento_porcentaje": 0.0}]}. '
+        '{"items": [{"descripcion": "...", "cantidad": 10, "unidad": "PC", "tamano": "24/12OZ", "precio_lista": 2048.79, "valor": 20487.85, "descuento_porcentaje": 0.0}]}. '
         "Respuesta JSON pura sin texto adicional."
     )
 
@@ -318,7 +299,7 @@ def process_invoice_exact_18(file_obj, file_type, use_paid_gemini=False, use_ope
 # ==========================================
 if modulo == "📄 Factura Individual":
     st.markdown("<h2>📊 Automatizador de Facturas <span style='color: #0284c7;'>(Individual)</span></h2>", unsafe_allow_html=True)
-    st.markdown("<p style='color: #64748b;'>Procesamiento con validación estricta de Catálogo Maestro y costos precisos.</p>", unsafe_allow_html=True)
+    st.markdown("<p style='color: #64748b;'>Procesamiento con regla de oro estricta de Catálogo Maestro y costos precisos.</p>", unsafe_allow_html=True)
     st.markdown("---")
 
     st.markdown('<div class="card-container">', unsafe_allow_html=True)
@@ -334,7 +315,7 @@ if modulo == "📄 Factura Individual":
         st.success(f"¡Archivo cargado: {uploaded_file.name}!")
         if st.button("🚀 Procesar Documento"):
             file_type = uploaded_file.type if hasattr(uploaded_file, 'type') else 'image/jpeg'
-            with st.spinner("Procesando documento aplicando regla de oro..."):
+            with st.spinner("Procesando documento aplicando Regla de Oro..."):
                 parsed_data, success_msg = process_invoice_exact_18(uploaded_file, file_type, use_paid_gemini=use_gemini_paid_api, use_openai_fallback=use_openai_single)
 
             if success_msg == "QUOTA_EXCEEDED":
@@ -357,59 +338,38 @@ if modulo == "📄 Factura Individual":
                         omitted_items.append({"Item #": idx, "Descripción": str(item), "Razón": "Estructura inválida"})
                         continue
                     
-                    desc = str(item.get("descripcion") or item.get("nombre") or "").strip()
-                    if not desc:
+                    desc_raw = str(item.get("descripcion") or item.get("nombre") or "").strip()
+                    if not desc_raw:
                         omitted_items.append({"Item #": idx, "Descripción": "(Sin descripción)", "Razón": "Línea sin descripción"})
                         continue
 
+                    # APLICAR REGLA DE ORO: Resolver nombre oficial y código EAN oficial del Catálogo Maestro
+                    resolved_name, resolved_code = get_resolved_barcode_and_name(desc_raw)
+
                     cant_comprada = safe_int(item.get("cantidad") or 1, 1)
-                    precio_lista = safe_float(item.get("precio_lista") or 0)
+                    val_neto_linea = safe_float(item.get("valor") or 0)
                     
                     unidad_txt = str(item.get("unidad") or "PC")
                     tamano_txt = str(item.get("tamano") or "")
-                    empaque_val = parse_empaque_from_tamano(tamano_txt, unidad_txt, desc)
+                    empaque_val = parse_empaque_from_tamano(tamano_txt, unidad_txt, resolved_name)
 
                     if empaque_val > 1 and ("PC" in unidad_txt.upper() or "CAJA" in unidad_txt.upper()):
-                        if precio_lista > 0:
-                            costo = round(precio_lista / empaque_val, 2)
-                        elif item.get("valor"):
-                            val_total = safe_float(item.get("valor"))
-                            total_unidades = cant_comprada * empaque_val
-                            costo = round(val_total / total_unidades, 2) if total_unidades > 0 else round(val_total, 2)
-                        else:
-                            costo = 0.0
+                        total_unidades = cant_comprada * empaque_val
+                        costo = round(val_neto_linea / total_unidades, 2) if total_unidades > 0 else 0.0
                     else:
-                        if precio_lista > 0:
-                            costo = round(precio_lista, 2)
-                        elif item.get("valor"):
-                            val_total = safe_float(item.get("valor"))
-                            costo = round(val_total / cant_comprada, 2) if cant_comprada > 0 else round(val_total, 2)
-                        else:
-                            costo = 0.0
+                        total_unidades = cant_comprada
+                        costo = round(val_neto_linea / cant_comprada, 2) if cant_comprada > 0 else 0.0
 
                     if costo <= 0:
-                        omitted_items.append({"Item #": idx, "Descripción": desc, "Razón": "Costo cero o inválido"})
+                        omitted_items.append({"Item #": idx, "Descripción": resolved_name, "Razón": "Costo cero o inválido"})
                         continue
 
-                    extracted_code = item.get("codigo_barras")
-                    resolved_code = get_resolved_barcode(extracted_code, desc)
-
                     desc_pct = safe_float(item.get("descuento_porcentaje") or 0)
-                    
-                    importe_bruto = (precio_lista if (empaque_val > 1 and "PC" in unidad_txt.upper()) else costo) * cant_comprada
-                    if "PC" in unidad_txt.upper() and empaque_val > 1 and item.get("valor"):
-                        importe_bruto = safe_float(item.get("valor"))
-
+                    importe_bruto = val_neto_linea
                     descuento_linea = importe_bruto * (desc_pct / 100.0)
-                    importe_neto_linea = importe_bruto - descuento_linea
                     
                     calc_subtotal += importe_bruto
                     calc_descuento_total += descuento_linea
-
-                    if empaque_val == 1:
-                        total_unidades_linea = cant_comprada
-                    else:
-                        total_unidades_linea = cant_comprada * empaque_val
 
                     raw_pv = (costo * multiplicador_ganancia) * 1.18
                     precio_venta = round_to_nearest_5(raw_pv)
@@ -417,15 +377,15 @@ if modulo == "📄 Factura Individual":
                     rows_preview.append({
                         "No.": idx,
                         "Código Oficial POS": str(resolved_code),
-                        "Nombre Maestro / Artículo": desc,
+                        "Nombre Maestro / Artículo": resolved_name,
                         "Cant. Compra": cant_comprada,
                         "Unidad": unidad_txt,
                         "Tamaño/Empaque": tamano_txt,
                         "Empaque Num": empaque_val,
-                        "Stock Total": total_unidades_linea,
+                        "Stock Total": total_unidades,
                         "Costo Unitario": costo,
                         "Precio Venta": precio_venta,
-                        "Estado": "Catálogo Maestro / Memoria" if resolved_code != clean_barcode(extracted_code) else "Directo Factura"
+                        "Estado": "Catálogo Maestro / Memoria" if resolved_code != "S/C (Sin Código)" else "Sin Código Maestro"
                     })
 
                 calc_neto_gravado = calc_subtotal - calc_descuento_total
@@ -477,7 +437,7 @@ if modulo == "📄 Factura Individual":
 # ==========================================
 elif modulo == "📂 Múltiples Facturas (Lote)":
     st.markdown("<h2>📂 Procesador por <span style='color: #0284c7;'>Lotes y Consolidación Oficial</span></h2>", unsafe_allow_html=True)
-    st.markdown("<p style='color: #64748b;'>Procesa múltiples facturas aplicando la regla de oro de códigos oficiales.</p>", unsafe_allow_html=True)
+    st.markdown("<p style='color: #64748b;'>Procesa múltiples facturas aplicando la Regla de Oro de códigos oficiales.</p>", unsafe_allow_html=True)
     st.markdown("---")
 
     st.markdown('<div class="card-container">', unsafe_allow_html=True)
@@ -582,54 +542,36 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
                 if not isinstance(item, dict):
                     continue
                 
-                desc = str(item.get("descripcion") or "").strip()
-                if not desc:
+                desc_raw = str(item.get("descripcion") or "").strip()
+                if not desc_raw:
                     continue
 
-                extracted_code = item.get("codigo_barras")
-                resolved_code = get_resolved_barcode(extracted_code, desc)
+                resolved_name, resolved_code = get_resolved_barcode_and_name(desc_raw)
                 
                 cant_comprada = safe_int(item.get("cantidad") or 1, 1)
-                precio_lista = safe_float(item.get("precio_lista") or 0)
+                val_neto_linea = safe_float(item.get("valor") or 0)
                 
                 unidad_txt = str(item.get("unidad") or "PC")
                 tamano_txt = str(item.get("tamano") or "")
-                empaque_val = parse_empaque_from_tamano(tamano_txt, unidad_txt, desc)
+                empaque_val = parse_empaque_from_tamano(tamano_txt, unidad_txt, resolved_name)
 
                 if empaque_val > 1 and ("PC" in unidad_txt.upper() or "CAJA" in unidad_txt.upper()):
-                    if precio_lista > 0:
-                        costo = round(precio_lista / empaque_val, 2)
-                    elif item.get("valor"):
-                        val_total = safe_float(item.get("valor"))
-                        total_unidades = cant_comprada * empaque_val
-                        costo = round(val_total / total_unidades, 2) if total_unidades > 0 else round(val_total, 2)
-                    else:
-                        costo = 0.0
+                    total_unidades = cant_comprada * empaque_val
+                    costo = round(val_neto_linea / total_unidades, 2) if total_unidades > 0 else 0.0
                 else:
-                    if precio_lista > 0:
-                        costo = round(precio_lista, 2)
-                    elif item.get("valor"):
-                        val_total = safe_float(item.get("valor"))
-                        costo = round(val_total / cant_comprada, 2) if cant_comprada > 0 else round(val_total, 2)
-                    else:
-                        costo = 0.0
+                    total_unidades = cant_comprada
+                    costo = round(val_neto_linea / cant_comprada, 2) if cant_comprada > 0 else 0.0
 
                 if costo <= 0:
                     continue
 
-                desc_pct = safe_float(item.get("descuento_porcentaje") or 0)
-                if empaque_val == 1:
-                    total_unidades_linea = cant_comprada
-                else:
-                    total_unidades_linea = cant_comprada * empaque_val
-
                 raw_pv = (costo * multiplicador_ganancia) * 1.18
                 precio_venta = round_to_nearest_5(raw_pv)
-                stock_val = total_unidades_linea
+                stock_val = total_unidades
                 total_unidades_inventario += stock_val
 
                 processed_rows.append({
-                    "Nombre": desc,
+                    "Nombre": resolved_name,
                     "Código Barra": str(resolved_code),
                     "Categoría": "General", "Tipo": "producto",
                     "Precio Venta": precio_venta, "Costo": costo,
