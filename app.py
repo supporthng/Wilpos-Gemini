@@ -16,7 +16,7 @@ import pandas as pd
 # CONFIGURACIÓN DE LA PÁGINA Y ESTILOS CSS
 # ==========================================
 st.set_page_config(
-    page_title="WilPOS - Automatizador Inteligente", 
+    page_title="WilPOS - Automatizador Inteligente con Memoria de Proveedores", 
     page_icon="⚡", 
     layout="wide",
     initial_sidebar_state="expanded"
@@ -109,6 +109,7 @@ ACTIVE_OPENAI_KEY = next((k for k in openai_key_candidates if k and str(k).strip
 BARCODE_MEMORY_FILE = "codigos_escaneados_memoria.json"
 MASTER_CATALOG_FILE = "catalogo_maestro_sistema.json"
 MASTER_META_FILE = "catalogo_maestro_meta.json"
+SUPPLIER_MEMORY_FILE = "proveedores_formatos_memoria.json"
 
 def load_json_file(filepath):
     data = {}
@@ -128,14 +129,40 @@ def save_json_file(filepath, data):
         pass
 
 if "barcode_memory" not in st.session_state:
-    mem_data = load_json_file(BARCODE_MEMORY_FILE)
-    st.session_state["barcode_memory"] = mem_data
+    st.session_state["barcode_memory"] = load_json_file(BARCODE_MEMORY_FILE)
 
 if "master_catalog" not in st.session_state:
     st.session_state["master_catalog"] = load_json_file(MASTER_CATALOG_FILE)
 
 if "master_meta" not in st.session_state:
     st.session_state["master_meta"] = load_json_file(MASTER_META_FILE)
+
+# Inicialización y Persistencia de la Memoria de Proveedores
+if "supplier_memory" not in st.session_state:
+    loaded_suppliers = load_json_file(SUPPLIER_MEMORY_FILE)
+    if not loaded_suppliers:
+        loaded_suppliers = {
+            "PRICESMART": {
+                "nombre": "PRICESMART",
+                "formato_codigo": "codigo_item_numerico",
+                "regla_empaque": "Unidades sueltas o empaques indicados en descripción/tamaño.",
+                "descripcion": "Facturas estilo tiquet, con códigos numéricos de ítem a la izquierda y descripciones literales sin alteración."
+            },
+            "GONZALEZ CUESTA": {
+                "nombre": "GONZALEZ CUESTA",
+                "formato_codigo": "ean_13_digitos_abajo_sap",
+                "regla_empaque": "Multiplicación obligatoria de Cajas (CAJ) por unidades de la UMV (ej: CAJ / 12 PZA = x12).",
+                "descripcion": "Facturas de crédito fiscal con código SAP corto arriba y código de barras EAN largo de 13 dígitos abajo."
+            },
+            "AD ROYAL LICOR": {
+                "nombre": "AD ROYAL LICOR",
+                "formato_codigo": "ean_13_digitos_abajo_sap",
+                "regla_empaque": "Multiplicación obligatoria de Cajas (CAJ) por unidades de la UMV (ej: CAJ / 12 PZA = x12).",
+                "descripcion": "Facturas de crédito fiscal formales con doble código (SAP / EAN) en columna izquierda."
+            }
+        }
+        save_json_file(SUPPLIER_MEMORY_FILE, loaded_suppliers)
+    st.session_state["supplier_memory"] = loaded_suppliers
 
 def save_master_to_file():
     save_json_file(MASTER_CATALOG_FILE, st.session_state["master_catalog"])
@@ -145,16 +172,18 @@ def save_meta_to_file(timestamp_str, count):
     st.session_state["master_meta"] = meta
     save_json_file(MASTER_META_FILE, meta)
 
+def save_supplier_memory():
+    save_json_file(SUPPLIER_MEMORY_FILE, st.session_state["supplier_memory"])
+
 def render_master_status_banner():
     master_dict = st.session_state["master_catalog"]
     meta = st.session_state.get("master_meta", {})
+    suppliers = st.session_state.get("supplier_memory", {})
     total_prod = len(master_dict)
+    total_supp = len(suppliers)
     ultima_act = meta.get("ultima_actualizacion", "Desconocida")
 
-    if total_prod > 0:
-        st.success(f"🟢 **Catálogo Maestro Activo en el Sistema** | Productos cargados: **{total_prod:,}** | 🕒 Última actualización: **{ultima_act}**")
-    else:
-        st.error(f"🔴 **Catálogo Maestro Vacío** | No hay productos cargados en el sistema. Ve a **'📁 Actualizar Catálogo Maestro'** para registrarlo.")
+    st.success(f"🟢 **WilPOS Activo** | Catálogo: **{total_prod:,}** prods | 🏢 Proveedores Registrados: **{total_supp}** | 🕒 Última act: **{ultima_act}**")
 
 def safe_float(val, default=0.0):
     try:
@@ -171,7 +200,7 @@ def safe_int(val, default=1):
 def round_to_nearest_5(x):
     return float(round(round(x / 5) * 5))
 
-def clean_barcode(code_val):
+def clean_code(code_val):
     if not code_val:
         return "S/C (Sin Código)"
     s_val = str(code_val).strip()
@@ -181,35 +210,46 @@ def clean_barcode(code_val):
         return "S/C (Sin Código)"
     return s_val
 
-def get_adaptive_barcode_and_name(description, invoice_code=""):
-    """Buscador adaptativo que respeta el código detectado en el proveedor y contrasta con catálogo maestro/memoria."""
+def get_resolved_code_and_name(description, invoice_code=""):
     if invoice_code and str(invoice_code).strip() not in ["", "nan", "None", "S/C"]:
-        return str(description).strip().upper(), clean_barcode(invoice_code)
+        return str(description).strip().upper(), clean_code(invoice_code)
 
     desc_clean = str(description).strip().upper()
     master = st.session_state["master_catalog"]
     memory = st.session_state["barcode_memory"]
     
     if desc_clean in master:
-        return desc_clean, clean_barcode(master[desc_clean])
+        return desc_clean, clean_code(master[desc_clean])
     if desc_clean in memory:
-        return desc_clean, clean_barcode(memory[desc_clean])
+        return desc_clean, clean_code(memory[desc_clean])
         
     master_keys = list(master.keys())
     if master_keys:
         coincidencias = difflib.get_close_matches(desc_clean, master_keys, n=1, cutoff=0.80)
         if coincidencias:
             matched_name = coincidencias[0]
-            return desc_clean, clean_barcode(master[matched_name])
+            return desc_clean, clean_code(master[matched_name])
             
     return desc_clean, "S/C (Sin Código)"
 
-def parse_empaque_adaptive(umv_txt, descripcion_txt="", tamano_txt=""):
+def parse_empaque_by_supplier(supplier_name, umv_txt, descripcion_txt=""):
     u = str(umv_txt).strip().upper()
     d = str(descripcion_txt).strip().upper()
-    t = str(tamano_txt).strip().upper()
-    combined = d + " " + t + " " + u
+    combined = d + " " + u
     
+    # Proveedores formales con cajas explícitas (González Cuesta / Ad Royal Licor)
+    if any(k in supplier_name for k in ["GONZALEZ", "ROYAL", "CUESTA"]):
+        match_pza = re.search(r'(\d+)\s*PZA', combined)
+        if match_pza:
+            return int(match_pza.group(1))
+        if "CAJ" in u or "CAJA" in u:
+            if "12" in combined: return 12
+            if "6" in combined: return 6
+            if "24" in combined: return 24
+            if "48" in combined: return 48
+        return 1
+
+    # Regla general / PriceSmart
     match_pza = re.search(r'(\d+)\s*PZA', combined)
     if match_pza:
         return int(match_pza.group(1))
@@ -226,96 +266,100 @@ def parse_empaque_adaptive(umv_txt, descripcion_txt="", tamano_txt=""):
         if "24" in combined: return 24
         if "48" in combined: return 48
 
-    if "BOT" in u or "UND" in u or "UNIDAD" in u or "EA" in u:
-        return 1
-
     return 1
 
 # ==========================================
 # MENÚ Y CONFIGURACIÓN LATERAL
 # ==========================================
 st.sidebar.markdown("<h3 style='color: #0284c7; text-align: center;'>⚡ WilPOS</h3>", unsafe_allow_html=True)
-st.sidebar.markdown("<p style='text-align: center; color: #64748b; font-size: 0.8rem;'>Automatizador Inteligente</p>", unsafe_allow_html=True)
+st.sidebar.markdown("<p style='text-align: center; color: #64748b; font-size: 0.8rem;'>Memoria Inteligente de Proveedores</p>", unsafe_allow_html=True)
 st.sidebar.markdown("---")
 
 modulo = st.sidebar.radio(
     "Menú de Navegación",
-    ["📄 Factura Individual", "📂 Múltiples Facturas (Lote)", "📁 Actualizar Catálogo Maestro", "📋 Ver Códigos Almacenados"]
+    ["📄 Factura Individual", "📂 Múltiples Facturas (Lote)", "📁 Actualizar Catálogo Maestro", "🏢 Perfiles de Proveedores", "📋 Códigos Almacenados"]
 )
 
 st.sidebar.markdown("---")
 st.sidebar.markdown("### ⚙️ Configuración de API")
 use_gemini_paid_api = st.sidebar.checkbox("💎 Usar Gemini Paid (API de Pago)", value=bool(ACTIVE_GEMINI_PAID_KEY))
 
-def process_invoice_adaptive(file_obj, file_type, use_paid_gemini=False, use_openai_fallback=False):
-    prompt_text = (
-        "Analiza esta factura de proveedor con máxima precisión, adaptándote a la estructura visual del documento. "
-        "REGLA ADAPTATIVA DE CÓDIGO: Extrae el identificador de producto principal que viene en la línea del renglón "
-        "(priorizando código de barras EAN largo de 13 dígitos si existe, o código SAP/artículo si es el formato del proveedor). "
-        "Para cada renglón extrae rigurosamente: "
-        "1. 'codigo_identificador': el código numérico o identificador del producto en la factura. "
-        "2. 'descripcion': texto literal exacto del producto impreso en la factura (sin inventar ni alterar nombres). "
-        "3. 'cantidad': cantidad numérica de cajas o unidades compradas. "
-        "4. 'umv': unidad de medida de venta o presentación (ej: 'CAJ / 12 PZA', 'EA', 'BOT.'). "
-        "5. 'tamano': tamaño o gramaje si lo indica. "
-        "6. 'valor': monto total neto de la línea. "
-        "Devuelve un JSON puro bajo la clave 'items': "
-        '{"items": [{"codigo_identificador": "7804300150082", "descripcion": "SANTA HELENA MERLOT 75 CL VEB19056", "cantidad": 1.0, "umv": "CAJ / 12 PZA", "tamano": "75 CL", "valor": 4814.40}]}. '
-        "Respuesta JSON pura sin texto adicional."
+def process_invoice_smart_router(file_obj, file_type, use_paid_gemini=False):
+    prompt_detect = (
+        "Identifica el nombre comercial del proveedor en esta factura. "
+        "Devuelve un JSON puro: {'proveedor': 'NOMBRE_PROVEEDOR'}"
     )
 
     active_key = ACTIVE_GEMINI_PAID_KEY if use_paid_gemini else ACTIVE_GEMINI_FREE_KEY
     if not active_key and use_paid_gemini:
         active_key = ACTIVE_GEMINI_FREE_KEY
 
-    if not active_key and use_openai_fallback:
-        use_openai_fallback = True
+    genai.configure(api_key=active_key if active_key else ACTIVE_GEMINI_FREE_KEY)
+    model = genai.GenerativeModel('gemini-3.6-flash')
+    
+    file_obj.seek(0)
+    file_bytes = file_obj.read()
+    
+    if "pdf" in file_type.lower():
+        image_input = {"mime_type": "application/pdf", "data": file_bytes}
+    else:
+        image_input = Image.open(io.BytesIO(file_bytes))
 
-    if use_openai_fallback and not active_key:
-        if not ACTIVE_OPENAI_KEY:
-            return None, "Faltan claves API válidas (Gemini / OpenAI)"
-        import base64
-        file_obj.seek(0)
-        file_bytes = file_obj.read()
-        b64_data = base64.b64encode(file_bytes).decode('utf-8')
-        data_url = f"data:application/pdf;base64,{b64_data}" if "pdf" in file_type.lower() else f"data:image/jpeg;base64,{b64_data}"
-        try:
-            client = OpenAI(api_key=ACTIVE_OPENAI_KEY)
-            response = client.chat.completions.create(
-                model="gpt-4o",
-                messages=[{"role": "user", "content": [{"type": "text", "text": prompt_text}, {"type": "image_url", "image_url": {"url": data_url}}]}],
-                max_tokens=4000
-            )
-            raw_text = response.choices[0].message.content.strip()
-            if raw_text.startswith("```json"): raw_text = raw_text[7:]
-            if raw_text.endswith("```"): raw_text = raw_text[:-3]
-            return json.loads(raw_text.strip()), "✅ Éxito (OpenAI gpt-4o)"
-        except Exception as e:
-            return None, str(e)
+    supplier_detected = "GENERAL"
+    try:
+        resp_det = model.generate_content([image_input, prompt_detect])
+        txt_det = resp_det.text.strip()
+        if txt_det.startswith("```json"): txt_det = txt_det[7:]
+        if txt_det.endswith("```"): txt_det = txt_det[:-3]
+        j_det = json.loads(txt_det.strip())
+        supplier_detected = str(j_det.get("proveedor") or "GENERAL").upper().strip()
+    except Exception:
+        supplier_detected = "GENERAL"
+
+    is_formal_supplier = any(k in supplier_detected for k in ["GONZALEZ", "ROYAL", "CUESTA"])
+    
+    if is_formal_supplier:
+        prompt_main = (
+            "Analiza esta factura formal de proveedor con doble código en la izquierda. "
+            "REGLA: Extrae estrictamente el **código de barras EAN (el número largo de 13 dígitos)** que está debajo del SAP. "
+            "Extrae un JSON bajo la clave 'items': "
+            '{"proveedor": "' + supplier_detected + '", "items": [{"codigo_producto": "7804300150082", "descripcion": "...", "cantidad": 1.0, "umv": "CAJ / 12 PZA", "valor": 0.0}]}. '
+            "Respuesta JSON pura sin texto adicional."
+        )
+    else:
+        prompt_main = (
+            "Analiza esta factura o tiquet de proveedor. "
+            "REGLA: Copia el nombre literal exacto del producto y su código de ítem principal. "
+            "Extrae un JSON bajo la clave 'items': "
+            '{"proveedor": "' + supplier_detected + '", "items": [{"codigo_producto": "...", "descripcion": "...", "cantidad": 1.0, "umv": "...", "valor": 0.0}]}. '
+            "Respuesta JSON pura sin texto adicional."
+        )
 
     for intento in range(2):
         try:
-            genai.configure(api_key=active_key)
-            model = genai.GenerativeModel('gemini-3.6-flash')
             file_obj.seek(0)
-            file_bytes = file_obj.read()
-            
-            if "pdf" in file_type.lower():
-                image_input = {"mime_type": "application/pdf", "data": file_bytes}
-            else:
-                image_input = Image.open(io.BytesIO(file_bytes))
-
-            response = model.generate_content([image_input, prompt_text])
+            response = model.generate_content([image_input, prompt_main])
             raw_text = response.text.strip()
             if raw_text.startswith("```json"): raw_text = raw_text[7:]
             if raw_text.endswith("```"): raw_text = raw_text[:-3]
-            return json.loads(raw_text.strip()), "✅ Éxito"
+            
+            parsed = json.loads(raw_text.strip())
+            
+            # Registrar automáticamente en memoria si el proveedor es nuevo
+            supplier_memory = st.session_state["supplier_memory"]
+            if supplier_detected not in supplier_memory and supplier_detected != "GENERAL":
+                supplier_memory[supplier_detected] = {
+                    "nombre": supplier_detected,
+                    "formato_codigo": "adaptativo_auto_aprendido",
+                    "regla_empaque": "Detección inteligente según UMV y empaques.",
+                    "descripcion": "Proveedor registrado automáticamente por el sistema."
+                }
+                save_supplier_memory()
+
+            return parsed, f"✅ Éxito ({supplier_detected})"
         except Exception as e:
             last_err = str(e)
             if "429" in last_err or "quota" in last_err.lower():
-                if not use_paid_gemini and ACTIVE_GEMINI_PAID_KEY:
-                    active_key = ACTIVE_GEMINI_PAID_KEY
-                    continue
                 return None, "QUOTA_EXCEEDED"
             time.sleep(1)
             
@@ -326,8 +370,8 @@ def process_invoice_adaptive(file_obj, file_type, use_paid_gemini=False, use_ope
 # ==========================================
 if modulo == "📄 Factura Individual":
     try:
-        st.markdown("<h2>📊 Automatizador de Facturas <span style='color: #0284c7;'>(Individual)</span></h2>", unsafe_allow_html=True)
-        st.markdown("<p style='color: #64748b;'>Procesamiento adaptativo por proveedor con cálculo exacto.</p>", unsafe_allow_html=True)
+        st.markdown("<h2>📊 Automatizador con <span style='color: #0284c7;'>Memoria por Proveedor</span></h2>", unsafe_allow_html=True)
+        st.markdown("<p style='color: #64748b;'>El sistema detecta el proveedor y aplica su regla específica guardada.</p>", unsafe_allow_html=True)
         st.markdown("---")
 
         render_master_status_banner()
@@ -337,29 +381,27 @@ if modulo == "📄 Factura Individual":
         with c_col1:
             margen_ganancia = st.number_input("⚙️ Ganancia (%)", min_value=0.0, max_value=500.0, value=25.0, step=1.0)
         
-        use_openai_single = st.checkbox("🤖 Permitir OpenAI como respaldo final si falla Gemini", value=False)
         uploaded_file = st.file_uploader("📂 Sube tu factura o tiquet (PDF o Imagen)", type=["pdf", "png", "jpg", "jpeg"], key="single_file")
         st.markdown('</div>', unsafe_allow_html=True)
 
         if uploaded_file is not None:
             st.success(f"¡Archivo cargado: {uploaded_file.name}!")
-            if st.button("🚀 Procesar Documento"):
+            if st.button("🚀 Procesar Factura"):
                 file_type = getattr(uploaded_file, 'type', 'image/jpeg')
-                with st.spinner("Procesando documento con adaptador de proveedor..."):
-                    parsed_data, success_msg = process_invoice_adaptive(uploaded_file, file_type, use_paid_gemini=use_gemini_paid_api, use_openai_fallback=use_openai_single)
+                with st.spinner("Procesando con perfil de proveedor detectado..."):
+                    parsed_data, success_msg = process_invoice_smart_router(uploaded_file, file_type, use_paid_gemini=use_gemini_paid_api)
 
                 if success_msg == "QUOTA_EXCEEDED":
                     st.error("⚠️ **Límite de cuota alcanzado.** Activa la casilla de 'Gemini Paid (API de Pago)' en la barra lateral.")
                 elif not parsed_data or not isinstance(parsed_data, dict):
-                    st.error(f"⚠️ Error al procesar el documento con la IA: {success_msg}")
+                    st.error(f"⚠️ Error al procesar el documento: {success_msg}")
                 else:
-                    st.success(success_msg)
+                    prov_detectado = parsed_data.get("proveedor", "GENERAL")
+                    st.success(f"{success_msg} | 🏢 Proveedor: **{prov_detectado}**")
                     
                     data_items = parsed_data.get("items", [])
                     rows_preview = []
-                    omitted_items = []
                     multiplicador_ganancia = 1 + (margen_ganancia / 100.0)
-
                     calc_subtotal = 0.0
 
                     for idx, item in enumerate(data_items, start=1):
@@ -370,15 +412,14 @@ if modulo == "📄 Factura Individual":
                         if not desc_raw:
                             continue
 
-                        invoice_code = str(item.get("codigo_identificador") or "")
-                        resolved_name, resolved_code = get_adaptive_barcode_and_name(desc_raw, invoice_code)
+                        invoice_code = str(item.get("codigo_producto") or "")
+                        resolved_name, resolved_code = get_resolved_code_and_name(desc_raw, invoice_code)
 
                         cant_comprada = safe_float(item.get("cantidad") or 1, 1.0)
                         val_neto_linea = safe_float(item.get("valor") or 0)
                         umv_txt = str(item.get("umv") or "")
-                        tamano_txt = str(item.get("tamano") or "")
                         
-                        empaque_val = parse_empaque_adaptive(umv_txt, resolved_name, tamano_txt)
+                        empaque_val = parse_empaque_by_supplier(prov_detectado, umv_txt, resolved_name)
                         total_unidades = int(cant_comprada * empaque_val)
 
                         costo = round(val_neto_linea / total_unidades, 2) if total_unidades > 0 else 0.0
@@ -386,13 +427,12 @@ if modulo == "📄 Factura Individual":
                             continue
 
                         calc_subtotal += val_neto_linea
-
                         raw_pv = (costo * multiplicador_ganancia) * 1.18
                         precio_venta = round_to_nearest_5(raw_pv)
                         
                         rows_preview.append({
                             "No.": idx,
-                            "Código Identificador / Proveedor": str(resolved_code),
+                            "Código Oficial / EAN": str(resolved_code),
                             "Nombre Factura / Artículo": resolved_name,
                             "Cant. Compra": cant_comprada,
                             "UMV": umv_txt,
@@ -415,7 +455,7 @@ if modulo == "📄 Factura Individual":
                     if rows_preview:
                         st.markdown("### ✅ Artículos Procesados Exitosamente")
                         df_resultado = pd.DataFrame(rows_preview)
-                        df_resultado["Código Identificador / Proveedor"] = df_resultado["Código Identificador / Proveedor"].astype(str)
+                        df_resultado["Código Oficial / EAN"] = df_resultado["Código Oficial / EAN"].astype(str)
                         
                         altura_tabla = min(max(len(rows_preview) * 35 + 40, 200), 850)
                         st.dataframe(df_resultado, use_container_width=True, hide_index=True, height=altura_tabla)
@@ -428,7 +468,7 @@ if modulo == "📄 Factura Individual":
                         for item_dict in rows_preview:
                             ws_prod.append([
                                 item_dict["Nombre Factura / Artículo"],
-                                str(item_dict["Código Identificador / Proveedor"]),
+                                str(item_dict["Código Oficial / EAN"]),
                                 "General", "producto",
                                 item_dict["Precio Venta"],
                                 item_dict["Costo Unitario"],
@@ -440,7 +480,7 @@ if modulo == "📄 Factura Individual":
                         
                         output = io.BytesIO()
                         wb.save(output)
-                        st.download_button("📥 Descargar Excel WilPOS Oficial", output.getvalue(), "Inventario_WilPOS_Actualizado.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+                        st.download_button("📥 Descargar Excel WilPOS Oficial", output.getvalue(), f"Inventario_{prov_detectado.replace(' ', '_')}.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
     except Exception as e:
         st.error("⚠️ Ocurrió un error inesperado en Factura Individual:")
         st.exception(e)
@@ -450,7 +490,7 @@ if modulo == "📄 Factura Individual":
 # ==========================================
 elif modulo == "📂 Múltiples Facturas (Lote)":
     try:
-        st.markdown("<h2>📂 Procesador por <span style='color: #0284c7;'>Lotes y Consolidación Oficial</span></h2>", unsafe_allow_html=True)
+        st.markdown("<h2>📂 Procesador por <span style='color: #0284c7;'>Lotes y Consolidación con Memoria</span></h2>", unsafe_allow_html=True)
         st.markdown("---")
         render_master_status_banner()
         st.markdown('<div class="card-container">', unsafe_allow_html=True)
@@ -516,7 +556,7 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
                     st.progress(processed_so_far / total_files)
 
                     file_bytes_io = io.BytesIO(file_info["bytes"])
-                    parsed_data, err_msg = process_invoice_adaptive(file_bytes_io, file_info["type"], use_paid_gemini=use_gemini_paid_api, use_openai_fallback=False)
+                    parsed_data, err_msg = process_invoice_smart_router(file_bytes_io, file_info["type"], use_paid_gemini=use_gemini_paid_api)
                     time.sleep(1.0)
 
                     if err_msg == "QUOTA_EXCEEDED":
@@ -526,13 +566,15 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
 
                     if parsed_data and isinstance(parsed_data, dict):
                         st.session_state["batch_ok_count"] += 1
-                        st.session_state["batch_audit_log"].append({"Archivo": file_info["name"], "Estado": "🟢 OK"})
+                        prov_det = parsed_data.get("proveedor", "GENERAL")
+                        st.session_state["batch_audit_log"].append({"Archivo": file_info["name"], "Proveedor": prov_det, "Estado": "🟢 OK"})
                         items = parsed_data.get("items", [])
                         if isinstance(items, list):
                             for itm in items:
                                 if isinstance(itm, dict):
                                     d_txt = str(itm.get("descripcion") or "").strip()
                                     if d_txt:
+                                        itm["_proveedor_detected"] = prov_det
                                         st.session_state["batch_accumulated_items"].append(itm)
 
                     st.session_state["batch_processed_count"] += 1
@@ -557,15 +599,15 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
                     if not desc_raw:
                         continue
 
-                    invoice_code = str(item.get("codigo_identificador") or "")
-                    resolved_name, resolved_code = get_adaptive_barcode_and_name(desc_raw, invoice_code)
+                    invoice_code = str(item.get("codigo_producto") or "")
+                    prov_det = str(item.get("_proveedor_detected") or "GENERAL")
+                    resolved_name, resolved_code = get_resolved_code_and_name(desc_raw, invoice_code)
                     
                     cant_comprada = safe_float(item.get("cantidad") or 1, 1.0)
                     val_neto_linea = safe_float(item.get("valor") or 0)
                     umv_txt = str(item.get("umv") or "")
-                    tamano_txt = str(item.get("tamano") or "")
                     
-                    empaque_val = parse_empaque_adaptive(umv_txt, resolved_name, tamano_txt)
+                    empaque_val = parse_empaque_by_supplier(prov_det, umv_txt, resolved_name)
                     total_unidades = int(cant_comprada * empaque_val)
 
                     costo = round(val_neto_linea / total_unidades, 2) if total_unidades > 0 else 0.0
@@ -652,7 +694,6 @@ elif modulo == "📁 Actualizar Catálogo Maestro":
                 st.success("¡Archivo Excel leído con éxito!")
                 st.write("Vista previa:", df_master.head())
                 
-                st.markdown("### Selecciona las columnas correspondientes")
                 cols = df_master.columns.tolist()
                 col_name = st.selectbox("Columna con el Nombre / Descripción del Producto", cols)
                 col_code = st.selectbox("Columna con el Código Oficial", cols)
@@ -662,7 +703,7 @@ elif modulo == "📁 Actualizar Catálogo Maestro":
                     temp_dict = {}
                     for _, row in df_master.iterrows():
                         p_name = str(row[col_name]).strip().upper()
-                        p_code = clean_barcode(row[col_code])
+                        p_code = clean_code(row[col_code])
                         if p_name and p_code != "S/C (Sin Código)":
                             temp_dict[p_name] = p_code
                             count += 1
@@ -695,11 +736,34 @@ elif modulo == "📁 Actualizar Catálogo Maestro":
         st.exception(e)
 
 # ==========================================
-# MÓDULO 4: MEMORIA
+# MÓDULO 4: PERFILES DE PROVEEDORES
 # ==========================================
-elif modulo == "📋 Ver Códigos Almacenados":
+elif modulo == "🏢 Perfiles de Proveedores":
     try:
-        st.markdown("<h2>📋 Memoria de <span style='color: #0284c7;'>Códigos y Catálogo del Sistema</span></h2>", unsafe_allow_html=True)
+        st.markdown("<h2>🏢 Memoria y Perfiles de <span style='color: #0284c7;'>Proveedores</span></h2>", unsafe_allow_html=True)
+        st.markdown("<p style='color: #64748b;'>Visualiza los perfiles de formato registrados para cada proveedor en la memoria del sistema.</p>", unsafe_allow_html=True)
+        st.markdown("---")
+
+        suppliers = st.session_state["supplier_memory"]
+        if suppliers:
+            st.success(f"🟢 Hay **{len(suppliers)} proveedores** registrados en la memoria persistente.")
+            for prov_name, prov_data in suppliers.items():
+                with st.expander(f"🏢 {prov_name}"):
+                    st.write(f"**Formato de Código:** {prov_data.get('formato_codigo', 'N/A')}")
+                    st.write(f"**Regla de Empaque:** {prov_data.get('regla_empaque', 'N/A')}")
+                    st.write(f"**Descripción del Proveedor:** {prov_data.get('descripcion', 'N/A')}")
+        else:
+            st.info("ℹ️ No hay proveedores registrados.")
+    except Exception as e:
+        st.error("⚠️ Ocurrió un error en Perfiles de Proveedores:")
+        st.exception(e)
+
+# ==========================================
+# MÓDULO 5: CÓDIGOS ALMACENADOS
+# ==========================================
+elif modulo == "📋 Códigos Almacenados":
+    try:
+        st.markdown("<h2>📋 Memoria de <span style='color: #0284c7;'>Códigos y Catálogo</span></h2>", unsafe_allow_html=True)
         render_master_status_banner()
         st.markdown("---")
 
@@ -721,5 +785,5 @@ elif modulo == "📋 Ver Códigos Almacenados":
             else:
                 st.warning("⚠️ La memoria de aprendizaje está vacía.")
     except Exception as e:
-        st.error("⚠️ Ocurrió un error inesperado en Códigos Almacenados:")
+        st.error("⚠️ Ocurrió un error en Códigos Almacenados:")
         st.exception(e)
