@@ -43,6 +43,7 @@ gemini_free_candidates = [st.secrets.get("GEMINI_API_KEY") if "GEMINI_API_KEY" i
 ACTIVE_GEMINI_FREE_KEY = next((k for k in gemini_free_candidates if k and str(k).strip()), None)
 
 if "web_excel_queue" not in st.session_state: st.session_state["web_excel_queue"] = []
+if "last_scanned_bc" not in st.session_state: st.session_state["last_scanned_bc"] = ""
 
 def online_barcode_lookup_open(barcode_str):
     """Consulta abierta en internet mediante Gemini para cualquier código de barra."""
@@ -52,6 +53,7 @@ def online_barcode_lookup_open(barcode_str):
         model = genai.GenerativeModel('gemini-3.6-flash')
         prompt = (
             f"Busca en internet el producto exacto asociado al código de barras EAN/UPC: '{barcode_str}'. "
+            "Presta especial atención si es una bebida alcohólica, licor, ginebra, vodka, whisky, etc. "
             "Devuelve un JSON puro con el nombre comercial y presentación oficial en mayúsculas: "
             '{"descripcion": "NOMBRE DEL PRODUCTO Y PRESENTACION"}. '
             "Si no lo encuentras, devuelve {'descripcion': 'PRODUCTO DESCONOCIDO EN INTERNET'}."
@@ -82,28 +84,43 @@ use_gemini_paid_api = st.sidebar.checkbox("💎 Usar Gemini Paid (API de Pago)",
 # ==========================================
 if modulo == "🌐 Consulta Web de Productos":
     try:
-        st.markdown("<h2>🌐 Módulo de Consulta Web <span style='color: #0284c7;'>y Excel en Vivo</span></h2>", unsafe_allow_html=True)
-        st.markdown("<p style='color: #64748b;'>Consulta cualquier código de barras directamente en internet, define su cantidad y agrégalo a tu listado dinámico para exportarlo a Excel.</p>", unsafe_allow_html=True)
+        st.markdown("<h2>🌐 Módulo de Consulta Web <span style='color: #0284c7;'>(Lector de Barras Activo)</span></h2>", unsafe_allow_html=True)
+        st.markdown("<p style='color: #64748b;'>Escanea tu código de barra. El sistema detectará el <b>Enter</b> automáticamente, consultará en internet y armará tu Excel en vivo.</p>", unsafe_allow_html=True)
         st.markdown("---")
 
         if "web_bc_input" not in st.session_state: st.session_state["web_bc_input"] = ""
         if "web_desc_result" not in st.session_state: st.session_state["web_desc_result"] = ""
 
         st.markdown('<div class="card-container">', unsafe_allow_html=True)
-        st.markdown("### 📌 Ingresar Código de Barra")
+        st.markdown("### 📌 Escanear o Ingresar Código de Barra")
         
+        # Callback que se ejecuta automáticamente al presionar Enter con el lector de código
+        def on_barcode_enter():
+            val = st.session_state.get("widget_bc_open", "").strip()
+            if val and val != st.session_state.get("last_scanned_bc", ""):
+                st.session_state["last_scanned_bc"] = val
+                clean_bc = str(val).strip()
+                with st.spinner(f"Escáner detectado. Buscando código {clean_bc} en internet..."):
+                    found_desc = online_barcode_lookup_open(clean_bc)
+                st.session_state["web_bc_input"] = clean_bc
+                st.session_state["web_desc_result"] = found_desc
+
         col_w1, col_w2 = st.columns([2, 1])
         with col_w1:
-            input_bc = st.text_input("Código de Barra (EAN / UPC)", placeholder="Ej: 619947000068 ó 082184090408", key="widget_bc_open")
+            input_bc = st.text_input(
+                "Código de Barra (EAN / UPC)", 
+                placeholder="Escanea aquí con tu lector...", 
+                key="widget_bc_open",
+                on_change=on_barcode_enter
+            )
         with col_w2:
             st.markdown("<br>", unsafe_allow_html=True)
-            btn_web_search = st.button("🔍 Consultar en Internet")
+            btn_web_search = st.button("🔍 Consultar Manual")
 
         if btn_web_search and input_bc.strip():
             clean_bc = str(input_bc).strip()
             with st.spinner(f"Consultando el código {clean_bc} en la web..."):
                 found_desc = online_barcode_lookup_open(clean_bc)
-            
             st.session_state["web_bc_input"] = clean_bc
             st.session_state["web_desc_result"] = found_desc
 
@@ -116,9 +133,9 @@ if modulo == "🌐 Consulta Web de Productos":
             
             col_r1, col_r2 = st.columns([2, 1])
             with col_r1:
-                final_desc = st.text_input("Descripción Detectada / Editada", value=current_desc)
+                final_desc = st.text_input("Descripción Detectada / Editada", value=current_desc, key="input_desc_val")
             with col_r2:
-                final_qty = st.number_input("Cantidad", min_value=1, max_value=100000, value=1, step=1)
+                final_qty = st.number_input("Cantidad", min_value=1, max_value=100000, value=1, step=1, key="input_qty_val")
 
             if st.button("➕ Agregar a la Vista Previa del Excel"):
                 if final_desc.strip():
@@ -131,6 +148,7 @@ if modulo == "🌐 Consulta Web de Productos":
                     st.success(f"✅ ¡Agregado a la vista previa: **{final_desc}** (Cant: {final_qty})!")
                     st.session_state["web_bc_input"] = ""
                     st.session_state["web_desc_result"] = ""
+                    st.session_state["last_scanned_bc"] = ""
                     st.rerun()
                 else:
                     st.error("La descripción no puede estar vacía.")
@@ -172,7 +190,7 @@ if modulo == "🌐 Consulta Web de Productos":
                     st.session_state["web_excel_queue"] = []
                     st.rerun()
         else:
-            st.info("ℹ️ No hay elementos en la vista previa. Realiza tu consulta web arriba para comenzar.")
+            st.info("ℹ️ No hay elementos en la vista previa. Escanea un código de barras arriba para comenzar.")
 
     except Exception as e:
         st.error("⚠️ Error en el Módulo de Consulta Web:")
@@ -180,6 +198,6 @@ if modulo == "🌐 Consulta Web de Productos":
 
 elif modulo == "📋 Historial y Configuración":
     st.markdown("<h2>📋 Configuración del Módulo Web</h2>", unsafe_allow_html=True)
-    st.markdown("<p style='color: #64748b;'>Este módulo opera de forma totalmente independiente para consultas abiertas en internet.</p>", unsafe_allow_html=True)
+    st.markdown("<p style='color: #64748b;'>Este módulo opera con soporte para lectores de códigos de barras (Enter automático).</p>", unsafe_allow_html=True)
     st.markdown("---")
-    st.info("Módulo listo para realizar consultas en línea de manera ilimitada.")
+    st.info("Módulo configurado para escaneo rápido en continuo.")
