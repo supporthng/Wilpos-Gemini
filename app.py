@@ -72,7 +72,6 @@ if "master_catalog" not in st.session_state: st.session_state["master_catalog"] 
 if "master_meta" not in st.session_state: st.session_state["master_meta"] = load_json_file(MASTER_META_FILE, "dict")
 if "processing_history" not in st.session_state: st.session_state["processing_history"] = load_json_file(HISTORY_FILE, "list")
 if "web_excel_queue" not in st.session_state: st.session_state["web_excel_queue"] = []
-if "last_scanned_bc" not in st.session_state: st.session_state["last_scanned_bc"] = ""
 
 if "supplier_memory" not in st.session_state:
     loaded_suppliers = load_json_file(SUPPLIER_MEMORY_FILE, "dict")
@@ -108,10 +107,6 @@ def render_master_status_banner():
 
 def safe_float(val, default=0.0):
     try: return float(val)
-    except (ValueError, TypeError): return default
-
-def safe_int(val, default=1):
-    try: return int(val)
     except (ValueError, TypeError): return default
 
 def round_to_nearest_5(x): return float(round(round(x / 5) * 5))
@@ -192,7 +187,7 @@ def parse_empaque_blindado(unidad_txt="", descripcion_txt="", tamano_txt=""):
     return 1
 
 def online_barcode_lookup_open(barcode_str):
-    """Consulta en caché local o mediante Gemini de forma segura para evitar bloqueos."""
+    """Consulta en caché local o en internet mediante Gemini con herramienta de búsqueda web activa."""
     cache = st.session_state["barcode_cache"]
     if barcode_str in cache:
         return cache[barcode_str], "📥 (Desde Caché Local - Instantáneo)"
@@ -200,11 +195,16 @@ def online_barcode_lookup_open(barcode_str):
     try:
         active_key = ACTIVE_GEMINI_PAID_KEY if ACTIVE_GEMINI_PAID_KEY else ACTIVE_GEMINI_FREE_KEY
         genai.configure(api_key=active_key)
-        model = genai.GenerativeModel('gemini-3.6-flash')
+        
+        # Configuramos el modelo habilitando la búsqueda web en tiempo real
+        model = genai.GenerativeModel(
+            model_name='gemini-3.6-flash',
+            tools=[{"google_search": {}}]
+        )
         
         prompt = (
-            f"Identifica el producto exacto de bebidas, licores o consumo masivo asociado al código de barras EAN/UPC: '{barcode_str}'. "
-            "Devuelve un JSON puro con el nombre comercial exacto, marca y presentación oficial en mayúsculas (ej: TEQUILA PATRÓN REPOSADO 750 ML): "
+            f"Busca en internet en tiempo real el producto exacto, bebida, licor o artículo comercial asociado al código de barras EAN/UPC: '{barcode_str}'. "
+            "Devuelve un JSON puro con el nombre comercial exacto, marca y presentación oficial en mayúsculas (ej: GIN HENDRICK'S 50 ML): "
             '{"descripcion": "NOMBRE DEL PRODUCTO Y PRESENTACION"}. '
             "Si no lo encuentras, devuelve {'descripcion': 'PRODUCTO DESCONOCIDO EN INTERNET'}."
         )
@@ -221,9 +221,23 @@ def online_barcode_lookup_open(barcode_str):
         st.session_state["barcode_cache"] = cache
         save_cache(cache)
         
-        return desc, "🌐 (Consultado con éxito)"
+        return desc, "🌐 (Consultado en Internet en Vivo)"
     except Exception:
-        return "PRODUCTO DESCONOCIDO EN INTERNET", "⚠️ (Error técnico)"
+        # Fallback de respaldo sin tools por si la versión de la librería no soporta tools directamente
+        try:
+            model_fb = genai.GenerativeModel('gemini-3.6-flash')
+            resp_fb = model_fb.generate_content(prompt)
+            txt_fb = resp_fb.text.strip()
+            if txt_fb.startswith("```json"): txt_fb = txt_fb[7:]
+            if txt_fb.endswith("```"): txt_fb = txt_fb[:-3]
+            data_fb = json.loads(txt_fb.strip())
+            desc_fb = data_fb.get("descripcion", "PRODUCTO DESCONOCIDO EN INTERNET")
+            cache[barcode_str] = desc_fb
+            st.session_state["barcode_cache"] = cache
+            save_cache(cache)
+            return desc_fb, "🌐 (Consultado Standby)"
+        except Exception:
+            return "PRODUCTO DESCONOCIDO EN INTERNET", "⚠️ (Error técnico)"
 
 def process_invoice_smart_router(file_obj, file_type, use_paid_gemini=False):
     prompt_detect = "Identifica el nombre comercial del proveedor emisor de esta factura (ej: CND, BEES, ALVAREZ & SANCHEZ, GONZALEZ CUESTA). Devuelve un JSON puro: {'proveedor': 'NOMBRE'}"
@@ -433,67 +447,61 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
         st.info(f"Se cargaron {len(uploaded_files)} archivos para procesamiento en lote.")
 
 # ==========================================
-# MÓDULO 3: CONSULTA WEB DE PRODUCTOS (CON CACHÉ Y ENTER AUTOMÁTICO)
+# MÓDULO 3: CONSULTA WEB DE PRODUCTOS (CON LECTOR CONTINUO Y LIMPIEZA AUTOMÁTICA)
 # ==========================================
 elif modulo == "🌐 Consulta Web de Productos":
     try:
-        st.markdown("<h2>🌐 Módulo de Consulta Web <span style='color: #0284c7;'>(Lector con Enter Automático)</span></h2>", unsafe_allow_html=True)
-        st.markdown("<p style='color: #64748b;'>Escanea con tu lector. El sistema detecta el Enter, busca instantáneamente (caché o web) y arma tu Excel en vivo.</p>", unsafe_allow_html=True)
+        st.markdown("<h2>🌐 Módulo de Consulta Web <span style='color: #0284c7;'>(Lector Continuo Activo)</span></h2>", unsafe_allow_html=True)
+        st.markdown("<p style='color: #64748b;'>Escanea un producto con tu lector. Al agregarlo a la tabla, el campo se limpiará automáticamente para recibir el siguiente código de inmediato.</p>", unsafe_allow_html=True)
         st.markdown("---")
 
-        if "web_bc_input" not in st.session_state: st.session_state["web_bc_input"] = ""
-        if "web_desc_result" not in st.session_state: st.session_state["web_desc_result"] = ""
-        if "status_msg" not in st.session_state: st.session_state["status_msg"] = ""
+        if "web_excel_queue" not in st.session_state: st.session_state["web_excel_queue"] = []
+        if "current_scanned_code" not in st.session_state: st.session_state["current_scanned_code"] = ""
+        if "current_desc" not in st.session_state: st.session_state["current_desc"] = ""
+        if "lookup_status" not in st.session_state: st.session_state["lookup_status"] = ""
 
         st.markdown('<div class="card-container">', unsafe_allow_html=True)
         st.markdown("### 📌 Escanear Código de Barra")
         
-        def on_barcode_enter():
-            val = st.session_state.get("widget_bc_open", "").strip()
-            if val and val != st.session_state.get("last_scanned_bc", ""):
-                st.session_state["last_scanned_bc"] = val
+        # Función que se ejecuta al presionar Enter con el lector de barras
+        def handle_scan():
+            val = st.session_state.get("barcode_input_field", "").strip()
+            if val:
                 clean_bc = str(val).strip()
-                with st.spinner(f"Procesando código {clean_bc}..."):
-                    found_desc, msg_status = online_barcode_lookup_open(clean_bc)
-                st.session_state["web_bc_input"] = clean_bc
-                st.session_state["web_desc_result"] = found_desc
-                st.session_state["status_msg"] = msg_status
+                with st.spinner(f"Buscando en vivo el código {clean_bc}..."):
+                    desc, status = online_barcode_lookup_open(clean_bc)
+                st.session_state["current_scanned_code"] = clean_bc
+                st.session_state["current_desc"] = desc
+                st.session_state["lookup_status"] = status
 
         col_w1, col_w2 = st.columns([2, 1])
         with col_w1:
-            input_bc = st.text_input(
+            st.text_input(
                 "Código de Barra (EAN / UPC)", 
                 placeholder="Escanea aquí con tu lector...", 
-                key="widget_bc_open",
-                on_change=on_barcode_enter
+                key="barcode_input_field",
+                on_change=handle_scan
             )
         with col_w2:
             st.markdown("<br>", unsafe_allow_html=True)
-            btn_web_search = st.button("🔍 Consultar Manual")
+            if st.button("🔍 Consultar Manual"):
+                handle_scan()
 
-        if btn_web_search and input_bc.strip():
-            clean_bc = str(input_bc).strip()
-            with st.spinner(f"Consultando el código {clean_bc}..."):
-                found_desc, msg_status = online_barcode_lookup_open(clean_bc)
-            st.session_state["web_bc_input"] = clean_bc
-            st.session_state["web_desc_result"] = found_desc
-            st.session_state["status_msg"] = msg_status
-
-        current_bc = st.session_state.get("web_bc_input", "")
-        current_desc = st.session_state.get("web_desc_result", "")
-        current_status = st.session_state.get("status_msg", "")
+        current_bc = st.session_state.get("current_scanned_code", "")
+        current_desc = st.session_state.get("current_desc", "")
+        status_msg = st.session_state.get("lookup_status", "")
 
         if current_bc:
             st.markdown("---")
-            st.markdown(f"### 📝 Resultado de la Consulta {current_status}")
+            st.markdown(f"### 📝 Resultado {status_msg}")
             
             col_r1, col_r2 = st.columns([2, 1])
             with col_r1:
-                final_desc = st.text_input("Descripción Detectada / Editada", value=current_desc, key="input_desc_val")
+                final_desc = st.text_input("Descripción Detectada / Editada", value=current_desc, key="editable_desc_box")
             with col_r2:
-                final_qty = st.number_input("Cantidad", min_value=1, max_value=100000, value=1, step=1, key="input_qty_val")
+                final_qty = st.number_input("Cantidad", min_value=1, max_value=100000, value=1, step=1, key="editable_qty_box")
 
-            if st.button("➕ Agregar a la Vista Previa del Excel"):
+            if st.button("➕ Agregar a la Vista Previa del Excel y Continuar Escaneando"):
                 if final_desc.strip():
                     new_entry = {
                         "Código de Barra": str(current_bc),
@@ -501,11 +509,14 @@ elif modulo == "🌐 Consulta Web de Productos":
                         "Cantidad": int(final_qty)
                     }
                     st.session_state["web_excel_queue"].append(new_entry)
-                    st.success(f"✅ ¡Agregado: **{final_desc}** (Cant: {final_qty})!")
-                    st.session_state["web_bc_input"] = ""
-                    st.session_state["web_desc_result"] = ""
-                    st.session_state["last_scanned_bc"] = ""
-                    st.session_state["status_msg"] = ""
+                    
+                    # RESET TOTAL PARA PERMITIR NUEVO ESCANEO INMEDIATO
+                    st.session_state["current_scanned_code"] = ""
+                    st.session_state["current_desc"] = ""
+                    st.session_state["lookup_status"] = ""
+                    st.session_state["barcode_input_field"] = ""
+                    
+                    st.success(f"✅ ¡Agregado correctamente! Listo para el siguiente escaneo.")
                     st.rerun()
                 else:
                     st.error("La descripción no puede estar vacía.")
@@ -546,7 +557,7 @@ elif modulo == "🌐 Consulta Web de Productos":
                     st.session_state["web_excel_queue"] = []
                     st.rerun()
         else:
-            st.info("ℹ️ No hay elementos en la vista previa. Escanea un código arriba para comenzar.")
+            st.info("ℹ️ No hay elementos en la vista previa. Escanea tu primer código arriba.")
     except Exception as e:
         st.error(f"⚠️ Error: {e}")
 
