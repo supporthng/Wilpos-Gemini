@@ -195,7 +195,8 @@ def online_barcode_lookup_open(barcode_str):
     try:
         active_key = ACTIVE_GEMINI_PAID_KEY if ACTIVE_GEMINI_PAID_KEY else ACTIVE_GEMINI_FREE_KEY
         genai.configure(api_key=active_key)
-        model = genai.GenerativeModel('gemini-3.6-flash')
+        # Uso del modelo estándar oficial y estable
+        model = genai.GenerativeModel('gemini-1.5-flash')
         
         prompt = (
             f"Busca estrictamente el producto comercial exacto, licor, bebida o artículo asociado "
@@ -231,7 +232,7 @@ def process_invoice_smart_router(file_obj, file_type, use_paid_gemini=False):
     if not active_key and use_paid_gemini: active_key = ACTIVE_GEMINI_FREE_KEY
 
     genai.configure(api_key=active_key if active_key else ACTIVE_GEMINI_FREE_KEY)
-    model = genai.GenerativeModel('gemini-3.6-flash')
+    model = genai.GenerativeModel('gemini-1.5-flash')
     
     file_obj.seek(0)
     file_bytes = file_obj.read()
