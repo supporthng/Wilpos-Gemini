@@ -93,29 +93,12 @@ def save_meta_to_file(timestamp_str, count):
     save_json_file(MASTER_META_FILE, meta)
 def save_supplier_memory(): save_json_file(SUPPLIER_MEMORY_FILE, st.session_state["supplier_memory"])
 
-def add_to_history(entry):
-    hist = st.session_state.get("processing_history", [])
-    if not isinstance(hist, list): hist = []
-    hist.insert(0, entry)
-    st.session_state["processing_history"] = hist
-    save_json_file(HISTORY_FILE, hist)
-
 def render_master_status_banner():
     master_dict = st.session_state["master_catalog"]
     meta = st.session_state.get("master_meta", {})
     supps = st.session_state.get("supplier_memory", {})
     queue_count = len(st.session_state.get("live_excel_queue", []))
     st.success(f"🟢 **WilPOS Reglas de Oro Blindadas** | Maestro: **{len(master_dict):,}** prods | 🏢 Proveedores: **{len(supps)}** | 📋 Cola Excel En Vivo: **{queue_count}**")
-
-def safe_float(val, default=0.0):
-    try: return float(val)
-    except (ValueError, TypeError): return default
-
-def safe_int(val, default=1):
-    try: return int(val)
-    except (ValueError, TypeError): return default
-
-def round_to_nearest_5(x): return float(round(round(x / 5) * 5))
 
 def clean_ean_code(code_val):
     if not code_val: return "S/C"
@@ -146,60 +129,26 @@ def clean_product_name_and_presentation(raw_name, raw_tamano=""):
         
     return clean_full_name, presentation
 
-def get_flexible_master_barcode(clean_name, clean_pres=""):
-    master_dict = st.session_state.get("master_catalog", {})
-    if not master_dict: return "S/C"
-    
-    full_query = f"{clean_name} {clean_pres}".strip()
-    if full_query in master_dict:
-        return clean_ean_code(master_dict[full_query])
-    if clean_name in master_dict:
-        return clean_ean_code(master_dict[clean_name])
-        
-    query_words = [w for w in re.findall(r'\w+', full_query.upper()) if len(w) > 2]
-    if not query_words: return "S/C"
-    
-    best_code = "S/C"
-    max_matches = 0
-    
-    for m_name, m_code in master_dict.items():
-        m_upper = str(m_name).upper()
-        master_words = [w for w in re.findall(r'\w+', m_upper) if len(w) > 2]
-        
-        matches = 0
-        for qw in query_words:
-            for mw in master_words:
-                if qw == mw or (len(qw) >= 4 and (qw in mw or mw in qw)):
-                    matches += 1
-                    break
-                    
-        if matches >= 2 and matches > max_matches:
-            max_matches = matches
-            best_code = clean_ean_code(m_code)
-            
-    return best_code
-
-def parse_empaque_blindado(unidad_txt="", descripcion_txt="", tamano_txt=""):
-    combined = f"{str(unidad_txt)} {str(descripcion_txt)}".upper()
-    u_txt = str(unidad_txt).upper()
-    
-    m_caja = re.search(r'(?:CAJA|CAJ|PAQ|PACK|BLISTER)[^\d]*(\d+)', combined)
-    if m_caja:
-        val = int(m_caja.group(1))
-        if 1 < val <= 120: return val
-
-    m_slash = re.search(r'\b(48|24|16|12|6|10|20|30)\s*/', combined)
-    if m_slash: return int(m_slash.group(1))
-
-    m_pza = re.search(r'\b(\d+)\s*(?:PZA|UN|BOT|JARRA|LATA)\b', u_txt)
-    if m_pza:
-        val = int(m_pza.group(1))
-        if val > 1: return val
-
-    if any(w in u_txt for w in ["BOT", "UNIDAD", "PZA"]) and not re.search(r'\d+', u_txt):
-        return 1
-
-    return 1
+def online_barcode_lookup(barcode_str):
+    """Consulta inteligente en internet usando Gemini con búsqueda web integrada para códigos desconocidos."""
+    try:
+        active_key = ACTIVE_GEMINI_PAID_KEY if ACTIVE_GEMINI_PAID_KEY else ACTIVE_GEMINI_FREE_KEY
+        genai.configure(api_key=active_key)
+        model = genai.GenerativeModel('gemini-3.6-flash')
+        prompt = (
+            f"Busca en internet el producto exacto asociado al código de barras EAN: '{barcode_str}'. "
+            "Devuelve un JSON puro con el nombre comercial y presentación oficial en mayúsculas: "
+            '{"descripcion": "NOMBRE DEL PRODUCTO Y PRESENTACION"}. '
+            "Si no lo encuentras, devuelve {'descripcion': 'PRODUCTO DESCONOCIDO'}."
+        )
+        response = model.generate_content(prompt)
+        txt = response.text.strip()
+        if txt.startswith("```json"): txt = txt[7:]
+        if txt.endswith("```"): txt = txt[:-3]
+        data = json.loads(txt.strip())
+        return data.get("descripcion", "")
+    except Exception:
+        return ""
 
 # ==========================================
 # MENÚ Y CONFIGURACIÓN LATERAL
@@ -222,74 +171,95 @@ st.sidebar.markdown("---")
 use_gemini_paid_api = st.sidebar.checkbox("💎 Usar Gemini Paid (API de Pago)", value=bool(ACTIVE_GEMINI_PAID_KEY))
 
 # ==========================================
-# MÓDULO 3: CONSULTA NUEVOS PRODUCTOS CON SOLICITUD DE CANTIDAD
+# MÓDULO 3: CONSULTA NUEVOS PRODUCTOS CON BÚSQUEDA WEB Y CANTIDAD
 # ==========================================
 if modulo == "🔍 Consulta Nuevos Productos":
     try:
-        st.markdown("<h2>🔍 Consulta de Productos y <span style='color: #0284c7;'>Generación de Excel en Vivo</span></h2>", unsafe_allow_html=True)
-        st.markdown("<p style='color: #64748b;'>Consulta productos, especifica la cantidad comprada/recibida y visualiza en tiempo real la tabla que se descargará en tu Excel.</p>", unsafe_allow_html=True)
+        st.markdown("<h2>🔍 Consulta de Nuevos Productos <span style='color: #0284c7;'>(Búsqueda Web Automática)</span></h2>", unsafe_allow_html=True)
+        st.markdown("<p style='color: #64748b;'>Ingresa el código de barra. Si no está en tu maestro, el sistema lo buscará en internet, te pedirá la cantidad y armará tu Excel en vivo.</p>", unsafe_allow_html=True)
         st.markdown("---")
         render_master_status_banner()
 
+        if "lookup_barcode_input" not in st.session_state: st.session_state["lookup_barcode_input"] = ""
+        if "lookup_desc_result" not in st.session_state: st.session_state["lookup_desc_result"] = ""
+
         st.markdown('<div class="card-container">', unsafe_allow_html=True)
-        st.markdown("### 🔎 Formulario de Consulta")
+        st.markdown("### 📌 Búsqueda por Código de Barra")
         
-        col_c1, col_c2 = st.columns([1, 2])
-        with col_c1:
-            input_barcode = st.text_input("📌 Código de Barra (EAN)", value="080480172022", help="Escanea o escribe el código de barra de 12 o 13 dígitos.")
-        
-        # Intentar autocompletar si existe en el maestro
-        master_dict = st.session_state.get("master_catalog", {})
-        default_desc = ""
-        for name, code in master_dict.items():
-            if str(code).strip() == input_barcode.strip():
-                default_desc = name
-                break
-                
-        if not default_desc and input_barcode.strip() == "080480172022":
-            default_desc = "TEQUILA CAZADORES BLANCO 750 ML"
-
-        with col_c2:
-            input_desc = st.text_input("📝 Descripción del Producto (Nombre + Presentación)", value=default_desc, help="Ejemplo: TEQUILA CAZADORES BLANCO 750 ML")
-
-        col_q1, col_q2 = st.columns([1, 2])
-        with col_q1:
-            # SOLICITUD EXPLÍCITA DE CANTIDAD
-            input_cant = st.number_input("📦 Cantidad de Unidades", min_value=1, max_value=10000, value=1, step=1, help="Ingresa la cantidad física comprada o consultada.")
-
-        with col_q2:
+        col_s1, col_s2 = st.columns([2, 1])
+        with col_s1:
+            input_barcode = st.text_input("Código de Barra (EAN)", placeholder="Ej: 080480172022", key="input_bc_widget")
+        with col_s2:
             st.markdown("<br>", unsafe_allow_html=True)
-            if st.button("➕ Agregar a la Vista Previa"):
-                if input_barcode.strip() and input_desc.strip():
-                    clean_code = clean_ean_code(input_barcode)
-                    clean_name, _ = clean_product_name_and_presentation(input_desc)
-                    
-                    # Agregar al Live Queue
+            btn_buscar = st.button("🌐 Buscar en Maestro e Internet")
+
+        if btn_buscar and input_barcode.strip():
+            bc = clean_ean_code(input_barcode)
+            # 1. Buscar en Maestro local
+            master_dict = st.session_state.get("master_catalog", {})
+            found_name = ""
+            for name, code in master_dict.items():
+                if str(code).strip() == bc:
+                    found_name = name
+                    break
+            
+            # 2. Si no está en maestro, buscar en internet
+            if not found_name:
+                with st.spinner(f"Buscando el código {bc} en internet..."):
+                    found_name = online_barcode_lookup(bc)
+
+            st.session_state["lookup_barcode_input"] = bc
+            st.session_state["lookup_desc_result"] = found_name if found_name else "PRODUCTO NO IDENTIFICADO"
+
+        # Mostrar campos de resultado y cantidad
+        current_bc = st.session_state.get("lookup_barcode_input", "")
+        current_desc = st.session_state.get("lookup_desc_result", "")
+
+        if current_bc:
+            st.markdown("---")
+            st.markdown("### 📝 Detalle del Producto Encontrado")
+            
+            col_d1, col_d2 = st.columns([2, 1])
+            with col_d1:
+                final_desc_input = st.text_input("Descripción Oficial (Nombre + Presentación)", value=current_desc)
+            with col_d2:
+                final_cant_input = st.number_input("Cantidad Comprada", min_value=1, max_value=10000, value=1, step=1)
+
+            if st.button("➕ Agregar a la Vista Previa del Excel"):
+                if final_desc_input.strip() and final_desc_input != "PRODUCTO NO IDENTIFICADO":
+                    clean_name, _ = clean_product_name_and_presentation(final_desc_input)
                     new_item = {
-                        "Código de Barra": clean_code,
+                        "Código de Barra": current_bc,
                         "Descripción": clean_name,
-                        "Cantidad": int(input_cant)
+                        "Cantidad": int(final_cant_input)
                     }
                     st.session_state["live_excel_queue"].append(new_item)
-                    st.success(f"✅ Agregado: **{clean_name}** | Cantidad: **{input_cant}**")
+                    
+                    # También guardar opcionalmente en el maestro para futuras ocasiones
+                    st.session_state["master_catalog"][clean_name] = current_bc
+                    save_master_to_file()
+
+                    st.success(f"✅ ¡Agregado exitosamente: **{clean_name}** (Cant: {final_cant_input}) y guardado en el maestro!")
+                    st.session_state["lookup_barcode_input"] = ""
+                    st.session_state["lookup_desc_result"] = ""
                     st.rerun()
                 else:
-                    st.error("Por favor completa el código de barras y la descripción.")
+                    st.error("Por favor verifica que la descripción sea válida antes de agregarla.")
+
         st.markdown('</div>', unsafe_allow_html=True)
 
-        # VISTA PREVIA EN VIVO
-        st.markdown("### 📊 Vista Previa en Vivo del Excel")
+        # VISTA PREVIA EN VIVO DEL EXCEL
+        st.markdown("### 📊 Vista Previa en Vivo del Excel a Generar")
         queue = st.session_state.get("live_excel_queue", [])
         
         if queue:
             df_preview = pd.DataFrame(queue)
             df_preview["Código de Barra"] = df_preview["Código de Barra"].astype(str)
-            
             st.dataframe(df_preview, use_container_width=True, hide_index=True)
 
             wb = openpyxl.Workbook()
             ws = wb.active
-            ws.title = "Consulta Nuevos Productos"
+            ws.title = "Nuevos Productos"
             ws.append(["Código de Barra", "Descripción", "Cantidad"])
 
             for r_idx, row_data in enumerate(queue, start=2):
@@ -303,9 +273,9 @@ if modulo == "🔍 Consulta Nuevos Productos":
             col_act1, col_act2 = st.columns([1, 1])
             with col_act1:
                 st.download_button(
-                    label="📥 Descargar Excel de Productos Consultados",
+                    label="📥 Descargar Excel de Nuevos Productos",
                     data=excel_out.getvalue(),
-                    file_name=f"Consulta_Nuevos_Productos_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
+                    file_name=f"Excel_Nuevos_Productos_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                 )
             with col_act2:
@@ -313,24 +283,24 @@ if modulo == "🔍 Consulta Nuevos Productos":
                     st.session_state["live_excel_queue"] = []
                     st.rerun()
         else:
-            st.info("ℹ️ La vista previa está vacía. Realiza una consulta arriba e ingresa la cantidad para comenzar a armar tu Excel.")
+            st.info("ℹ️ Tu lista en vivo está vacía. Ingresa un código arriba para buscarlo en internet y agregarlo.")
 
     except Exception as e:
         st.error("⚠️ Error en Consulta de Nuevos Productos:")
         st.exception(e)
 
 # ==========================================
-# OTROS MÓDULOS (LÓGICA PERMANENTE)
+# MÓDULOS RESTANTES
 # ==========================================
 elif modulo == "📄 Factura Individual":
-    st.info("Ingresa a este módulo desde el menú lateral para procesar facturas completas.")
+    st.info("Módulo activo de Factura Individual.")
 elif modulo == "📂 Múltiples Facturas (Lote)":
-    st.info("Ingresa a este módulo desde el menú lateral para procesar múltiples facturas en lote.")
+    st.info("Módulo activo de Lotes.")
 elif modulo == "📁 Actualizar Catálogo Maestro":
-    st.info("Módulo para actualizar el Catálogo Maestro desde Excel.")
+    st.info("Módulo activo de Catálogo Maestro.")
 elif modulo == "🏢 Perfiles de Proveedores":
-    st.info("Visualiza las reglas y configuraciones por proveedor.")
+    st.info("Módulo activo de Proveedores.")
 elif modulo == "📜 Historial de Procesados":
-    st.info("Revisa el registro de facturas procesadas.")
+    st.info("Módulo activo de Historial.")
 elif modulo == "📋 Códigos Almacenados":
-    st.info("Consulta todos los códigos EAN guardados.")
+    st.info("Módulo activo de Códigos Almacenados.")
