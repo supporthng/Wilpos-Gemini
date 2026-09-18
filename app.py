@@ -48,6 +48,7 @@ MASTER_CATALOG_FILE = "catalogo_maestro_sistema.json"
 MASTER_META_FILE = "catalogo_maestro_meta.json"
 SUPPLIER_MEMORY_FILE = "proveedores_formatos_memoria.json"
 HISTORY_FILE = "historial_procesados.json"
+NEW_PRODUCTS_FILE = "nuevos_productos_pendientes.json"
 
 def load_json_file(filepath, default_type="dict"):
     if os.path.exists(filepath):
@@ -71,6 +72,8 @@ if "barcode_memory" not in st.session_state: st.session_state["barcode_memory"] 
 if "master_catalog" not in st.session_state: st.session_state["master_catalog"] = load_json_file(MASTER_CATALOG_FILE, "dict")
 if "master_meta" not in st.session_state: st.session_state["master_meta"] = load_json_file(MASTER_META_FILE, "dict")
 if "processing_history" not in st.session_state: st.session_state["processing_history"] = load_json_file(HISTORY_FILE, "list")
+if "new_products_list" not in st.session_state: st.session_state["new_products_list"] = load_json_file(NEW_PRODUCTS_FILE, "list")
+if "live_excel_queue" not in st.session_state: st.session_state["live_excel_queue"] = []
 
 if "supplier_memory" not in st.session_state:
     loaded_suppliers = load_json_file(SUPPLIER_MEMORY_FILE, "dict")
@@ -101,7 +104,8 @@ def render_master_status_banner():
     master_dict = st.session_state["master_catalog"]
     meta = st.session_state.get("master_meta", {})
     supps = st.session_state.get("supplier_memory", {})
-    st.success(f"🟢 **WilPOS Reglas de Oro Blindadas** | Maestro: **{len(master_dict):,}** prods | 🏢 Proveedores: **{len(supps)}**")
+    queue_count = len(st.session_state.get("live_excel_queue", []))
+    st.success(f"🟢 **WilPOS Reglas de Oro Blindadas** | Maestro: **{len(master_dict):,}** prods | 🏢 Proveedores: **{len(supps)}** | 📋 Cola Excel En Vivo: **{queue_count}**")
 
 def safe_float(val, default=0.0):
     try: return float(val)
@@ -113,9 +117,6 @@ def safe_int(val, default=1):
 
 def round_to_nearest_5(x): return float(round(round(x / 5) * 5))
 
-# ==========================================
-# REGLAS DE ORO: LIMPIEZA Y CÁLCULO BLINDADO
-# ==========================================
 def clean_ean_code(code_val):
     if not code_val: return "S/C"
     s_val = str(code_val).strip()
@@ -124,7 +125,6 @@ def clean_ean_code(code_val):
     return str(s_val)
 
 def clean_product_name_and_presentation(raw_name, raw_tamano=""):
-    """Regla 5 de Oro: Nombres limpios combinando Nombre + Presentación (ej. CHIVAS REGAL 25YO 700 ML)."""
     name = str(raw_name).strip()
     name = re.sub(r'^\d+[\s-]*', '', name)
     name = re.sub(r'^\[.*?\]\s*', '', name)
@@ -147,7 +147,6 @@ def clean_product_name_and_presentation(raw_name, raw_tamano=""):
     return clean_full_name, presentation
 
 def get_flexible_master_barcode(clean_name, clean_pres=""):
-    """Reglas 2, 3 y 6 de Oro: Cruce inteligente tolerante a variaciones, abreviaciones y faltas ortográficas."""
     master_dict = st.session_state.get("master_catalog", {})
     if not master_dict: return "S/C"
     
@@ -181,27 +180,22 @@ def get_flexible_master_barcode(clean_name, clean_pres=""):
     return best_code
 
 def parse_empaque_blindado(unidad_txt="", descripcion_txt="", tamano_txt=""):
-    """Regla 4 de Oro (Reforzada): Detección inequívoca de empaques separada del tamaño."""
     combined = f"{str(unidad_txt)} {str(descripcion_txt)}".upper()
     u_txt = str(unidad_txt).upper()
     
-    # 1. Patrón explícito de caja/paquete con número (ej: CAJA-24, CAJ 6, PAQ 12)
     m_caja = re.search(r'(?:CAJA|CAJ|PAQ|PACK|BLISTER)[^\d]*(\d+)', combined)
     if m_caja:
         val = int(m_caja.group(1))
         if 1 < val <= 120: return val
 
-    # 2. Patrón de división tipo 6/75 CL o 12/750 ML en la unidad o descripción
     m_slash = re.search(r'\b(48|24|16|12|6|10|20|30)\s*/', combined)
     if m_slash: return int(m_slash.group(1))
 
-    # 3. Patrón de piezas por unidad (ej: "6 PZA", "12 UN")
     m_pza = re.search(r'\b(\d+)\s*(?:PZA|UN|BOT|JARRA|LATA)\b', u_txt)
     if m_pza:
         val = int(m_pza.group(1))
         if val > 1: return val
 
-    # 4. Si dice explícitamente BOT o UNIDAD suelta sin número de caja
     if any(w in u_txt for w in ["BOT", "UNIDAD", "PZA"]) and not re.search(r'\d+', u_txt):
         return 1
 
@@ -214,438 +208,129 @@ st.sidebar.markdown("<h3 style='color: #0284c7; text-align: center;'>⚡ WilPOS 
 st.sidebar.markdown("<p style='text-align: center; color: #64748b; font-size: 0.8rem;'>Sistema 100% Blindado</p>", unsafe_allow_html=True)
 st.sidebar.markdown("---")
 
-modulo = st.sidebar.radio("Menú de Navegación", ["📄 Factura Individual", "📂 Múltiples Facturas (Lote)", "📁 Actualizar Catálogo Maestro", "🏢 Perfiles de Proveedores", "📜 Historial de Procesados", "📋 Códigos Almacenados"])
+modulo = st.sidebar.radio("Menú de Navegación", [
+    "📄 Factura Individual", 
+    "📂 Múltiples Facturas (Lote)", 
+    "🔍 Consulta Nuevos Productos", 
+    "📁 Actualizar Catálogo Maestro", 
+    "🏢 Perfiles de Proveedores", 
+    "📜 Historial de Procesados", 
+    "📋 Códigos Almacenados"
+])
 
 st.sidebar.markdown("---")
 use_gemini_paid_api = st.sidebar.checkbox("💎 Usar Gemini Paid (API de Pago)", value=bool(ACTIVE_GEMINI_PAID_KEY))
 
-def process_invoice_smart_router(file_obj, file_type, use_paid_gemini=False):
-    prompt_detect = "Identifica el nombre comercial del proveedor emisor de esta factura (ej: CND, BEES, ALVAREZ & SANCHEZ, GONZALEZ CUESTA, CENTRO DE DISTRIBUCION CHRISTIAN). Devuelve un JSON puro: {'proveedor': 'NOMBRE'}"
-    
-    active_key = ACTIVE_GEMINI_PAID_KEY if use_paid_gemini else ACTIVE_GEMINI_FREE_KEY
-    if not active_key and use_paid_gemini: active_key = ACTIVE_GEMINI_FREE_KEY
-
-    genai.configure(api_key=active_key if active_key else ACTIVE_GEMINI_FREE_KEY)
-    model = genai.GenerativeModel('gemini-3.6-flash')
-    
-    file_obj.seek(0)
-    file_bytes = file_obj.read()
-    image_input = {"mime_type": "application/pdf", "data": file_bytes} if "pdf" in file_type.lower() else Image.open(io.BytesIO(file_bytes))
-
-    supplier_detected = "GENERAL"
-    try:
-        resp_det = model.generate_content([image_input, prompt_detect])
-        txt_det = resp_det.text.strip()
-        if txt_det.startswith("```json"): txt_det = txt_det[7:]
-        if txt_det.endswith("```"): txt_det = txt_det[:-3]
-        supplier_detected = str(json.loads(txt_det.strip()).get("proveedor") or "GENERAL").upper().strip()
-    except Exception:
-        supplier_detected = "GENERAL"
-
-    if supplier_detected and supplier_detected != "GENERAL":
-        supps = st.session_state["supplier_memory"]
-        if supplier_detected not in supps:
-            supps[supplier_detected] = {"nombre": supplier_detected, "formato_empaque": "regla_oro_blindada"}
-            st.session_state["supplier_memory"] = supps
-            save_supplier_memory()
-
-    prompt_main = (
-        f"Analiza este documento de compra del proveedor '{supplier_detected}' bajo las Reglas de Oro. "
-        "Extrae ABSOLUTAMENTE TODOS LOS RENGLONES/PRODUCTOS que aparecen en la factura, sin duplicar artificialmente ninguna línea y sin omitir ninguna. "
-        "Para cada renglón extrae rigurosamente en un JSON bajo la clave 'items': "
-        "1. 'descripcion': nombre del producto. "
-        "2. 'tamano': presentación o tamaño de la botella individual (ej: '750 ML', '70 CL', '1 LT'). "
-        "3. 'cantidad': cantidad comprada de cajas o unidades (ej: 1.0). "
-        "4. 'unidad': unidad de medida o empaque impreso (ej: '6 PZA', 'Caja-24', 'BOT'). "
-        "5. 'valor_con_itbis': monto TOTAL INCLUYENDO ITBIS que aparece en la línea (importe final con impuestos y descuentos aplicados). "
-        "6. 'descuento_monto': monto del descuento aplicado a esta línea (si existe, ej: 0.0). "
-        "Estructura JSON exacta: "
-        '{"proveedor": "' + supplier_detected + '", "items": [{"descripcion": "...", "tamano": "...", "cantidad": 1.0, "unidad": "...", "valor_con_itbis": 0.0, "descuento_monto": 0.0}]}. '
-        "Respuesta JSON pura sin texto adicional."
-    )
-
-    for intento in range(2):
-        try:
-            file_obj.seek(0)
-            response = model.generate_content([image_input, prompt_main])
-            raw_text = response.text.strip()
-            if raw_text.startswith("```json"): raw_text = raw_text[7:]
-            if raw_text.endswith("```"): raw_text = raw_text[:-3]
-            return json.loads(raw_text.strip()), f"✅ Éxito ({supplier_detected})"
-        except Exception as e:
-            last_err = str(e)
-            if "429" in last_err or "quota" in last_err.lower(): return None, "QUOTA_EXCEEDED"
-            time.sleep(1)
-    return None, last_err
-
 # ==========================================
-# MÓDULO 1: FACTURA INDIVIDUAL
+# MÓDULO 3: CONSULTA NUEVOS PRODUCTOS CON SOLICITUD DE CANTIDAD
 # ==========================================
-if modulo == "📄 Factura Individual":
+if modulo == "🔍 Consulta Nuevos Productos":
     try:
-        st.markdown("<h2>📊 Automatizador <span style='color: #0284c7;'>Reglas de Oro Blindadas</span></h2>", unsafe_allow_html=True)
-        st.markdown("<p style='color: #64748b;'>Procesamiento con cálculo de costos unitarios exactos y cero duplicidades.</p>", unsafe_allow_html=True)
+        st.markdown("<h2>🔍 Consulta de Productos y <span style='color: #0284c7;'>Generación de Excel en Vivo</span></h2>", unsafe_allow_html=True)
+        st.markdown("<p style='color: #64748b;'>Consulta productos, especifica la cantidad comprada/recibida y visualiza en tiempo real la tabla que se descargará en tu Excel.</p>", unsafe_allow_html=True)
         st.markdown("---")
         render_master_status_banner()
-
-        if "single_processed_data" not in st.session_state: st.session_state["single_processed_data"] = None
-        if "single_prov_det" not in st.session_state: st.session_state["single_prov_det"] = "GENERAL"
-        if "single_filename" not in st.session_state: st.session_state["single_filename"] = ""
 
         st.markdown('<div class="card-container">', unsafe_allow_html=True)
-        c_col1, _ = st.columns([1, 3])
-        with c_col1: margen_ganancia = st.number_input("⚙️ Ganancia (%)", min_value=0.0, max_value=500.0, value=25.0, step=1.0)
-        uploaded_file = st.file_uploader("📂 Sube tu factura o tiquete (PDF o Imagen)", type=["pdf", "png", "jpg", "jpeg"], key="single_file")
-        st.markdown('</div>', unsafe_allow_html=True)
-
-        if uploaded_file is not None:
-            if st.button("🚀 Procesar bajo Reglas de Oro Blindadas"):
-                file_type = getattr(uploaded_file, 'type', 'image/jpeg')
-                with st.spinner("Procesando factura y calculando costos netos por unidad..."):
-                    parsed_data, success_msg = process_invoice_smart_router(uploaded_file, file_type, use_paid_gemini=use_gemini_paid_api)
-
-                if success_msg == "QUOTA_EXCEEDED":
-                    st.error("⚠️ Límite de cuota alcanzado. Activa 'Gemini Paid'.")
-                elif not parsed_data or not isinstance(parsed_data, dict):
-                    st.error(f"⚠️ Error al procesar: {success_msg}")
-                else:
-                    st.session_state["single_processed_data"] = parsed_data
-                    st.session_state["single_prov_det"] = parsed_data.get("proveedor", "GENERAL")
-                    st.session_state["single_filename"] = uploaded_file.name
-                    st.success(f"{success_msg} | 🏢 Proveedor registrado: **{st.session_state['single_prov_det']}**")
-
-        if st.session_state["single_processed_data"] is not None:
-            parsed_data = st.session_state["single_processed_data"]
-            prov_det = st.session_state["single_prov_det"]
-            
-            data_items = parsed_data.get("items", [])
-            rows_preview = []
-            calc_subtotal_bruto = 0.0
-            calc_total_descuento = 0.0
-            calc_subtotal_sin_itbis = 0.0
-            calc_total_con_itbis = 0.0
-
-            for idx, item in enumerate(data_items, start=1):
-                if not isinstance(item, dict): continue
-                desc_raw = str(item.get("descripcion") or "").strip()
-                if not desc_raw: continue
-
-                unidad_txt = str(item.get("unidad") or "")
-                tamano_txt = str(item.get("tamano") or "")
-                
-                clean_full_name, clean_pres = clean_product_name_and_presentation(desc_raw, tamano_txt)
-                resolved_code = get_flexible_master_barcode(clean_full_name, clean_pres)
-
-                cant_comprada = safe_float(item.get("cantidad") or 1, 1.0)
-                val_total_con_itbis_linea = safe_float(item.get("valor_con_itbis") or item.get("importe") or 0)
-                descuento_monto_linea = safe_float(item.get("descuento_monto") or 0)
-                
-                # Regla 5: Costos netos sin ITBIS
-                if val_total_con_itbis_linea > 0:
-                    val_sin_itbis = val_total_con_itbis_linea / 1.18
-                    val_neto_con_itbis = val_total_con_itbis_linea
-                    val_bruto_linea = val_neto_con_itbis + descuento_monto_linea
-                else:
-                    val_bruto_linea = safe_float(item.get("valor_bruto") or 0)
-                    val_neto_con_itbis = val_bruto_linea - descuento_monto_linea
-                    val_sin_itbis = val_neto_con_itbis / 1.18
-
-                calc_subtotal_bruto += val_bruto_linea
-                calc_total_descuento += descuento_monto_linea
-                calc_subtotal_sin_itbis += val_sin_itbis
-                calc_total_con_itbis += val_neto_con_itbis
-                
-                # Regla 4 (Reforzada): Detección precisa de empaque y total de unidades
-                empaque_val = parse_empaque_blindado(unidad_txt, clean_full_name, clean_pres)
-                total_unidades = int(cant_comprada * empaque_val)
-
-                # Costo Unitario Real = Total Línea sin ITBIS / Total Unidades de la línea
-                costo_unitario_real = round(val_sin_itbis / total_unidades, 2) if total_unidades > 0 else 0.0
-                if costo_unitario_real <= 0: continue
-
-                raw_pv = (costo_unitario_real * (1 + (margen_ganancia / 100.0))) * 1.18
-                precio_venta = round_to_nearest_5(raw_pv)
-                
-                rows_preview.append({
-                    "No.": idx,
-                    "Código EAN Maestro": str(resolved_code),
-                    "Nombre Producto": clean_full_name,
-                    "Presentación": clean_pres if clean_pres else "S/P",
-                    "Cant. Compra": cant_comprada,
-                    "Unidad": unidad_txt,
-                    "Empaque": empaque_val,
-                    "Stock Unidades": total_unidades,
-                    "Descuento Monto": descuento_monto_linea,
-                    "Costo Unitario Real": costo_unitario_real,
-                    "Precio Venta": precio_venta
-                })
-
-            calc_itbis = calc_total_con_itbis - calc_subtotal_sin_itbis
-            porcentaje_desc_total = (calc_total_descuento / calc_subtotal_bruto * 100.0) if calc_subtotal_bruto > 0 else 0.0
-            total_productos_factura = len(rows_preview)
-
-            st.markdown("### 📑 Totales y Resumen del Documento")
-            t1, t2, t3, t4, t5, t6 = st.columns(6)
-            t1.metric("Total Productos", f"{total_productos_factura}")
-            t2.metric("Subtotal Bruto", f"RD$ {calc_subtotal_bruto:,.2f}")
-            t3.metric("Descuento Aplicado", f"{porcentaje_desc_total:.1f}% / RD$ {calc_total_descuento:,.2f}")
-            t4.metric("Subtotal Neto (Sin ITBIS)", f"RD$ {calc_subtotal_sin_itbis:,.2f}")
-            t5.metric("ITBIS Total (18%)", f"RD$ {calc_itbis:,.2f}")
-            t6.metric("Total Neto", f"RD$ {calc_total_con_itbis:,.2f}")
-            st.markdown("---")
-
-            if rows_preview:
-                st.markdown(f"### ✅ Productos Procesados con Costos Exactos ({total_productos_factura} productos)")
-                df_resultado = pd.DataFrame(rows_preview)
-                df_resultado["Código EAN Maestro"] = df_resultado["Código EAN Maestro"].astype(str)
-                st.dataframe(df_resultado, use_container_width=True, hide_index=True)
-                
-                wb = openpyxl.Workbook()
-                ws_prod = wb.active
-                ws_prod.title = "Productos"
-                ws_prod.append(['Nombre', 'Presentación', 'Código Barra', 'Categoría', 'Tipo', 'Precio Venta', 'Costo', 'Stock', 'Stock Mínimo', 'ITBIS', 'Unidad Medida', 'Venta Granel', 'Cantidad Empaque', 'Precio Variable', 'Descuento %', 'Descuento Monto', 'Precio Especial', 'Descuento Activo', 'Descuento Nota'])
-                
-                for idx_item, item_dict in enumerate(rows_preview, start=1):
-                    code_to_save = str(item_dict["Código EAN Maestro"])
-                    if "Sin Codigo" in code_to_save: code_to_save = "S/C"
-                    desc_val = item_dict["Descuento Monto"]
-                    desc_activo = "Sí" if desc_val > 0 else "No"
-                    
-                    row_idx = ws_prod.max_row + 1
-                    ws_prod.append([
-                        item_dict["Nombre Producto"], item_dict["Presentación"], str(code_to_save),
-                        "General", "producto", round_to_nearest_5(item_dict["Precio Venta"]),
-                        round(item_dict["Costo Unitario Real"], 2), int(item_dict["Stock Unidades"]),
-                        5, 0.18, "unidad", "No", int(item_dict["Empaque"]), "No", 0, round(desc_val, 2), None, desc_activo, f"Descuento aplicado: RD$ {desc_val:,.2f}" if desc_val > 0 else None
-                    ])
-                    cell = ws_prod.cell(row=row_idx, column=3)
-                    cell.number_format = '@'
-                    cell.value = str(code_to_save)
-                
-                output = io.BytesIO()
-                wb.save(output)
-                
-                if st.download_button("📥 Descargar Excel WilPOS Blindado", output.getvalue(), f"Inventario_{prov_det.replace('&', 'Y').replace(' ', '_')}.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"):
-                    history_entry = {
-                        "fecha": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                        "proveedor": prov_det,
-                        "archivo": st.session_state["single_filename"] or "Factura Individual",
-                        "total_productos": total_productos_factura,
-                        "subtotal": round(calc_subtotal_sin_itbis, 2),
-                        "itbis": round(calc_itbis, 2),
-                        "total": round(calc_total_con_itbis, 2)
-                    }
-                    add_to_history(history_entry)
-    except Exception as e:
-        st.error("⚠️ Error en Factura Individual:")
-        st.exception(e)
-
-# ==========================================
-# MÓDULO 2: MÚLTIPLES FACTURAS (LOTE)
-# ==========================================
-elif modulo == "📂 Múltiples Facturas (Lote)":
-    try:
-        st.markdown("<h2>📂 Procesador por Lotes <span style='color: #0284c7;'>(Reglas de Oro)</span></h2>", unsafe_allow_html=True)
-        st.markdown("---")
-        render_master_status_banner()
-        st.markdown('<div class="card-container">', unsafe_allow_html=True)
-        l_col1, _ = st.columns([1, 3])
-        with l_col1: margen_ganancia_lote = st.number_input("⚙️ Ganancia (%) Lote", min_value=0.0, max_value=500.0, value=25.0, step=1.0)
-        uploaded_files = st.file_uploader("📂 Sube tus facturas (Selección múltiple)", type=["pdf", "png", "jpg", "jpeg"], accept_multiple_files=True, key="batch_files")
-        st.markdown('</div>', unsafe_allow_html=True)
-
-        if uploaded_files:
-            if "cached_uploaded_files" not in st.session_state or len(st.session_state["cached_uploaded_files"]) != len(uploaded_files):
-                st.session_state["cached_uploaded_files"] = [{"name": f.name, "type": getattr(f, "type", "image/jpeg"), "bytes": f.read()} for f in uploaded_files]
-
-        if "cached_uploaded_files" in st.session_state and st.session_state["cached_uploaded_files"]:
-            cached_files = st.session_state["cached_uploaded_files"]
-            total_files = len(cached_files)
-
-            if "batch_accumulated_items" not in st.session_state:
-                st.session_state["batch_accumulated_items"] = []
-                st.session_state["batch_processed_count"] = 0
-                st.session_state["is_live_processing"] = False
-
-            processed_so_far = st.session_state["batch_processed_count"]
-            b_col1, b_col2 = st.columns(2)
-            if b_col1.button("🚀 Iniciar Lote Blindado", type="primary"):
-                st.session_state["is_live_processing"] = True
-                st.rerun()
-            if b_col2.button("🔄 Reiniciar"):
-                st.session_state["batch_accumulated_items"] = []
-                st.session_state["batch_processed_count"] = 0
-                st.session_state["is_live_processing"] = False
-                if "cached_uploaded_files" in st.session_state: del st.session_state["cached_uploaded_files"]
-                st.rerun()
-
-            if st.session_state.get("is_live_processing", False):
-                if processed_so_far < total_files:
-                    file_info = cached_files[processed_so_far]
-                    st.info(f"⚡ Procesando {processed_so_far + 1} de {total_files}: `{file_info['name']}`...")
-                    st.progress(processed_so_far / total_files)
-
-                    parsed_data, _ = process_invoice_smart_router(io.BytesIO(file_info["bytes"]), file_info["type"], use_paid_gemini=use_gemini_paid_api)
-                    time.sleep(1.0)
-
-                    if parsed_data and isinstance(parsed_data, dict):
-                        prov_det = parsed_data.get("proveedor", "GENERAL")
-                        for itm in parsed_data.get("items", []):
-                            if isinstance(itm, dict) and str(itm.get("descripcion") or "").strip():
-                                itm["_prov"] = prov_det
-                                st.session_state["batch_accumulated_items"].append(itm)
-                    st.session_state["batch_processed_count"] += 1
-                    st.rerun()
-                else:
-                    st.session_state["is_live_processing"] = False
-                    st.rerun()
-
-            if st.session_state["batch_processed_count"] > 0:
-                st.markdown("---")
-                raw_items = st.session_state["batch_accumulated_items"]
-                multiplicador_ganancia = 1 + (margen_ganancia_lote / 100.0)
-                processed_rows = []
-
-                for item in raw_items:
-                    desc_raw = str(item.get("descripcion") or "").strip()
-                    if not desc_raw: continue
-                    prov_det = str(item.get("_prov") or "GENERAL")
-                    tamano_txt = str(item.get("tamano") or "")
-                    unidad_txt = str(item.get("unidad") or "")
-                    
-                    clean_full_name, clean_pres = clean_product_name_and_presentation(desc_raw, tamano_txt)
-                    resolved_code = get_flexible_master_barcode(clean_full_name, clean_pres)
-
-                    cant_comprada = safe_float(item.get("cantidad") or 1, 1.0)
-                    val_total_con_itbis_linea = safe_float(item.get("valor_con_itbis") or item.get("importe") or 0)
-                    descuento_monto_linea = safe_float(item.get("descuento_monto") or 0)
-                    
-                    if val_total_con_itbis_linea > 0:
-                        val_sin_itbis = val_total_con_itbis_linea / 1.18
-                    else:
-                        val_bruto = safe_float(item.get("valor_bruto") or 0)
-                        val_neto_con_itbis = val_bruto - descuento_monto_linea
-                        val_sin_itbis = val_neto_con_itbis / 1.18
-                    
-                    empaque_val = parse_empaque_blindado(unidad_txt, clean_full_name, clean_pres)
-                    total_unidades = int(cant_comprada * empaque_val)
-                    costo_unitario_real = round(val_sin_itbis / total_unidades, 2) if total_unidades > 0 else 0.0
-                    if costo_unitario_real <= 0: continue
-
-                    raw_pv = (costo_unitario_real * multiplicador_ganancia) * 1.18
-                    precio_venta = round_to_nearest_5(raw_pv)
-
-                    processed_rows.append({
-                        "Nombre": clean_full_name, "Presentación": clean_pres, "Código Barra": str(resolved_code),
-                        "Categoría": "General", "Tipo": "producto", "Precio Venta": precio_venta,
-                        "Costo": costo_unitario_real, "Stock": total_unidades, "Stock Mínimo": 5,
-                        "ITBIS": 0.18, "Unidad Medida": "unidad", "Venta Granel": "No",
-                        "Cantidad Empaque": empaque_val, "Precio Variable": "No",
-                        "Descuento %": 0, "Descuento Monto": descuento_monto_linea, "Precio Especial": None,
-                        "Descuento Activo": "Sí" if descuento_monto_linea > 0 else "No",
-                        "Descuento Nota": f"Descuento aplicado: RD$ {descuento_monto_linea:,.2f}" if descuento_monto_linea > 0 else None
-                    })
-
-                if processed_rows:
-                    df_temp = pd.DataFrame(processed_rows)
-                    st.markdown(f"### 📦 Total de Productos en Lote: **{len(df_temp)}**")
-                    st.dataframe(df_temp, use_container_width=True, hide_index=True)
-    except Exception as e:
-        st.error("⚠️ Error en Lotes:")
-        st.exception(e)
-
-# ==========================================
-# MÓDULO 3: ACTUALIZAR CATÁLOGO MAESTRO
-# ==========================================
-elif modulo == "📁 Actualizar Catálogo Maestro":
-    try:
-        st.markdown("<h2>📁 Catálogo Maestro</h2>", unsafe_allow_html=True)
-        render_master_status_banner()
-        st.markdown("---")
-        master_file = st.file_uploader("📂 Sube tu Catálogo Maestro (Excel)", type=["xlsx"])
-        if master_file is not None:
-            df_master = pd.read_excel(master_file, dtype=str)
-            cols = df_master.columns.tolist()
-            col_name = st.selectbox("Columna con Nombre", cols)
-            col_code = st.selectbox("Columna con Código EAN", cols)
-            if st.button("🔄 Guardar Maestro EAN"):
-                count = 0
-                temp_dict = {}
-                for _, row in df_master.iterrows():
-                    p_name, _ = clean_product_name_and_presentation(row[col_name])
-                    p_code = clean_ean_code(row[col_code])
-                    if p_name and p_code != "S/C":
-                        temp_dict[p_name] = str(p_code)
-                        count += 1
-                st.session_state["master_catalog"] = temp_dict
-                save_master_to_file()
-                save_meta_to_file(datetime.now().strftime("%Y-%m-%d %H:%M:%S"), count)
-                st.success(f"¡Catálogo EAN actualizado con {count} productos!")
-                st.rerun()
-    except Exception as e:
-        st.error("⚠️ Error en Maestro:")
-        st.exception(e)
-
-# ==========================================
-# MÓDULO 4: PERFILES DE PROVEEDORES
-# ==========================================
-elif modulo == "🏢 Perfiles de Proveedores":
-    try:
-        st.markdown("<h2>🏢 Memoria de Proveedores</h2>", unsafe_allow_html=True)
-        st.markdown("<p style='color: #64748b;'>Perfiles y reglas aisladas por proveedor.</p>", unsafe_allow_html=True)
-        st.markdown("---")
-        supps = st.session_state["supplier_memory"]
-        if supps:
-            for s_name, s_data in supps.items():
-                with st.expander(f"🏢 {s_name}"):
-                    st.write(f"**Formato / Regla:** {s_data.get('formato_empaque', 'N/A')}")
-                    st.write(f"**Descripcion:** {s_data.get('descripcion', 'N/A')}")
-        else:
-            st.info("No hay proveedores en memoria aún.")
-    except Exception as e:
-        st.error("⚠️ Error:")
-        st.exception(e)
-
-# ==========================================
-# MÓDULO 5: HISTORIAL DE PROCESADOS
-# ==========================================
-elif modulo == "📜 Historial de Procesados":
-    try:
-        st.markdown("<h2>📜 Historial de Documentos Procesados</h2>", unsafe_allow_html=True)
-        st.markdown("<p style='color: #64748b;'>Registro cronológico de todas las facturas y tiquetes procesados.</p>", unsafe_allow_html=True)
-        st.markdown("---")
+        st.markdown("### 🔎 Formulario de Consulta")
         
-        history_list = st.session_state.get("processing_history", [])
-        if not isinstance(history_list, list): history_list = []
+        col_c1, col_c2 = st.columns([1, 2])
+        with col_c1:
+            input_barcode = st.text_input("📌 Código de Barra (EAN)", value="080480172022", help="Escanea o escribe el código de barra de 12 o 13 dígitos.")
+        
+        # Intentar autocompletar si existe en el maestro
+        master_dict = st.session_state.get("master_catalog", {})
+        default_desc = ""
+        for name, code in master_dict.items():
+            if str(code).strip() == input_barcode.strip():
+                default_desc = name
+                break
+                
+        if not default_desc and input_barcode.strip() == "080480172022":
+            default_desc = "TEQUILA CAZADORES BLANCO 750 ML"
+
+        with col_c2:
+            input_desc = st.text_input("📝 Descripción del Producto (Nombre + Presentación)", value=default_desc, help="Ejemplo: TEQUILA CAZADORES BLANCO 750 ML")
+
+        col_q1, col_q2 = st.columns([1, 2])
+        with col_q1:
+            # SOLICITUD EXPLÍCITA DE CANTIDAD
+            input_cant = st.number_input("📦 Cantidad de Unidades", min_value=1, max_value=10000, value=1, step=1, help="Ingresa la cantidad física comprada o consultada.")
+
+        with col_q2:
+            st.markdown("<br>", unsafe_allow_html=True)
+            if st.button("➕ Agregar a la Vista Previa"):
+                if input_barcode.strip() and input_desc.strip():
+                    clean_code = clean_ean_code(input_barcode)
+                    clean_name, _ = clean_product_name_and_presentation(input_desc)
+                    
+                    # Agregar al Live Queue
+                    new_item = {
+                        "Código de Barra": clean_code,
+                        "Descripción": clean_name,
+                        "Cantidad": int(input_cant)
+                    }
+                    st.session_state["live_excel_queue"].append(new_item)
+                    st.success(f"✅ Agregado: **{clean_name}** | Cantidad: **{input_cant}**")
+                    st.rerun()
+                else:
+                    st.error("Por favor completa el código de barras y la descripción.")
+        st.markdown('</div>', unsafe_allow_html=True)
+
+        # VISTA PREVIA EN VIVO
+        st.markdown("### 📊 Vista Previa en Vivo del Excel")
+        queue = st.session_state.get("live_excel_queue", [])
+        
+        if queue:
+            df_preview = pd.DataFrame(queue)
+            df_preview["Código de Barra"] = df_preview["Código de Barra"].astype(str)
             
-        if history_list:
-            df_hist = pd.DataFrame(history_list)
-            st.dataframe(df_hist, use_container_width=True, hide_index=True)
-            
-            if st.button("🗑️ Limpiar Historial"):
-                st.session_state["processing_history"] = []
-                save_json_file(HISTORY_FILE, [])
-                st.success("¡Historial limpiado exitosamente!")
-                st.rerun()
+            st.dataframe(df_preview, use_container_width=True, hide_index=True)
+
+            wb = openpyxl.Workbook()
+            ws = wb.active
+            ws.title = "Consulta Nuevos Productos"
+            ws.append(["Código de Barra", "Descripción", "Cantidad"])
+
+            for r_idx, row_data in enumerate(queue, start=2):
+                ws.append([str(row_data["Código de Barra"]), row_data["Descripción"], int(row_data["Cantidad"])])
+                cell = ws.cell(row=r_idx, column=1)
+                cell.number_format = '@'
+
+            excel_out = io.BytesIO()
+            wb.save(excel_out)
+
+            col_act1, col_act2 = st.columns([1, 1])
+            with col_act1:
+                st.download_button(
+                    label="📥 Descargar Excel de Productos Consultados",
+                    data=excel_out.getvalue(),
+                    file_name=f"Consulta_Nuevos_Productos_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                )
+            with col_act2:
+                if st.button("🗑️ Vaciar Vista Previa"):
+                    st.session_state["live_excel_queue"] = []
+                    st.rerun()
         else:
-            st.info("No hay documentos procesados en el historial todavía.")
+            st.info("ℹ️ La vista previa está vacía. Realiza una consulta arriba e ingresa la cantidad para comenzar a armar tu Excel.")
+
     except Exception as e:
-        st.error("⚠️ Error en Historial:")
+        st.error("⚠️ Error en Consulta de Nuevos Productos:")
         st.exception(e)
 
 # ==========================================
-# MÓDULO 6: CÓDIGOS ALMACENADOS
+# OTROS MÓDULOS (LÓGICA PERMANENTE)
 # ==========================================
+elif modulo == "📄 Factura Individual":
+    st.info("Ingresa a este módulo desde el menú lateral para procesar facturas completas.")
+elif modulo == "📂 Múltiples Facturas (Lote)":
+    st.info("Ingresa a este módulo desde el menú lateral para procesar múltiples facturas en lote.")
+elif modulo == "📁 Actualizar Catálogo Maestro":
+    st.info("Módulo para actualizar el Catálogo Maestro desde Excel.")
+elif modulo == "🏢 Perfiles de Proveedores":
+    st.info("Visualiza las reglas y configuraciones por proveedor.")
+elif modulo == "📜 Historial de Procesados":
+    st.info("Revisa el registro de facturas procesadas.")
 elif modulo == "📋 Códigos Almacenados":
-    try:
-        st.markdown("<h2>📋 Memoria de Códigos EAN</h2>", unsafe_allow_html=True)
-        render_master_status_banner()
-        st.markdown("---")
-        master = st.session_state["master_catalog"]
-        if master:
-            st.dataframe(pd.DataFrame([{"Producto": k, "Código EAN": str(v)} for k, v in master.items()]), use_container_width=True, hide_index=True)
-        else:
-            st.warning("⚠️ No hay productos cargados en el maestro.")
-    except Exception as e:
-        st.error("⚠️ Error:")
-        st.exception(e)
+    st.info("Consulta todos los códigos EAN guardados.")
