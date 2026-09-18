@@ -94,7 +94,7 @@ if modulo == "🌐 Consulta Web de Productos":
         
         col_w1, col_w2 = st.columns([2, 1])
         with col_w1:
-            input_bc = st.text_input("Código de Barra (EAN / UPC)", placeholder="Ej: 619947000068 ó 080480172022", key="widget_bc_open")
+            input_bc = st.text_input("Código de Barra (EAN / UPC)", placeholder="Ej: 619947000068 ó 082184090408", key="widget_bc_open")
         with col_w2:
             st.markdown("<br>", unsafe_allow_html=True)
             btn_web_search = st.button("🔍 Consultar en Internet")
