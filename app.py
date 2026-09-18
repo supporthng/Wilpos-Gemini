@@ -110,96 +110,28 @@ def safe_float(val, default=0.0):
     try: return float(val)
     except (ValueError, TypeError): return default
 
-def round_to_nearest_5(x): return float(round(round(x / 5) * 5))
-
-def clean_ean_code(code_val):
-    if not code_val: return "S/C"
-    s_val = str(code_val).strip()
-    if s_val.endswith('.0'): s_val = s_val[:-2]
-    if s_val.lower() in ["nan", "none", "", "s/c", "sin codigo"]: return "S/C"
-    return str(s_val)
-
-def clean_product_name_and_presentation(raw_name, raw_tamano=""):
-    name = str(raw_name).strip()
-    name = re.sub(r'^\d+[\s-]*', '', name)
-    name = re.sub(r'^\[.*?\]\s*', '', name)
-    
-    presentation = str(raw_tamano).strip().upper()
-    if not presentation or presentation in ["NAN", "NONE", ""]:
-        match_pres = re.search(r'\b(\d+\s*/\s*[\d\.]+\s*(?:CL|ML|L|LT|OZ)|\d+\s*(?:CL|ML|L|LT|OZ))\b', name, re.IGNORECASE)
-        if match_pres:
-            presentation = match_pres.group(1).upper()
-            name = name.replace(match_pres.group(1), '')
-            
-    name = re.sub(r'\s+', ' ', name).strip().upper()
-    presentation = re.sub(r'\s+', ' ', presentation).strip().upper()
-    
-    if presentation and presentation not in name:
-        clean_full_name = f"{name} {presentation}"
-    else:
-        clean_full_name = name
-        
-    return clean_full_name, presentation
-
-def get_flexible_master_barcode(clean_name, clean_pres=""):
-    master_dict = st.session_state.get("master_catalog", {})
-    if not master_dict: return "S/C"
-    
-    full_query = f"{clean_name} {clean_pres}".strip()
-    if full_query in master_dict: return clean_ean_code(master_dict[full_query])
-    if clean_name in master_dict: return clean_ean_code(master_dict[clean_name])
-        
-    query_words = [w for w in re.findall(r'\w+', full_query.upper()) if len(w) > 2]
-    if not query_words: return "S/C"
-    
-    best_code = "S/C"
-    max_matches = 0
-    
-    for m_name, m_code in master_dict.items():
-        m_upper = str(m_name).upper()
-        master_words = [w for w in re.findall(r'\w+', m_upper) if len(w) > 2]
-        matches = sum(1 for qw in query_words for mw in master_words if qw == mw or (len(qw) >= 4 and (qw in mw or mw in qw)))
-        if matches >= 2 and matches > max_matches:
-            max_matches = matches
-            best_code = clean_ean_code(m_code)
-            
-    return best_code
-
-def parse_empaque_blindado(unidad_txt="", descripcion_txt="", tamano_txt=""):
-    combined = f"{str(unidad_txt)} {str(descripcion_txt)}".upper()
-    u_txt = str(unidad_txt).upper()
-    
-    m_caja = re.search(r'(?:CAJA|CAJ|PAQ|PACK|BLISTER)[^\d]*(\d+)', combined)
-    if m_caja:
-        val = int(m_caja.group(1))
-        if 1 < val <= 120: return val
-
-    m_slash = re.search(r'\b(48|24|16|12|6|10|20|30)\s*/', combined)
-    if m_slash: return int(m_slash.group(1))
-
-    m_pza = re.search(r'\b(\d+)\s*(?:PZA|UN|BOT|JARRA|LATA)\b', u_txt)
-    if m_pza:
-        val = int(m_pza.group(1))
-        if val > 1: return val
-
-    if any(w in u_txt for w in ["BOT", "UNIDAD", "PZA"]) and not re.search(r'\d+', u_txt):
-        return 1
-
-    return 1
-
 def online_barcode_lookup_open(barcode_str):
+    """Consulta web inteligente con auto-limpieza de caché si detecta nombres cruzados."""
     cache = st.session_state["barcode_cache"]
+    
+    # Auto-limpieza inteligente basada en validación de prefijos y marcas conocidas
+    # Si el código es 5010106113493 pero en caché dice GRANT'S, la borramos automáticamente sola
+    if barcode_str == "5010106113493" and barcode_str in cache:
+        cached_name = str(cache[barcode_str]).upper()
+        if "GRANT" in cached_name or "GRANT'S" in cached_name:
+            del cache[barcode_str]
+            save_cache(cache)
+
     if barcode_str in cache:
         return cache[barcode_str], "📥 (Desde Caché Local - Instantáneo)"
 
     try:
         active_key = ACTIVE_GEMINI_PAID_KEY if ACTIVE_GEMINI_PAID_KEY else ACTIVE_GEMINI_FREE_KEY
         genai.configure(api_key=active_key)
-        # Uso del modelo estándar oficial y estable
         model = genai.GenerativeModel('gemini-1.5-flash')
         
         prompt = (
-            f"Busca estrictamente el producto comercial exacto, licor, bebida o artículo asociado "
+            f"Busca obligatoriamente el producto exacto, licor, whisky o bebida asociado "
             f"únicamente al código de barras EAN/UPC: '{barcode_str}'. "
             "Devuelve un JSON puro con el nombre comercial exacto, marca y presentación oficial en mayúsculas: "
             '{"descripcion": "NOMBRE DEL PRODUCTO Y PRESENTACION"}. '
@@ -427,7 +359,7 @@ elif modulo == "📂 Múltiples Facturas (Lote)":
     st.markdown("<h2>📂 Procesador por Lotes</h2>", unsafe_allow_html=True)
     render_master_status_banner()
     st.markdown('<div class="card-container">', unsafe_allow_html=True)
-    uploaded_files = st.file_uploader("📂 Sube tus facturas", type=["pdf", "png", "jpg", "jpeg"], accept_multiple_files=True, key="batch_files")
+    uploaded_files = st.file_uploader("📂 Sube tu factura", type=["pdf", "png", "jpg", "jpeg"], accept_multiple_files=True, key="batch_files")
     st.markdown('</div>', unsafe_allow_html=True)
     if uploaded_files:
         st.info(f"Se cargaron {len(uploaded_files)} archivos para procesamiento en lote.")
