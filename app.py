@@ -150,10 +150,10 @@ if menu_opcion == "📄 Procesar Factura":
     
     if archivo_subido is not None:
         if st.button("🚀 Procesar Factura y Validar EAN"):
-            with st.spinner("🚀 Analizando factura con Gemini Flash..."):
+            with st.spinner("🚀 Analizando factura con Gemini 3.8 Flash..."):
                 try:
-                    # Actualizado al modelo oficial vigente (gemini-2.5-flash)
-                    model = genai.GenerativeModel('gemini-2.5-flash')
+                    # Actualizado al modelo oficial vigente gemini-3.8-flash
+                    model = genai.GenerativeModel('gemini-3.8-flash')
                     
                     archivo_subido.seek(0)
                     file_bytes = archivo_subido.read()
