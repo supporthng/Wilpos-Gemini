@@ -95,17 +95,17 @@ def clean_ean_code(code_val):
     
     s_val = re.sub(r'\D', '', s_val)
     
-    # Para CND, los códigos cortos de 5 dígitos (ej. 92713) los registramos o buscamos en catálogo, 
-    # si tienen entre 8 y 14 son EAN válidos.
     if 8 <= len(s_val) <= 14:
         return str(s_val)
     elif 4 <= len(s_val) <= 6:
-        return str(s_val) # Mantener código interno CND si viene limpio
+        return str(s_val)
         
     return "S/C"
 
 def limpiar_nombre_producto(descripcion_raw, tamano_raw):
     desc = str(descripcion_raw).upper().strip()
+    # Limpiar números colados al final de la descripción (como los códigos o índices residuales)
+    desc = re.sub(r'\s+\d{4,6}$', '', desc)
     desc = re.sub(r'\b(PC|UN|CAJA|CAJ|BOT|PZA)\b', '', desc)
     desc = re.sub(r'\s+', ' ', desc).strip()
     
@@ -125,6 +125,8 @@ def parse_empaque(tamano_txt="", unidad_txt="", descripcion_txt=""):
 
     combined = f"{str(tamano_txt)} {str(unidad_txt)} {str(descripcion_txt)}".upper()
     
+    if "ALOE" in combined:
+        return 24 # Aloe Pure Plus viene típicamente en presentación de pack/caja de 24
     if "CORONA" in combined or "MICHELOB" in combined or "BRAHMA" in combined or "PTE" in combined or "THE ONE" in combined:
         if "PC" in unidad_upper and not re.search(r'\b(6|12|16)\b', combined):
             return 24
@@ -213,18 +215,17 @@ if menu_opcion == "📄 Procesar Factura":
 
                     prov_instruccion = f"El proveedor seleccionado es '{prov_seleccionado}'." if prov_seleccionado != "🔍 Detección Automática (Nuevo Proveedor)" else "Identifica el nombre comercial del proveedor emisor en este documento."
                     
-                    # PROMPT CORREGIDO PARA EXTRAER IMPORTE NETO REAL (CON ISC INCLUIDO)
                     prompt_unificado = (
                         f"{prov_instruccion} "
-                        "Analiza este tique de CND / BEES renglón por renglón. "
-                        "Extrae exactamente los 25 renglones de productos. "
-                        "Para cada renglón extrae: "
-                        "- 'descripcion': nombre completo del producto. "
+                        "Analiza este tique de CND / BEES renglón por renglón con total limpieza. "
+                        "Asegúrate de separar correctamente la descripción del producto de los números de código que aparezcan al lado o arriba (como el código 92713 del primer Aloe Pure Plus). "
+                        "Para cada uno de los 25 renglones, extrae estrictamente: "
+                        "- 'descripcion': nombre limpio del producto (sin incluir códigos numéricos pegados). "
                         "- 'tamano': tamaño o presentación. "
                         "- 'codigo_factura': código numérico de la línea (ej: 92713). "
-                        "- 'cantidad': cantidad comprada. "
+                        "- 'cantidad': cantidad comprada (ej: 10). "
                         "- 'unidad': 'PC' o 'UN'. "
-                        "- 'impuesto_neto': el valor monetario impreso en la columna 'Imp. Neto' (que incluye el neto con ISC, antes de ITBIS). "
+                        "- 'impuesto_neto': el valor monetario exacto impreso en la columna 'Imp. Neto'. "
                         "Devuelve un JSON puro con esta estructura exacta y llaves en minúscula: "
                         '{"paginacion": "1 de 1", "proveedor_detectado": "CND / BEES", "subtotal": 892186.92, "isc_advalorem": 62110.50, "isc_especifico": 114833.50, "itbis": 185895.24, "descuentos": 0.0, "total": 1218647.47, "items": [{"descripcion": "...", "tamano": "...", "codigo_factura": "...", "cantidad": 1.0, "unidad": "...", "impuesto_neto": 0.0}]}. '
                         "Respuesta JSON pura."
@@ -321,7 +322,6 @@ if menu_opcion == "📄 Procesar Factura":
                 empaque = parse_empaque(raw_tam, unidad, raw_desc)
                 total_unidades = int(cant_compra * empaque)
                 
-                # Cálculo exacto del costo unitario real basado en el Impuesto Neto de la línea entre las unidades totales
                 costo_unitario_real = round(impuesto_neto_fila / total_unidades, 2) if total_unidades > 0 else 0.0
 
                 if costo_unitario_real > 0:
