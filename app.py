@@ -172,8 +172,10 @@ if menu_opcion == "📄 Procesar Factura":
         if st.button("🚀 Procesar Todas las Páginas"):
             with st.spinner("Analizando documento completo con Flash-Lite..."):
                 try:
-                    # Actualizado al modelo oficial sugerido: gemini-3.5-flash-lite
                     model = genai.GenerativeModel('gemini-3.5-flash-lite')
+                    
+                    # Reiniciamos el puntero del archivo subido por seguridad
+                    archivo_subido.seek(0)
                     file_bytes = archivo_subido.read()
                     f_type = getattr(archivo_subido, 'type', 'image/jpeg')
                     
@@ -182,6 +184,8 @@ if menu_opcion == "📄 Procesar Factura":
                     prov_a_usar = prov_seleccionado
                     if prov_seleccionado == "🔍 Detección Automática (Nuevo Proveedor)":
                         prompt_det = "Identifica el nombre comercial del proveedor emisor en este documento. Devuelve un JSON puro: {'proveedor': 'NOMBRE'}"
+                        
+                        archivo_subido.seek(0)
                         resp_det = llamada_segura_gemini(model, [image_input, prompt_det])
                         txt_det = resp_det.text.strip()
                         if txt_det.startswith("```json"): txt_det = txt_det[7:]
@@ -209,6 +213,7 @@ if menu_opcion == "📄 Procesar Factura":
                         "Respuesta JSON pura."
                     )
 
+                    archivo_subido.seek(0)
                     response = llamada_segura_gemini(model, [image_input, prompt_main])
                     raw_text = response.text.strip()
                     if raw_text.startswith("```json"): raw_text = raw_text[7:]
