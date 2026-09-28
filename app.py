@@ -77,9 +77,11 @@ if "supplier_memory" not in st.session_state:
 
 if "master_catalog" not in st.session_state:
     master_init = load_json_file(MASTER_CATALOG_FILE, "dict")
-    # Asegurar la corrección de Presidente Light 22oz en el catálogo maestro por defecto
+    # Asignaciones específicas memorizadas para Presidente Light por presentación
     master_init["PRESIDENTE LIGHT HU 16/22OZ"] = "70601561"
     master_init["PTE. LIGHT HU 16/22OZ"] = "70601561"
+    master_init["PTE. LIGHT HU 24/12OZ"] = "7468973200200"
+    master_init["BRAHMA LIGHT HU 24/12OZ"] = "7468973200200"
     save_json_file(MASTER_CATALOG_FILE, master_init)
     st.session_state["master_catalog"] = master_init
 
@@ -153,12 +155,18 @@ def parse_empaque(tamano_txt="", unidad_txt="", descripcion_txt=""):
 
     return 1
 
-def buscar_en_catalogo_maestro(nombre_producto):
+def buscar_en_catalogo_maestro(nombre_producto, presentacion=""):
+    """Búsqueda avanzada validando coincidencia estricta de marca y presentación para evitar códigos repetidos."""
     n_upper = str(nombre_producto).upper().strip()
-    
-    # Validación específica aprendida para Presidente Light 22oz
-    if "PTE" in n_upper and "LIGHT" in n_upper and ("22" in n_upper or "16" in n_upper):
-        return "70601561"
+    p_upper = str(presentacion).upper().strip()
+    combined_query = f"{n_upper} {p_upper}"
+
+    # Validaciones directas por presentación específica
+    if "PTE" in combined_query and "LIGHT" in combined_query:
+        if "22" in combined_query or "650" in combined_query:
+            return "70601561" # Presidente Light 22oz
+        if "12" in combined_query or "OZ" in combined_query:
+            return "7468973200200" # Presidente Light 12oz
 
     master_dict = st.session_state.get("master_catalog", {})
     if not master_dict: return "S/C"
@@ -166,16 +174,21 @@ def buscar_en_catalogo_maestro(nombre_producto):
     if n_upper in master_dict:
         return clean_ean_code(master_dict[n_upper])
         
-    query_words = [w for w in re.findall(r'\w+', n_upper) if len(w) > 2]
+    query_words = [w for w in re.findall(r'\w+', combined_query) if len(w) > 2]
     if not query_words: return "S/C"
     
     best_code = "S/C"
-    max_matches = 0
+    max_score = 0
+    
     for m_name, m_code in master_dict.items():
         m_upper = str(m_name).upper()
-        matches = sum(1 for qw in query_words if qw in m_upper)
-        if matches >= 2 and matches > max_matches:
-            max_matches = matches
+        score = sum(2 if qw in m_upper else 0 for qw in query_words if len(qw) > 3)
+        # Bonificación si la presentación coincide exactamente en el catálogo maestro
+        if p_upper and p_upper in m_upper:
+            score += 5
+            
+        if score > max_score and score >= 4:
+            max_score = score
             best_code = clean_ean_code(m_code)
             
     return best_code
@@ -208,7 +221,7 @@ if menu_opcion == "📄 Procesar Factura":
     
     if archivo_subido is not None:
         if st.button("🚀 Procesar Factura y Validar EAN"):
-            with st.spinner("🚀 Analizando tique CND / BEES y cotejando con Catálogo Maestro..."):
+            with st.spinner("🚀 Analizando tique CND / BEES y validando presentaciones..."):
                 try:
                     if not gemini_key:
                         raise ValueError("No se encontró ninguna clave de API configurada.")
@@ -224,15 +237,15 @@ if menu_opcion == "📄 Procesar Factura":
                     
                     prompt_unificado = (
                         f"{prov_instruccion} "
-                        "Analiza este tique de CND / BEES renglón por renglón con total limpieza. "
-                        "Para cada uno de los 25 renglones, extrae estrictamente: "
+                        "Analiza este tique de CND / BEES renglón por renglón con total precisión. "
+                        "Para cada uno de los renglones, extrae estrictamente: "
                         "- 'descripcion': nombre limpio del producto. "
-                        "- 'tamano': tamaño o presentación. "
+                        "- 'tamano': tamaño, presentación o volumen exacto (ej: '24/12OZ', '16/650ML', '330ML'). "
                         "- 'cantidad': cantidad comprada. "
                         "- 'unidad': 'PC' o 'UN'. "
                         "- 'impuesto_neto': el valor monetario exacto impreso en la columna 'Imp. Neto'. "
                         "Devuelve un JSON puro con esta estructura exacta y llaves en minúscula: "
-                        '{"paginacion": "1 de 1", "proveedor_detectado": "CND / BEES", "subtotal": 892186.92, "isc_advalorem": 62110.50, "isc_especifico": 114833.50, "itbis": 185895.24, "descuentos": 0.0, "total": 1218647.47, "items": [{"descripcion": "...", "tamano": "...", "cantidad": 1.0, "unidad": "...", "impuesto_neto": 0.0}]}. '
+                        '{"paginacion": "1 de 1", "proveedor_detectado": "CND / BEES", "subtotal": 0.0, "isc_advalorem": 0.0, "isc_especifico": 0.0, "itbis": 0.0, "descuentos": 0.0, "total": 0.0, "items": [{"descripcion": "...", "tamano": "...", "cantidad": 1.0, "unidad": "...", "impuesto_neto": 0.0}]}. '
                         "Respuesta JSON pura."
                     )
 
@@ -314,7 +327,8 @@ if menu_opcion == "📄 Procesar Factura":
                 m_med = re.search(r'(\d+\s*(?:ML|L|LT|G|KG|OZ|Z))', str(raw_tam + " " + raw_desc).upper())
                 presentacion_limpia = m_med.group(1) if m_med else (raw_tam if raw_tam else "S/P")
 
-                codigo_final = buscar_en_catalogo_maestro(nombre_completo)
+                # Búsqueda maestra validando el nombre y la presentación específica
+                codigo_final = buscar_en_catalogo_maestro(nombre_completo, presentacion_limpia)
 
                 cant_compra = safe_float(item.get("cantidad"), 1.0)
                 unidad = str(item.get("unidad", ""))
