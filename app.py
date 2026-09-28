@@ -151,7 +151,7 @@ menu_opcion = st.sidebar.radio("Navegación", ["📄 Procesar Factura", "📁 Ca
 # ==========================================
 if menu_opcion == "📄 Procesar Factura":
     st.markdown("<h2>📄 Procesador Inteligente de Facturas (Multi-Página)</h2>", unsafe_allow_html=True)
-    st.markdown("<p style='color: #64748b;'>Sube facturas de una o varias páginas utilizando gemini-2.0-flash-lite.</p>", unsafe_allow_html=True)
+    st.markdown("<p style='color: #64748b;'>Sube facturas de una o varias páginas utilizando gemini-3.5-flash-lite.</p>", unsafe_allow_html=True)
     st.markdown("---")
 
     if "factura_data" not in st.session_state: st.session_state["factura_data"] = None
@@ -172,8 +172,8 @@ if menu_opcion == "📄 Procesar Factura":
         if st.button("🚀 Procesar Todas las Páginas"):
             with st.spinner("Analizando documento completo con Flash-Lite..."):
                 try:
-                    # Configurado con gemini-2.0-flash-lite
-                    model = genai.GenerativeModel('gemini-2.0-flash-lite')
+                    # Actualizado al modelo oficial sugerido: gemini-3.5-flash-lite
+                    model = genai.GenerativeModel('gemini-3.5-flash-lite')
                     file_bytes = archivo_subido.read()
                     f_type = getattr(archivo_subido, 'type', 'image/jpeg')
                     
