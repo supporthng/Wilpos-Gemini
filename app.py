@@ -193,11 +193,11 @@ if menu_opcion == "📄 Procesar Factura":
                     prompt_unificado = (
                         f"{prov_instruccion} "
                         "Analiza este documento completo de principio a fin. "
-                        "1. Extrae la paginación impresa (ej: '1 de 2'). "
+                        "1. Extrae la paginación impresa (ej: '1 de 2' o '1'). "
                         "2. Para CADA RENGLÓN de producto, extrae obligatoriamente: "
                         "- 'descripcion': nombre limpio del producto. "
-                        "- 'tamano': contenido de la columna tamaño (ej: '12/75 CL.'). "
-                        "- 'codigo_factura': código de barras oficial de la línea (8 a 14 dígitos). Asegúrate de que cada línea mantenga su propio código y no se repitan entre líneas distintas a menos que coincidan en el documento. "
+                        "- 'tamano': contenido de la columna tamaño (ej: '12/70 CL.'). "
+                        "- 'codigo_factura': código de barras oficial de la línea (8 a 14 dígitos). Asegúrate de que cada línea mantenga su propio código. "
                         "- 'cantidad': cantidad comprada. "
                         "- 'unidad': unidad de empaque (ej: 'CAJA'). "
                         "- 'valor_descuento': el valor monetario del descuento aplicado en esta línea (columna VALOR bajo DESCUENTO). "
@@ -227,7 +227,7 @@ if menu_opcion == "📄 Procesar Factura":
 
                     st.session_state["factura_data"] = parsed_json
                     st.session_state["prov_activo"] = prov_a_usar
-                    st.session_state["paginacion_detectada"] = parsed_json.get("paginacion", "1 de 1")
+                    st.session_state["paginacion_detectada"] = str(parsed_json.get("paginacion", "1 de 1"))
                     
                     st.success(f"✅ ¡Factura procesada con éxito! Paginación: **{st.session_state['paginacion_detectada']}**")
                 except Exception as e:
@@ -238,13 +238,11 @@ if menu_opcion == "📄 Procesar Factura":
         data_resp = st.session_state["factura_data"]
         items = data_resp.get("items", [])
         prov_actual = st.session_state.get("prov_activo", "GENERAL")
-        pag_info = st.session_state.get("paginacion_detectada", "1 de 1")
+        pag_info = str(st.session_state.get("paginacion_detectada", "1 de 1"))
         
-        # Cálculo financiero automático robusto basado en la suma de los renglones extraídos
         total_descuentos = sum(safe_float(i.get("valor_descuento")) for i in items)
         total_importe_con_itbis = sum(safe_float(i.get("valor_con_itbis")) for i in items)
         
-        # Estimación estándar del subtotal e ITBIS a partir de los importes con ITBIS
         subtotal_val = total_importe_con_itbis / 1.18
         itbis_val = total_importe_con_itbis - subtotal_val
         total_val = total_importe_con_itbis
@@ -269,7 +267,6 @@ if menu_opcion == "📄 Procesar Factura":
         if items:
             st.markdown(f"### 📋 Detalle de Renglones Extraídos ({len(items)} ítems)")
             
-            # Post-procesamiento para prevenir duplicidad artificial de códigos entre filas distintas
             codigos_vistos = set()
             for item in items:
                 c_limp = clean_ean_code(item.get("codigo_factura"))
