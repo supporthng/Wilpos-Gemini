@@ -1,6 +1,7 @@
 import io
 import json
 import os
+import time
 from datetime import datetime
 import re
 import google.generativeai as genai
@@ -123,6 +124,22 @@ def buscar_en_catalogo_maestro(nombre_producto):
             
     return best_code
 
+def llamada_segura_gemini(model, contents, max_intentos=3):
+    """Realiza llamadas a Gemini manejando automáticamente el límite de cuota (Error 429) con espera inteligente."""
+    for intento in range(max_intentos):
+        try:
+            return model.generate_content(contents)
+        except Exception as e:
+            err_str = str(e)
+            if "429" in err_str or "quota" in err_str.lower():
+                if intento < max_intentos - 1:
+                    tiempo_espera = 25 * (intento + 1) # Espera progresiva de 25s, 50s...
+                    st.warning(f"⚠️ Límite de cuota gratuito alcanzado (429). Pausando automáticamente por {tiempo_espera}s antes del reintento ({intento+1}/{max_intentos})...")
+                    time.sleep(tiempo_espera)
+                    continue
+            raise e
+    raise Exception("Se agotaron los reintentos automáticos por límite de cuota.")
+
 # ==========================================
 # MENÚ LATERAL DE NAVEGACIÓN
 # ==========================================
@@ -153,9 +170,8 @@ if menu_opcion == "📄 Procesar Factura":
     
     if archivo_subido is not None:
         if st.button("🚀 Procesar Todas las Páginas"):
-            with st.spinner("Analizando documento completo..."):
+            with st.spinner("Analizando documento completo (con control automático de reintentos por cuota)..."):
                 try:
-                    # Actualizado al modelo oficial sugerido: gemini-3.8-flash
                     model = genai.GenerativeModel('gemini-3.8-flash')
                     file_bytes = archivo_subido.read()
                     f_type = getattr(archivo_subido, 'type', 'image/jpeg')
@@ -165,7 +181,7 @@ if menu_opcion == "📄 Procesar Factura":
                     prov_a_usar = prov_seleccionado
                     if prov_seleccionado == "🔍 Detección Automática (Nuevo Proveedor)":
                         prompt_det = "Identifica el nombre comercial del proveedor emisor en este documento. Devuelve un JSON puro: {'proveedor': 'NOMBRE'}"
-                        resp_det = model.generate_content([image_input, prompt_det])
+                        resp_det = llamada_segura_gemini(model, [image_input, prompt_det])
                         txt_det = resp_det.text.strip()
                         if txt_det.startswith("```json"): txt_det = txt_det[7:]
                         if txt_det.endswith("```"): txt_det = txt_det[:-3]
@@ -192,7 +208,7 @@ if menu_opcion == "📄 Procesar Factura":
                         "Respuesta JSON pura."
                     )
 
-                    response = model.generate_content([image_input, prompt_main])
+                    response = llamada_segura_gemini(model, [image_input, prompt_main])
                     raw_text = response.text.strip()
                     if raw_text.startswith("```json"): raw_text = raw_text[7:]
                     if raw_text.endswith("```"): raw_text = raw_text[:-3]
