@@ -76,11 +76,18 @@ def round_to_nearest_5(x):
     return float(round(round(x / 5) * 5))
 
 def clean_ean_code(code_val):
+    """Filtro estricto: Descarta códigos internos cortos del proveedor. 
+       Solo acepta códigos de barras EAN/UPC universales válidos de 8 a 14 dígitos."""
     if not code_val: return "S/C"
     s_val = str(code_val).strip()
     if s_val.endswith('.0'): s_val = s_val[:-2]
-    if s_val.lower() in ["nan", "none", "", "s/c", "sin codigo"] or len(s_val) < 7:
+    
+    s_val = re.sub(r'\D', '', s_val)
+    
+    # Si tiene menos de 8 dígitos (ej. códigos internos de 6-7 dígitos de facturas), se descarta de inmediato
+    if s_val.lower() in ["nan", "none", "", "s/c", "sin codigo"] or len(s_val) < 8 or len(s_val) > 14:
         return "S/C"
+        
     return str(s_val)
 
 def parse_empaque(unidad_txt="", descripcion_txt=""):
@@ -127,8 +134,8 @@ def llamada_segura_gemini(model, contents, max_intentos=3):
             err_str = str(e)
             if "429" in err_str or "quota" in err_str.lower():
                 if intento < max_intentos - 1:
-                    tiempo_espera = 30 * (intento + 1)
-                    st.warning(f"⚠️ Límite de cuota gratuito alcanzado (429). Esperando {tiempo_espera}s para reintentar ({intento+1}/{max_intentos})...")
+                    tiempo_espera = 20 * (intento + 1)
+                    st.warning(f"⚠️ Límite de cuota alcanzado (429). Pausando automáticamente por {tiempo_espera}s antes del reintento ({intento+1}/{max_intentos})...")
                     time.sleep(tiempo_espera)
                     continue
             raise e
@@ -138,8 +145,8 @@ st.sidebar.markdown("<h3 style='color: #0284c7;'>⚡ WilPOS System</h3>", unsafe
 menu_opcion = st.sidebar.radio("Navegación", ["📄 Procesar Factura", "📁 Catálogo Maestro EAN", "🏢 Gestionar Proveedores"])
 
 if menu_opcion == "📄 Procesar Factura":
-    st.markdown("<h2>📄 Procesador Inteligente de Facturas (Optimizado)</h2>", unsafe_allow_html=True)
-    st.markdown("<p style='color: #64748b;'>Procesa facturas en una sola llamada con gemini-3.5-flash-lite para evitar cuotas.</p>", unsafe_allow_html=True)
+    st.markdown("<h2>📄 Procesador Inteligente de Facturas (Multi-Página)</h2>", unsafe_allow_html=True)
+    st.markdown("<p style='color: #64748b;'>Sube facturas de una o varias páginas. El sistema descarta códigos internos y cruza con tu Catálogo Maestro.</p>", unsafe_allow_html=True)
     st.markdown("---")
 
     if "factura_data" not in st.session_state: st.session_state["factura_data"] = None
@@ -157,8 +164,8 @@ if menu_opcion == "📄 Procesar Factura":
     archivo_subido = st.file_uploader("📂 Sube tu factura (PDF multi-página o Imagen)", type=["pdf", "png", "jpg", "jpeg"])
     
     if archivo_subido is not None:
-        if st.button("🚀 Procesar Factura en 1 Solicitud"):
-            with st.spinner("Analizando documento de forma optimizada..."):
+        if st.button("🚀 Procesar Factura y Validar EAN"):
+            with st.spinner("Analizando documento y aplicando reglas de códigos..."):
                 try:
                     model = genai.GenerativeModel('gemini-3.5-flash-lite')
                     
@@ -167,15 +174,21 @@ if menu_opcion == "📄 Procesar Factura":
                     f_type = getattr(archivo_subido, 'type', 'image/jpeg')
                     image_input = {"mime_type": "application/pdf", "data": file_bytes} if "pdf" in f_type.lower() else Image.open(io.BytesIO(file_bytes))
 
-                    # PROMPT UNIFICADO: Detecta proveedor y extrae ítems en una sola consulta para gastar la mitad de cuota
-                    prov_instruccion = f"El proveedor seleccionado es '{prov_seleccionado}'. Si dice 'Detección Automática', identifica el nombre comercial real del emisor de la factura." if prov_seleccionado != "🔍 Detección Automática (Nuevo Proveedor)" else "Identifica el nombre comercial del proveedor emisor en este documento."
+                    prov_instruccion = f"El proveedor seleccionado es '{prov_seleccionado}'." if prov_seleccionado != "🔍 Detección Automática (Nuevo Proveedor)" else "Identifica el nombre comercial del proveedor emisor en este documento."
                     
                     prompt_unificado = (
                         f"{prov_instruccion} "
-                        "Además, analiza el documento completo de principio a fin y extrae ABSOLUTAMENTE TODOS LOS RENGLONES Y PRODUCTOS, sin omitir ninguno. "
+                        "Analiza el documento completo de principio a fin y extrae ABSOLUTAMENTE TODOS LOS RENGLONES Y PRODUCTOS, sin omitir ninguno. "
+                        "Para cada renglón extrae: "
+                        "1. 'descripcion': nombre del producto. "
+                        "2. 'tamano': presentación (ej: '750 ML'). "
+                        "3. 'codigo_factura': el código que trae la línea en la factura (aunque sea interno). "
+                        "4. 'cantidad': cantidad comprada (ej: 2.0). "
+                        "5. 'unidad': unidad de empaque (ej: 'CAJA 12'). "
+                        "6. 'valor_con_itbis': monto TOTAL INCLUYENDO ITBIS de la línea. "
                         "Devuelve un JSON puro con esta estructura exacta: "
                         '{"proveedor_detectado": "NOMBRE_PROVEEDOR", "items": [{"descripcion": "...", "tamano": "...", "codigo_factura": "...", "cantidad": 1.0, "unidad": "...", "valor_con_itbis": 0.0}]}. '
-                        "Respuesta JSON pura sin texto adicional."
+                        "Respuesta JSON pura."
                     )
 
                     archivo_subido.seek(0)
@@ -197,7 +210,7 @@ if menu_opcion == "📄 Procesar Factura":
 
                     st.session_state["factura_data"] = parsed_json
                     st.session_state["prov_activo"] = prov_a_usar
-                    st.success(f"✅ Documento procesado con éxito en 1 sola llamada. Proveedor: **{prov_a_usar}**")
+                    st.success(f"✅ Documento procesado con éxito. Proveedor: **{prov_a_usar}**")
                 except Exception as e:
                     st.error(f"⚠️ Error al procesar: {str(e)}")
     st.markdown('</div>', unsafe_allow_html=True)
@@ -219,9 +232,12 @@ if menu_opcion == "📄 Procesar Factura":
                 tamano = str(item.get("tamano", "")).strip().upper()
                 nombre_completo = f"{desc} {tamano}".strip()
                 
-                cod_factura_raw = clean_ean_code(item.get("codigo_factura"))
-                if cod_factura_raw != "S/C":
-                    codigo_final = cod_factura_raw 
+                # APLICACIÓN DE LA REGLA DE EAN:
+                # 1. Valida si el código de la factura es un EAN válido (8-14 dígitos). Si es interno (corto), lo descarta ("S/C").
+                # 2. Si es "S/C", busca automáticamente en el Catálogo Maestro oficial.
+                cod_factura_limpio = clean_ean_code(item.get("codigo_factura"))
+                if cod_factura_limpio != "S/C":
+                    codigo_final = cod_factura_limpio 
                 else:
                     codigo_final = buscar_en_catalogo_maestro(nombre_completo) 
 
@@ -264,6 +280,7 @@ if menu_opcion == "📄 Procesar Factura":
 
 elif menu_opcion == "📁 Catálogo Maestro EAN":
     st.markdown("<h2>📁 Actualizar Catálogo Maestro de Productos</h2>", unsafe_allow_html=True)
+    st.markdown("<p style='color: #64748b;'>Sube tu archivo Excel con los códigos EAN oficiales reales.</p>", unsafe_allow_html=True)
     st.markdown("---")
     master_file = st.file_uploader("📂 Sube tu Catálogo Maestro (Excel)", type=["xlsx"])
     if master_file is not None:
@@ -283,7 +300,13 @@ elif menu_opcion == "📁 Catálogo Maestro EAN":
                     count += 1
             st.session_state["master_catalog"] = temp_dict
             save_json_file(MASTER_CATALOG_FILE, temp_dict)
-            st.success(f"¡Catálogo maestro actualizado con éxito! Se cargaron **{count}** productos.")
+            st.success(f"¡Catálogo maestro actualizado con éxito! Se cargaron **{count}** productos con EAN válido.")
+
+    master_data = st.session_state.get("master_catalog", {})
+    if master_data:
+        st.markdown(f"### 📋 Productos en Catálogo Maestro ({len(master_data):,} registros)")
+        df_show = pd.DataFrame([{"Producto": k, "Código EAN Oficial": v} for k, v in master_data.items()])
+        st.dataframe(df_show, use_container_width=True, hide_index=True)
 
 elif menu_opcion == "🏢 Gestionar Proveedores":
     st.markdown("<h2>🏢 Perfiles de Proveedores Memorizados</h2>", unsafe_allow_html=True)
