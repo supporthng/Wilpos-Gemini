@@ -75,7 +75,10 @@ if "master_catalog" not in st.session_state:
     st.session_state["master_catalog"] = load_json_file(MASTER_CATALOG_FILE, "dict")
 
 def safe_float(val, default=0.0):
-    try: return float(val)
+    try:
+        if val is None: return default
+        s_val = str(val).replace('$', '').replace(',', '').strip()
+        return float(s_val)
     except (ValueError, TypeError): return default
 
 def round_to_nearest_5(x): 
@@ -153,7 +156,7 @@ menu_opcion = st.sidebar.radio("Navegación", ["📄 Procesar Factura", "📁 Ca
 # ==========================================
 if menu_opcion == "📄 Procesar Factura":
     st.markdown("<h2>📄 Procesador Inteligente de Facturas (Multi-Página)</h2>", unsafe_allow_html=True)
-    st.markdown("<p style='color: #64748b;'>Sube facturas de una o varias páginas. El sistema detecta la paginación y cruza con tu Catálogo Maestro.</p>", unsafe_allow_html=True)
+    st.markdown("<p style='color: #64748b;'>Sube facturas, visualiza el dashboard financiero de totales y cruza con tu Catálogo Maestro.</p>", unsafe_allow_html=True)
     st.markdown("---")
 
     if "factura_data" not in st.session_state: st.session_state["factura_data"] = None
@@ -173,7 +176,7 @@ if menu_opcion == "📄 Procesar Factura":
     
     if archivo_subido is not None:
         if st.button("🚀 Procesar Factura y Validar EAN"):
-            with st.spinner("🚀 Analizando documento, paginación y extrayendo ítems..."):
+            with st.spinner("🚀 Analizando documento, totales financieros y paginación..."):
                 try:
                     if not gemini_key:
                         raise ValueError("No se encontró ninguna clave de API configurada.")
@@ -190,17 +193,11 @@ if menu_opcion == "📄 Procesar Factura":
                     prompt_unificado = (
                         f"{prov_instruccion} "
                         "Analiza el documento completo de principio a fin. "
-                        "1. Detecta la información de paginación impresa en el documento (ejemplo: '1 de 2', 'Pág: 1 / 2', o si es una página única indícalo como '1 de 1'). "
-                        "2. Extrae ABSOLUTAMENTE TODOS LOS RENGLONES Y PRODUCTOS de esta vista/página, sin omitir ninguno. "
-                        "Para cada renglón extrae: "
-                        "- 'descripcion': nombre limpio del producto. "
-                        "- 'tamano': contenido de la columna tamaño (ej: '12/75 CL.'). "
-                        "- 'codigo_factura': código de barras o código interno. "
-                        "- 'cantidad': cantidad comprada. "
-                        "- 'unidad': unidad de empaque (ej: 'CAJA'). "
-                        "- 'valor_con_itbis': monto total incluyendo ITBIS. "
+                        "1. Detecta la información de paginación impresa (ej: '1 de 2' o '1 de 1'). "
+                        "2. Extrae los totales globales de la factura: 'subtotal_general', 'itbis_general', 'descuento_general', 'total_general'. "
+                        "3. Extrae ABSOLUTAMENTE TODOS LOS RENGLONES Y PRODUCTOS con sus respectivos valores de línea ('descripcion', 'tamano', 'codigo_factura', 'cantidad', 'unidad', 'valor_con_itbis'). "
                         "Devuelve un JSON puro con esta estructura exacta: "
-                        '{"paginacion": "1 de 2", "proveedor_detectado": "NOMBRE_PROVEEDOR", "items": [{"descripcion": "...", "tamano": "...", "codigo_factura": "...", "cantidad": 1.0, "unidad": "...", "valor_con_itbis": 0.0}]}. '
+                        '{"paginacion": "1 de 2", "proveedor_detectado": "NOMBRE_PROVEEDOR", "totales_factura": {"subtotal_general": 0.0, "itbis_general": 0.0, "descuento_general": 0.0, "total_general": 0.0}, "items": [{"descripcion": "...", "tamano": "...", "codigo_factura": "...", "cantidad": 1.0, "unidad": "...", "valor_con_itbis": 0.0}]}. '
                         "Respuesta JSON pura."
                     )
 
@@ -224,20 +221,39 @@ if menu_opcion == "📄 Procesar Factura":
 
                     st.session_state["factura_data"] = parsed_json
                     st.session_state["prov_activo"] = prov_a_usar
-                    st.session_state["paginacion_detectada"] = parsed_json.get("paginacion", "Página Única (1 de 1)")
+                    st.session_state["paginacion_detectada"] = parsed_json.get("paginacion", "1 de 1")
                     
-                    st.success(f"✅ ¡Documento procesado con éxito! Paginación detectada: **{st.session_state['paginacion_detectada']}**")
+                    st.success(f"✅ ¡Factura procesada con éxito! Paginación: **{st.session_state['paginacion_detectada']}**")
                 except Exception as e:
                     st.error(f"⚠️ Error al procesar: {str(e)}")
     st.markdown('</div>', unsafe_allow_html=True)
 
     if st.session_state["factura_data"] is not None:
-        items = st.session_state["factura_data"].get("items", [])
+        data_resp = st.session_state["factura_data"]
+        items = data_resp.get("items", [])
+        totales = data_resp.get("totales_factura", {})
         prov_actual = st.session_state.get("prov_activo", "GENERAL")
         pag_info = st.session_state.get("paginacion_detectada", "1 de 1")
         
+        # ==========================================
+        # DASHBOARD DE MONTOS Y TOTALES
+        # ==========================================
+        st.markdown(f"### 📊 Dashboard Financiero | Proveedor: {prov_actual} (Pág. {pag_info})")
+        
+        col_m1, col_m2, col_m3, col_m4 = st.columns(4)
+        with col_m1:
+            st.metric(label="Subtotal", value=f"${safe_float(totales.get('subtotal_general')):,.2f}")
+        with col_m2:
+            st.metric(label="ITBIS", value=f"${safe_float(totales.get('itbis_general')):,.2f}")
+        with col_m3:
+            st.metric(label="Descuentos", value=f"${safe_float(totales.get('descuento_general')):,.2f}")
+        with col_m4:
+            st.metric(label="Total General", value=f"${safe_float(totales.get('total_general')):,.2f}")
+        
+        st.markdown("---")
+
         if items:
-            st.markdown(f"### 📊 Paginación: **Página {pag_info}** | Proveedor: {prov_actual} | Ítems: {len(items)}")
+            st.markdown(f"### 📋 Detalle de Renglones Extraídos ({len(items)} ítems)")
             preview_rows = []
             wb = openpyxl.Workbook()
             ws = wb.active
