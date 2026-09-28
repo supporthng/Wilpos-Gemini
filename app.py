@@ -153,13 +153,13 @@ if menu_opcion == "📄 Procesar Factura":
     
     if archivo_subido is not None:
         if st.button("🚀 Procesar Todas las Páginas"):
-            with st.spinner("Analizando documento completo (esto puede tardar unos segundos si tiene varias páginas)..."):
+            with st.spinner("Analizando documento completo..."):
                 try:
-                    model = genai.GenerativeModel('gemini-1.5-flash')
+                    # Actualizado a gemini-2.5-flash para evitar errores 404 de modelos retirados
+                    model = genai.GenerativeModel('gemini-2.5-flash')
                     file_bytes = archivo_subido.read()
                     f_type = getattr(archivo_subido, 'type', 'image/jpeg')
                     
-                    # Soporte multi-página PDF / Imagen nativa de Gemini
                     image_input = {"mime_type": "application/pdf", "data": file_bytes} if "pdf" in f_type.lower() else Image.open(io.BytesIO(file_bytes))
 
                     prov_a_usar = prov_seleccionado
