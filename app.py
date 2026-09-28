@@ -115,27 +115,30 @@ def limpiar_nombre_producto(descripcion_raw, tamano_raw):
     return desc
 
 def parse_empaque(tamano_txt="", unidad_txt="", descripcion_txt=""):
-    """Cálculo de empaque blindado: si es unidad (UN) o no especifica pack de caja, retorna 1."""
+    """Cálculo de empaque inteligente con referencias predeterminadas para productos específicos."""
     unidad_upper = str(unidad_txt).upper()
     if "UN" in unidad_upper:
         return 1
 
     combined = f"{str(tamano_txt)} {str(unidad_txt)} {str(descripcion_txt)}".upper()
     
-    # Patrones estándar de cajas/packs (ej: 24/12OZ, 6/473)
-    m_pack = re.search(r'\b(48|24|16|12|6|10|20|30)\s*[/xX]', combined)
+    # 1. Referencias predeterminadas para productos con empaques complejos o ambiguos
+    if "CORONA" in combined or "MICHELOB" in combined or "BRAHMA" in combined or "PTE" in combined:
+        if "PC" in unidad_upper and not re.search(r'\b(6|12)\b', combined):
+            return 24 # Empaque estándar por caja de cerveza
+    if "CLAMATO" in combined:
+        return 12
+    if "FOUR LOKO" in combined:
+        return 12
+        
+    # 2. Patrones estándar de cajas/packs (ej: 24/12OZ, 6/473)
+    m_pack = re.search(r'\b(48|24|16|12|6|10|20|30|4)\s*[/xX]', combined)
     if m_pack:
         return int(m_pack.group(1))
         
     m_mult = re.search(r'\b([2468])\s*X\b', combined)
     if m_mult:
         return int(m_mult.group(1))
-
-    # Evitar falsos positivos con números sueltos (como el '2' de las líneas inferiores de Corona/Michelob si se compraron en PC pero son packs de 24 o botellas sueltas)
-    # Si la unidad es PC (Pack/Caja) y no hay número de pack explícito, asumimos empaque estándar de 24 para cervezas/maltas o 1 si es genérico.
-    if "PC" in unidad_upper:
-        if any(w in combined for w in ['CORONA', 'MICHELOB', 'BRAHMA', 'PTE', 'PRESIDENTE', 'HEINEKEN', 'STELLA']):
-            return 24 # Empaque estándar de cervezas en caja PC si no se especifica lo contrario
 
     return 1
 
@@ -205,7 +208,7 @@ if menu_opcion == "📄 Procesar Factura":
                     
                     prompt_unificado = (
                         f"{prov_instruccion} "
-                        "Analiza este tique o factura de CND / BEES. Extrae estrictamente la información de cada renglón relacionando la cantidad, unidad (PC o UN), descripción exacta y el monto total con ITBIS de la fila. "
+                        "Analiza este tique o factura. Extrae estrictamente la información de cada renglón relacionando la cantidad, unidad (PC o UN), descripción exacta y el monto total con ITBIS de la fila. "
                         "Devuelve un JSON puro con esta estructura exacta y llaves en minúscula: "
                         '{"paginacion": "1 de 1", "proveedor_detectado": "NOMBRE", "subtotal": 0.0, "isc_advalorem": 0.0, "isc_especifico": 0.0, "itbis": 0.0, "descuentos": 0.0, "total": 0.0, "items": [{"descripcion": "...", "tamano": "...", "codigo_factura": "...", "cantidad": 1.0, "unidad": "...", "valor_con_itbis": 0.0}]}. '
                         "Respuesta JSON pura."
