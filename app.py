@@ -94,28 +94,21 @@ def clean_ean_code(code_val):
     return str(s_val)
 
 def limpiar_nombre_producto(descripcion_raw, tamano_raw):
-    """Limpia el nombre para dejar únicamente la descripción principal y la presentación correcta."""
     desc = str(descripcion_raw).upper().strip()
-    
-    # Eliminar posibles ruidos comunes o códigos sobrantes incrustados
     desc = re.sub(r'\b(CAJA|CAJ|BOT|UNIDAD|PZA)\b', '', desc)
     desc = re.sub(r'\s+', ' ', desc).strip()
     
-    # Extraer formato limpio de medida (ej: 75 CL, 750 ML, 1 LT) si viene dentro del tamaño
     tam = str(tamano_raw).upper().strip()
     m_medida = re.search(r'(\d+\s*(?:CL|ML|L|LT|G|KG))', tam)
     medida_limpia = m_medida.group(1) if m_medida else ""
     
-    # Si la descripción ya trae la medida, evitamos duplicarla
     if medida_limpia and medida_limpia not in desc:
         return f"{desc} {medida_limpia}".strip()
     
     return desc
 
 def parse_empaque(tamano_txt="", unidad_txt="", descripcion_txt=""):
-    """Extrae la cantidad por empaque priorizando el formato '12/75' o '6/75' de la columna tamaño."""
     combined_tamano = str(tamano_txt).upper()
-    
     m_slash = re.search(r'\b(48|24|16|12|6|10|20|30|1)\s*/', combined_tamano)
     if m_slash: 
         return int(m_slash.group(1))
@@ -160,11 +153,12 @@ menu_opcion = st.sidebar.radio("Navegación", ["📄 Procesar Factura", "📁 Ca
 # ==========================================
 if menu_opcion == "📄 Procesar Factura":
     st.markdown("<h2>📄 Procesador Inteligente de Facturas (Multi-Página)</h2>", unsafe_allow_html=True)
-    st.markdown("<p style='color: #64748b;'>Sube facturas de una o varias páginas. El sistema limpia descripciones y cruza con tu Catálogo Maestro.</p>", unsafe_allow_html=True)
+    st.markdown("<p style='color: #64748b;'>Sube facturas de una o varias páginas. El sistema detecta la paginación y cruza con tu Catálogo Maestro.</p>", unsafe_allow_html=True)
     st.markdown("---")
 
     if "factura_data" not in st.session_state: st.session_state["factura_data"] = None
     if "prov_activo" not in st.session_state: st.session_state["prov_activo"] = ""
+    if "paginacion_detectada" not in st.session_state: st.session_state["paginacion_detectada"] = ""
 
     st.markdown('<div class="card-container">', unsafe_allow_html=True)
     lista_proveedores = ["🔍 Detección Automática (Nuevo Proveedor)"] + list(st.session_state["supplier_memory"].keys())
@@ -179,7 +173,7 @@ if menu_opcion == "📄 Procesar Factura":
     
     if archivo_subido is not None:
         if st.button("🚀 Procesar Factura y Validar EAN"):
-            with st.spinner("🚀 Analizando factura y limpiando nombres con Gemini..."):
+            with st.spinner("🚀 Analizando documento, paginación y extrayendo ítems..."):
                 try:
                     if not gemini_key:
                         raise ValueError("No se encontró ninguna clave de API configurada.")
@@ -195,16 +189,18 @@ if menu_opcion == "📄 Procesar Factura":
                     
                     prompt_unificado = (
                         f"{prov_instruccion} "
-                        "Analiza el documento completo de principio a fin y extrae ABSOLUTAMENTE TODOS LOS RENGLONES Y PRODUCTOS, sin omitir ninguno. "
+                        "Analiza el documento completo de principio a fin. "
+                        "1. Detecta la información de paginación impresa en el documento (ejemplo: '1 de 2', 'Pág: 1 / 2', o si es una página única indícalo como '1 de 1'). "
+                        "2. Extrae ABSOLUTAMENTE TODOS LOS RENGLONES Y PRODUCTOS de esta vista/página, sin omitir ninguno. "
                         "Para cada renglón extrae: "
-                        "1. 'descripcion': nombre limpio y principal del producto (ej: 'VINO TINTO RESERVA TARAPACA'). "
-                        "2. 'tamano': el contenido exacto de la columna TAMAÑO (ej: '12/75 CL.'). "
-                        "3. 'codigo_factura': el código de barras o código de la línea. "
-                        "4. 'cantidad': cantidad comprada (ej: 1.0). "
-                        "5. 'unidad': unidad de empaque (ej: 'CAJA', 'BOT'). "
-                        "6. 'valor_con_itbis': monto TOTAL INCLUYENDO ITBIS de la línea. "
+                        "- 'descripcion': nombre limpio del producto. "
+                        "- 'tamano': contenido de la columna tamaño (ej: '12/75 CL.'). "
+                        "- 'codigo_factura': código de barras o código interno. "
+                        "- 'cantidad': cantidad comprada. "
+                        "- 'unidad': unidad de empaque (ej: 'CAJA'). "
+                        "- 'valor_con_itbis': monto total incluyendo ITBIS. "
                         "Devuelve un JSON puro con esta estructura exacta: "
-                        '{"proveedor_detectado": "NOMBRE_PROVEEDOR", "items": [{"descripcion": "...", "tamano": "...", "codigo_factura": "...", "cantidad": 1.0, "unidad": "...", "valor_con_itbis": 0.0}]}. '
+                        '{"paginacion": "1 de 2", "proveedor_detectado": "NOMBRE_PROVEEDOR", "items": [{"descripcion": "...", "tamano": "...", "codigo_factura": "...", "cantidad": 1.0, "unidad": "...", "valor_con_itbis": 0.0}]}. '
                         "Respuesta JSON pura."
                     )
 
@@ -228,7 +224,9 @@ if menu_opcion == "📄 Procesar Factura":
 
                     st.session_state["factura_data"] = parsed_json
                     st.session_state["prov_activo"] = prov_a_usar
-                    st.success(f"✅ ¡Factura procesada con éxito! Proveedor: **{prov_a_usar}**")
+                    st.session_state["paginacion_detectada"] = parsed_json.get("paginacion", "Página Única (1 de 1)")
+                    
+                    st.success(f"✅ ¡Documento procesado con éxito! Paginación detectada: **{st.session_state['paginacion_detectada']}**")
                 except Exception as e:
                     st.error(f"⚠️ Error al procesar: {str(e)}")
     st.markdown('</div>', unsafe_allow_html=True)
@@ -236,9 +234,10 @@ if menu_opcion == "📄 Procesar Factura":
     if st.session_state["factura_data"] is not None:
         items = st.session_state["factura_data"].get("items", [])
         prov_actual = st.session_state.get("prov_activo", "GENERAL")
+        pag_info = st.session_state.get("paginacion_detectada", "1 de 1")
         
         if items:
-            st.markdown(f"### 📊 Total de ítems extraídos ({len(items)} renglones) | Proveedor: {prov_actual}")
+            st.markdown(f"### 📊 Paginación: **Página {pag_info}** | Proveedor: {prov_actual} | Ítems: {len(items)}")
             preview_rows = []
             wb = openpyxl.Workbook()
             ws = wb.active
@@ -249,10 +248,8 @@ if menu_opcion == "📄 Procesar Factura":
                 raw_desc = item.get("descripcion", "")
                 raw_tam = item.get("tamano", "")
                 
-                # Nombre limpio optimizado (Solo descripción + presentación relevante)
                 nombre_completo = limpiar_nombre_producto(raw_desc, raw_tam)
                 
-                # Extracción de presentación limpia para columna independiente
                 m_med = re.search(r'(\d+\s*(?:CL|ML|L|LT|G|KG))', str(raw_tam).upper())
                 presentacion_limpia = m_med.group(1) if m_med else str(raw_tam).strip()
 
@@ -299,9 +296,9 @@ if menu_opcion == "📄 Procesar Factura":
             excel_buffer = io.BytesIO()
             wb.save(excel_buffer)
             st.download_button(
-                label=f"📥 Descargar Excel Importable - {prov_actual}",
+                label=f"📥 Descargar Excel Importable - {prov_actual} (Pág. {pag_info})",
                 data=excel_buffer.getvalue(),
-                file_name=f"Inventario_Master_{prov_actual.replace(' ', '_')}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
+                file_name=f"Inventario_Master_{prov_actual.replace(' ', '_')}_Pag_{pag_info.replace(' ', '_')}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
             )
 
