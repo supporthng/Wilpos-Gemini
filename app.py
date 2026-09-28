@@ -84,7 +84,6 @@ def clean_ean_code(code_val):
     
     s_val = re.sub(r'\D', '', s_val)
     
-    # Si tiene menos de 8 dígitos (ej. códigos internos de 6-7 dígitos de facturas), se descarta de inmediato
     if s_val.lower() in ["nan", "none", "", "s/c", "sin codigo"] or len(s_val) < 8 or len(s_val) > 14:
         return "S/C"
         
@@ -144,6 +143,9 @@ def llamada_segura_gemini(model, contents, max_intentos=3):
 st.sidebar.markdown("<h3 style='color: #0284c7;'>⚡ WilPOS System</h3>", unsafe_allow_html=True)
 menu_opcion = st.sidebar.radio("Navegación", ["📄 Procesar Factura", "📁 Catálogo Maestro EAN", "🏢 Gestionar Proveedores"])
 
+# ==========================================
+# MÓDULO 1: PROCESAR FACTURA
+# ==========================================
 if menu_opcion == "📄 Procesar Factura":
     st.markdown("<h2>📄 Procesador Inteligente de Facturas (Multi-Página)</h2>", unsafe_allow_html=True)
     st.markdown("<p style='color: #64748b;'>Sube facturas de una o varias páginas. El sistema descarta códigos internos y cruza con tu Catálogo Maestro.</p>", unsafe_allow_html=True)
@@ -232,9 +234,6 @@ if menu_opcion == "📄 Procesar Factura":
                 tamano = str(item.get("tamano", "")).strip().upper()
                 nombre_completo = f"{desc} {tamano}".strip()
                 
-                # APLICACIÓN DE LA REGLA DE EAN:
-                # 1. Valida si el código de la factura es un EAN válido (8-14 dígitos). Si es interno (corto), lo descarta ("S/C").
-                # 2. Si es "S/C", busca automáticamente en el Catálogo Maestro oficial.
                 cod_factura_limpio = clean_ean_code(item.get("codigo_factura"))
                 if cod_factura_limpio != "S/C":
                     codigo_final = cod_factura_limpio 
@@ -278,36 +277,74 @@ if menu_opcion == "📄 Procesar Factura":
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
             )
 
+# ==========================================
+# MÓDULO 2: CATÁLOGO MAESTRO EAN (CON REGISTRO MANUAL)
+# ==========================================
 elif menu_opcion == "📁 Catálogo Maestro EAN":
-    st.markdown("<h2>📁 Actualizar Catálogo Maestro de Productos</h2>", unsafe_allow_html=True)
-    st.markdown("<p style='color: #64748b;'>Sube tu archivo Excel con los códigos EAN oficiales reales.</p>", unsafe_allow_html=True)
+    st.markdown("<h2>📁 Gestión del Catálogo Maestro de Productos</h2>", unsafe_allow_html=True)
+    st.markdown("<p style='color: #64748b;'>Sube tu archivo Excel masivo o registra productos de forma manual uno a uno.</p>", unsafe_allow_html=True)
     st.markdown("---")
-    master_file = st.file_uploader("📂 Sube tu Catálogo Maestro (Excel)", type=["xlsx"])
-    if master_file is not None:
-        df_master = pd.read_excel(master_file, dtype=str)
-        cols = df_master.columns.tolist()
-        col_c1, col_c2 = st.columns(2)
-        with col_c1: col_name = st.selectbox("Columna con Nombre del Producto", cols)
-        with col_c2: col_code = st.selectbox("Columna con Código de Barra EAN", cols)
-        if st.button("🔄 Guardar Catálogo en Memoria"):
-            temp_dict = {}
-            count = 0
-            for _, row in df_master.iterrows():
-                p_name = str(row[col_name]).strip().upper()
-                p_code = clean_ean_code(row[col_code])
-                if p_name and p_code != "S/C":
-                    temp_dict[p_name] = p_code
-                    count += 1
-            st.session_state["master_catalog"] = temp_dict
-            save_json_file(MASTER_CATALOG_FILE, temp_dict)
-            st.success(f"¡Catálogo maestro actualizado con éxito! Se cargaron **{count}** productos con EAN válido.")
 
+    # Pestañas internas para organizar Carga masiva vs Alta manual
+    tab_masivo, tab_manual = st.tabs(["📂 Carga Masiva (Excel)", "➕ Agregar Producto Manualmente"])
+
+    with tab_masivo:
+        master_file = st.file_uploader("📂 Sube tu Catálogo Maestro (Excel)", type=["xlsx"])
+        if master_file is not None:
+            df_master = pd.read_excel(master_file, dtype=str)
+            cols = df_master.columns.tolist()
+            col_c1, col_c2 = st.columns(2)
+            with col_c1: col_name = st.selectbox("Columna con Nombre del Producto", cols)
+            with col_c2: col_code = st.selectbox("Columna con Código de Barra EAN", cols)
+            if st.button("🔄 Guardar Catálogo Masivo"):
+                temp_dict = st.session_state["master_catalog"]
+                count = 0
+                for _, row in df_master.iterrows():
+                    p_name = str(row[col_name]).strip().upper()
+                    p_code = clean_ean_code(row[col_code])
+                    if p_name and p_code != "S/C":
+                        temp_dict[p_name] = p_code
+                        count += 1
+                st.session_state["master_catalog"] = temp_dict
+                save_json_file(MASTER_CATALOG_FILE, temp_dict)
+                st.success(f"¡Catálogo actualizado con éxito! Se cargaron **{count}** productos.")
+
+    with tab_manual:
+        st.markdown("### ✍️ Registrar Producto Individual")
+        with st.form("form_nuevo_producto"):
+            col_m1, col_m2 = st.columns([2, 1])
+            with col_m1:
+                input_nombre = st.text_input("Nombre y Presentación del Producto (Ej: VINO SANTA HELENA 750 ML)")
+            with col_m2:
+                input_codigo = st.text_input("Código de Barra EAN (8 a 14 dígitos)")
+            
+            btn_guardar_manual = st.form_submit_button("💾 Guardar en Catálogo Maestro")
+            
+            if btn_guardar_manual:
+                n_limpio = str(input_nombre).strip().upper()
+                c_limpio = clean_ean_code(input_codigo)
+                
+                if not n_limpio:
+                    st.error("⚠️ Debes ingresar el nombre del producto.")
+                elif c_limpio == "S/C":
+                    st.error("⚠️ El código EAN ingresado no es válido (debe ser un código de barras estándar de 8 a 14 dígitos).")
+                else:
+                    master_dict = st.session_state["master_catalog"]
+                    master_dict[n_limpio] = c_limpio
+                    st.session_state["master_catalog"] = master_dict
+                    save_json_file(MASTER_CATALOG_FILE, master_dict)
+                    st.success(f"✅ ¡Producto guardado con éxito! **{n_limpio}** -> EAN: **{c_limpio}**")
+
+    # Visualización del catálogo actual
     master_data = st.session_state.get("master_catalog", {})
     if master_data:
         st.markdown(f"### 📋 Productos en Catálogo Maestro ({len(master_data):,} registros)")
         df_show = pd.DataFrame([{"Producto": k, "Código EAN Oficial": v} for k, v in master_data.items()])
         st.dataframe(df_show, use_container_width=True, hide_index=True)
 
+# ==========================================
+# MÓDULO 3: GESTIONAR PROVEEDORES
+# ==========================================
 elif menu_opcion == "🏢 Gestionar Proveedores":
     st.markdown("<h2>🏢 Perfiles de Proveedores Memorizados</h2>", unsafe_allow_html=True)
     st.markdown("---")
