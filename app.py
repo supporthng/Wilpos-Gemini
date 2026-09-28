@@ -93,16 +93,33 @@ def clean_ean_code(code_val):
         
     return str(s_val)
 
+def limpiar_nombre_producto(descripcion_raw, tamano_raw):
+    """Limpia el nombre para dejar únicamente la descripción principal y la presentación correcta."""
+    desc = str(descripcion_raw).upper().strip()
+    
+    # Eliminar posibles ruidos comunes o códigos sobrantes incrustados
+    desc = re.sub(r'\b(CAJA|CAJ|BOT|UNIDAD|PZA)\b', '', desc)
+    desc = re.sub(r'\s+', ' ', desc).strip()
+    
+    # Extraer formato limpio de medida (ej: 75 CL, 750 ML, 1 LT) si viene dentro del tamaño
+    tam = str(tamano_raw).upper().strip()
+    m_medida = re.search(r'(\d+\s*(?:CL|ML|L|LT|G|KG))', tam)
+    medida_limpia = m_medida.group(1) if m_medida else ""
+    
+    # Si la descripción ya trae la medida, evitamos duplicarla
+    if medida_limpia and medida_limpia not in desc:
+        return f"{desc} {medida_limpia}".strip()
+    
+    return desc
+
 def parse_empaque(tamano_txt="", unidad_txt="", descripcion_txt=""):
     """Extrae la cantidad por empaque priorizando el formato '12/75' o '6/75' de la columna tamaño."""
     combined_tamano = str(tamano_txt).upper()
     
-    # Busca patrones tipo '12/75' o '6 / 75' al inicio de la columna tamaño
     m_slash = re.search(r'\b(48|24|16|12|6|10|20|30|1)\s*/', combined_tamano)
     if m_slash: 
         return int(m_slash.group(1))
 
-    # Respaldo con descripción y unidad general
     combined = f"{str(unidad_txt)} {str(descripcion_txt)}".upper()
     m_caja = re.search(r'(?:CAJA|CAJ|PAQ|PACK|BLISTER)[^\d]*(\d+)', combined)
     if m_caja:
@@ -143,7 +160,7 @@ menu_opcion = st.sidebar.radio("Navegación", ["📄 Procesar Factura", "📁 Ca
 # ==========================================
 if menu_opcion == "📄 Procesar Factura":
     st.markdown("<h2>📄 Procesador Inteligente de Facturas (Multi-Página)</h2>", unsafe_allow_html=True)
-    st.markdown("<p style='color: #64748b;'>Sube facturas de una o varias páginas. El sistema procesa el tamaño/empaque y cruza con tu Catálogo Maestro.</p>", unsafe_allow_html=True)
+    st.markdown("<p style='color: #64748b;'>Sube facturas de una o varias páginas. El sistema limpia descripciones y cruza con tu Catálogo Maestro.</p>", unsafe_allow_html=True)
     st.markdown("---")
 
     if "factura_data" not in st.session_state: st.session_state["factura_data"] = None
@@ -162,7 +179,7 @@ if menu_opcion == "📄 Procesar Factura":
     
     if archivo_subido is not None:
         if st.button("🚀 Procesar Factura y Validar EAN"):
-            with st.spinner("🚀 Analizando factura y desglosando tamaños con Gemini..."):
+            with st.spinner("🚀 Analizando factura y limpiando nombres con Gemini..."):
                 try:
                     if not gemini_key:
                         raise ValueError("No se encontró ninguna clave de API configurada.")
@@ -179,11 +196,11 @@ if menu_opcion == "📄 Procesar Factura":
                     prompt_unificado = (
                         f"{prov_instruccion} "
                         "Analiza el documento completo de principio a fin y extrae ABSOLUTAMENTE TODOS LOS RENGLONES Y PRODUCTOS, sin omitir ninguno. "
-                        "Para cada renglón extrae con precisión: "
-                        "1. 'descripcion': nombre principal del producto. "
-                        "2. 'tamano': el contenido exacto de la columna TAMAÑO (ej: '12/75 CL.', '6/75 CL.'). "
-                        "3. 'codigo_factura': el código de barras o código interno de la línea. "
-                        "4. 'cantidad': cantidad comprada (ej: 1.0, 6.0). "
+                        "Para cada renglón extrae: "
+                        "1. 'descripcion': nombre limpio y principal del producto (ej: 'VINO TINTO RESERVA TARAPACA'). "
+                        "2. 'tamano': el contenido exacto de la columna TAMAÑO (ej: '12/75 CL.'). "
+                        "3. 'codigo_factura': el código de barras o código de la línea. "
+                        "4. 'cantidad': cantidad comprada (ej: 1.0). "
                         "5. 'unidad': unidad de empaque (ej: 'CAJA', 'BOT'). "
                         "6. 'valor_con_itbis': monto TOTAL INCLUYENDO ITBIS de la línea. "
                         "Devuelve un JSON puro con esta estructura exacta: "
@@ -229,10 +246,16 @@ if menu_opcion == "📄 Procesar Factura":
             ws.append(['Nombre', 'Presentación', 'Código Barra', 'Categoría', 'Tipo', 'Precio Venta', 'Costo', 'Stock', 'ITBIS', 'Unidad Medida', 'Cantidad Empaque'])
 
             for idx, item in enumerate(items, start=1):
-                desc = str(item.get("descripcion", "")).strip().upper()
-                tamano = str(item.get("tamano", "")).strip().upper()
-                nombre_completo = f"{desc} {tamano}".strip()
+                raw_desc = item.get("descripcion", "")
+                raw_tam = item.get("tamano", "")
                 
+                # Nombre limpio optimizado (Solo descripción + presentación relevante)
+                nombre_completo = limpiar_nombre_producto(raw_desc, raw_tam)
+                
+                # Extracción de presentación limpia para columna independiente
+                m_med = re.search(r'(\d+\s*(?:CL|ML|L|LT|G|KG))', str(raw_tam).upper())
+                presentacion_limpia = m_med.group(1) if m_med else str(raw_tam).strip()
+
                 cod_factura_limpio = clean_ean_code(item.get("codigo_factura"))
                 if cod_factura_limpio != "S/C":
                     codigo_final = cod_factura_limpio 
@@ -243,8 +266,7 @@ if menu_opcion == "📄 Procesar Factura":
                 unidad = str(item.get("unidad", ""))
                 val_con_itbis = safe_float(item.get("valor_con_itbis"), 0.0)
 
-                # Cálculo de empaque tomando en cuenta la columna tamaño (ej: 12/75 -> empaque 12)
-                empaque = parse_empaque(tamano, unidad, desc)
+                empaque = parse_empaque(raw_tam, unidad, raw_desc)
                 total_unidades = int(cant_compra * empaque)
                 
                 costo_sin_itbis_total = val_con_itbis / 1.18 if val_con_itbis > 0 else 0.0
@@ -261,14 +283,14 @@ if menu_opcion == "📄 Procesar Factura":
                     "Producto": nombre_completo, 
                     "Código EAN Asignado": codigo_final,
                     "Cant. Compra": cant_compra,
-                    "Empaque (Tamaño)": empaque,
+                    "Empaque": empaque,
                     "Total Unidades": total_unidades,
                     "Costo Unit. Sin ITBIS": costo_unitario_real, 
                     "Precio Venta": precio_venta
                 })
 
                 ws.append([
-                    nombre_completo, tamano if tamano else "S/P", str(codigo_final), prov_actual, "producto",
+                    nombre_completo, presentacion_limpia, str(codigo_final), prov_actual, "producto",
                     precio_venta, costo_unitario_real, total_unidades, 0.18, "unidad", empaque
                 ])
 
