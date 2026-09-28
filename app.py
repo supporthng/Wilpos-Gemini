@@ -124,6 +124,7 @@ def buscar_en_catalogo_maestro(nombre_producto):
     return best_code
 
 def llamada_segura_gemini(model, contents, max_intentos=3):
+    """Realiza llamadas a Gemini con reintentos automáticos y protección contra bloqueos indefinidos."""
     for intento in range(max_intentos):
         try:
             return model.generate_content(contents)
@@ -132,7 +133,7 @@ def llamada_segura_gemini(model, contents, max_intentos=3):
             if "429" in err_str or "quota" in err_str.lower():
                 if intento < max_intentos - 1:
                     tiempo_espera = 20 * (intento + 1)
-                    st.warning(f"⚠️ Límite de cuota alcanzado (429). Pausando automáticamente por {tiempo_espera}s antes del reintento ({intento+1}/{max_intentos})...")
+                    st.warning(f"⚠️ Límite de cuota alcanzado (429). Pausando por {tiempo_espera}s (reintento {intento+1}/{max_intentos})...")
                     time.sleep(tiempo_espera)
                     continue
             raise e
@@ -212,7 +213,7 @@ if menu_opcion == "📄 Procesar Factura":
                     st.session_state["prov_activo"] = prov_a_usar
                     st.success(f"✅ Documento procesado con éxito. Proveedor: **{prov_a_usar}**")
                 except Exception as e:
-                    st.error(f"⚠️ Error al procesar: {str(e)}")
+                    st.error(f"⚠️ Error al procesar el archivo: {str(e)}")
     st.markdown('</div>', unsafe_allow_html=True)
 
     if st.session_state["factura_data"] is not None:
@@ -254,7 +255,6 @@ if menu_opcion == "📄 Procesar Factura":
                 else:
                     precio_venta = 0.0
 
-                # Agregada la columna de Cantidad Compra y Unidades Totales en la vista previa
                 preview_rows.append({
                     "No.": idx, 
                     "Producto": nombre_completo, 
