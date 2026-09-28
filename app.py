@@ -152,7 +152,7 @@ if menu_opcion == "📄 Procesar Factura":
         if st.button("🚀 Procesar Factura y Validar EAN"):
             with st.spinner("🚀 Analizando factura con Gemini 3.8 Flash..."):
                 try:
-                    # Actualizado al modelo oficial vigente gemini-3.8-flash
+                    # Modelo oficial vigente actualizado
                     model = genai.GenerativeModel('gemini-3.8-flash')
                     
                     archivo_subido.seek(0)
@@ -314,7 +314,9 @@ elif menu_opcion == "📁 Catálogo Maestro EAN":
                 n_limpio = str(input_nombre).strip().upper()
                 c_limpio = clean_ean_code(input_codigo)
                 
-                if not n_limpio:
+                if not n_ils := not n_limpio:
+                    st.error("⚠️ Debes ingresar el nombre del producto.")
+                elif not n_limpio:
                     st.error("⚠️ Debes ingresar el nombre del producto.")
                 elif c_limpio == "S/C":
                     st.error("⚠️ El código EAN ingresado no es válido (debe ser un código de barras estándar de 8 a 14 dígitos).")
