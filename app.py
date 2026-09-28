@@ -76,8 +76,6 @@ def round_to_nearest_5(x):
     return float(round(round(x / 5) * 5))
 
 def clean_ean_code(code_val):
-    """Filtro estricto: Descarta códigos internos cortos del proveedor. 
-       Solo acepta códigos de barras EAN/UPC universales válidos de 8 a 14 dígitos."""
     if not code_val: return "S/C"
     s_val = str(code_val).strip()
     if s_val.endswith('.0'): s_val = s_val[:-2]
@@ -256,9 +254,16 @@ if menu_opcion == "📄 Procesar Factura":
                 else:
                     precio_venta = 0.0
 
+                # Agregada la columna de Cantidad Compra y Unidades Totales en la vista previa
                 preview_rows.append({
-                    "No.": idx, "Producto": nombre_completo, "Código EAN Asignado": codigo_final,
-                    "Costo Unit. Sin ITBIS": costo_unitario_real, "Precio Venta": precio_venta
+                    "No.": idx, 
+                    "Producto": nombre_completo, 
+                    "Código EAN Asignado": codigo_final,
+                    "Cant. Compra": cant_compra,
+                    "Empaque": empaque,
+                    "Total Unidades": total_unidades,
+                    "Costo Unit. Sin ITBIS": costo_unitario_real, 
+                    "Precio Venta": precio_venta
                 })
 
                 ws.append([
@@ -278,14 +283,13 @@ if menu_opcion == "📄 Procesar Factura":
             )
 
 # ==========================================
-# MÓDULO 2: CATÁLOGO MAESTRO EAN (CON REGISTRO MANUAL)
+# MÓDULO 2: CATÁLOGO MAESTRO EAN
 # ==========================================
 elif menu_opcion == "📁 Catálogo Maestro EAN":
     st.markdown("<h2>📁 Gestión del Catálogo Maestro de Productos</h2>", unsafe_allow_html=True)
     st.markdown("<p style='color: #64748b;'>Sube tu archivo Excel masivo o registra productos de forma manual uno a uno.</p>", unsafe_allow_html=True)
     st.markdown("---")
 
-    # Pestañas internas para organizar Carga masiva vs Alta manual
     tab_masivo, tab_manual = st.tabs(["📂 Carga Masiva (Excel)", "➕ Agregar Producto Manualmente"])
 
     with tab_masivo:
@@ -335,7 +339,6 @@ elif menu_opcion == "📁 Catálogo Maestro EAN":
                     save_json_file(MASTER_CATALOG_FILE, master_dict)
                     st.success(f"✅ ¡Producto guardado con éxito! **{n_limpio}** -> EAN: **{c_limpio}**")
 
-    # Visualización del catálogo actual
     master_data = st.session_state.get("master_catalog", {})
     if master_data:
         st.markdown(f"### 📋 Productos en Catálogo Maestro ({len(master_data):,} registros)")
