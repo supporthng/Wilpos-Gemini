@@ -76,27 +76,7 @@ if "supplier_memory" not in st.session_state:
     st.session_state["supplier_memory"] = loaded_supps
 
 if "master_catalog" not in st.session_state:
-    master_init = load_json_file(MASTER_CATALOG_FILE, "dict")
-    # Base de datos maestra actualizada con códigos oficiales de CND / BEES
-    master_init.update({
-        "PRESIDENTE LIGHT HU 16/22OZ": "70601561",
-        "PTE. LIGHT HU 16/22OZ": "70601561",
-        "PTE. CJ 24/22OZ": "70601561",
-        "PTE. LIGHT HU 24/12OZ": "7468973200200",
-        "PTE. HU 24/12OZ": "7468973200200",
-        "BRAHMA LIGHT HU 24/12OZ": "7468973200194",
-        "BRAHMA LIGHT HU 16/650ML": "7468973200194",
-        "CORONA EXTRA 330ML LP": "7503034941200",
-        "CORONA CERO 355ML": "750304423180",
-        "MICHELOB ULTRA 355ML": "7422110104967",
-        "CLAMATO COCTEL TOMATE C": "01484035",
-        "ENRIQUILLO SODA 400 ML": "7463172803733",
-        "GATORADE FRUIT PUNCH": "7460548000154",
-        "GATORADE NARANJA": "7460548000161",
-        "GATORADE UVA": "7460548000178"
-    })
-    save_json_file(MASTER_CATALOG_FILE, master_init)
-    st.session_state["master_catalog"] = master_init
+    st.session_state["master_catalog"] = load_json_file(MASTER_CATALOG_FILE, "dict")
 
 def safe_float(val, default=0.0):
     try:
@@ -167,85 +147,31 @@ def parse_empaque(tamano_txt="", unidad_txt="", descripcion_txt=""):
 
 def buscar_en_catalogo_maestro(nombre_producto, presentacion=""):
     """
-    Búsqueda Inteligente Segura: Valida por reglas de marca y volumen estrictos 
-    para garantizar 0 cruces erróneos y CERO códigos 'S/C' en productos conocidos.
+    Búsqueda 100% Estricta contra el Catálogo Maestro de la Base de Datos.
+    - No inventa códigos.
+    - No asume valores.
+    - Si la clave exacta (Nombre + Presentación) está en el maestro, devuelve su EAN.
+    - Si no está, retorna 'S/C' de manera limpia para evitar errores en el POS.
     """
     n_upper = str(nombre_producto).upper().strip()
     p_upper = str(presentacion).upper().strip()
-    combined_query = f"{n_upper} {p_upper}".strip()
-
-    master_dict = st.session_state.get("master_catalog", {})
     
-    # 1. Búsqueda exacta en catálogo
-    if combined_query in master_dict:
-        return clean_ean_code(master_dict[combined_query])
+    master_dict = st.session_state.get("master_catalog", {})
+    if not master_dict: 
+        return "S/C"
+
+    # Claves posibles a buscar en orden de especificidad
+    clave_completa = f"{n_upper} {p_upper}".strip()
+    
+    # 1. Búsqueda exacta por Nombre + Presentación
+    if clave_completa in master_dict:
+        return clean_ean_code(master_dict[clave_completa])
+        
+    # 2. Búsqueda exacta solo por Nombre del producto
     if n_upper in master_dict:
         return clean_ean_code(master_dict[n_upper])
 
-    # 2. Reglas deterministas estrictas por familia de producto (Cero riesgo de cruce entre marcas)
-    if "BRAHMA" in n_upper and "LIGHT" in n_upper:
-        return "7468973200194"
-        
-    if "PTE" in n_upper or "PRESIDENTE" in n_upper:
-        if "LIGHT" in n_upper:
-            if "22" in combined_query or "650" in combined_query or "CJ" in combined_query or "16" in combined_query:
-                return "70601561" # Presidente Light 22oz
-            return "7468973200200" # Presidente Light 12oz (Pte Hu 12oz)
-        return "7468973200200"
-
-    if "CORONA" in n_upper:
-        if "EXTRA" in n_upper: return "7503034941200"
-        if "CERO" in n_upper: return "750304423180"
-
-    if "MICHELOB" in n_upper:
-        return "7422110104967"
-
-    if "CLAMATO" in n_upper:
-        return "01484035"
-
-    if "ENRIQUILLO" in n_upper:
-        return "7463172803733"
-
-    if "GATORADE" in n_upper:
-        if "FRUIT" in n_upper or "PUNCH" in n_upper: return "7460548000154"
-        if "NARANJA" in n_upper: return "7460548000161"
-        if "UVA" in n_upper: return "7460548000178"
-        return "7460548000154" # Gatorade genérico
-
-    if "FOUR LOKO" in n_upper:
-        # Códigos oficiales estandarizados para variantes de Four Loko
-        if "MARACUYA" in n_upper: return "849806005303"
-        if "PONCHE" in n_upper: return "849806001220"
-        if "GREEN" in n_upper: return "849806001855"
-        if "PURPLE" in n_upper: return "849806002746"
-        if "GOLD" in n_upper: return "849806001756"
-        if "SANDIA" in n_upper: return "849806001206"
-        if "WHITE" in n_upper: return "849806005754"
-        return "849806001220" # Four Loko estándar
-
-    if "ALOE" in n_upper:
-        return "8809125063011"
-
-    if "MY COCO" in n_upper:
-        return "8809125063011"
-
-    if "THE ONE" in n_upper:
-        return "74601325"
-
-    # Si el usuario registró un producto personalizado en el catálogo maestro, lo busca por coincidencia de palabras clave seguras
-    if master_dict:
-        query_words = [w for w in re.findall(r'\w+', combined_query) if len(w) > 3]
-        best_code = "S/C"
-        max_score = 0
-        for m_name, m_code in master_dict.items():
-            m_upper = str(m_name).upper()
-            score = sum(2 if qw in m_upper else 0 for qw in query_words)
-            if score > max_score and score >= 4:
-                max_score = score
-                best_code = clean_ean_code(m_code)
-        if best_code != "S/C":
-            return best_code
-
+    # 3. Si no existe coincidencia exacta rigurosa, retorna 'S/C' (Sin Código) para registro manual
     return "S/C"
 
 st.sidebar.markdown("<h3 style='color: #0284c7;'>⚡ WilPOS System</h3>", unsafe_allow_html=True)
@@ -276,7 +202,7 @@ if menu_opcion == "📄 Procesar Factura":
     
     if archivo_subido is not None:
         if st.button("🚀 Procesar Factura y Validar EAN"):
-            with st.spinner("🚀 Analizando tique con asignación inteligente y segura..."):
+            with st.spinner("🚀 Analizando factura y cotejando estrictamente con Catálogo Maestro..."):
                 try:
                     if not gemini_key:
                         raise ValueError("No se encontró ninguna clave de API configurada.")
@@ -382,6 +308,7 @@ if menu_opcion == "📄 Procesar Factura":
                 m_med = re.search(r'(\d+\s*(?:ML|L|LT|G|KG|OZ|Z))', str(raw_tam + " " + raw_desc).upper())
                 presentacion_limpia = m_med.group(1) if m_med else (raw_tam if raw_tam else "S/P")
 
+                # Consulta estrictamente contra el Catálogo Maestro (sin inventar códigos)
                 codigo_final = buscar_en_catalogo_maestro(nombre_completo, presentacion_limpia)
 
                 cant_compra = safe_float(item.get("cantidad"), 1.0)
