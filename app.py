@@ -76,7 +76,12 @@ if "supplier_memory" not in st.session_state:
     st.session_state["supplier_memory"] = loaded_supps
 
 if "master_catalog" not in st.session_state:
-    st.session_state["master_catalog"] = load_json_file(MASTER_CATALOG_FILE, "dict")
+    master_init = load_json_file(MASTER_CATALOG_FILE, "dict")
+    # Asegurar la corrección de Presidente Light 22oz en el catálogo maestro por defecto
+    master_init["PRESIDENTE LIGHT HU 16/22OZ"] = "70601561"
+    master_init["PTE. LIGHT HU 16/22OZ"] = "70601561"
+    save_json_file(MASTER_CATALOG_FILE, master_init)
+    st.session_state["master_catalog"] = master_init
 
 def safe_float(val, default=0.0):
     try:
@@ -149,10 +154,15 @@ def parse_empaque(tamano_txt="", unidad_txt="", descripcion_txt=""):
     return 1
 
 def buscar_en_catalogo_maestro(nombre_producto):
+    n_upper = str(nombre_producto).upper().strip()
+    
+    # Validación específica aprendida para Presidente Light 22oz
+    if "PTE" in n_upper and "LIGHT" in n_upper and ("22" in n_upper or "16" in n_upper):
+        return "70601561"
+
     master_dict = st.session_state.get("master_catalog", {})
     if not master_dict: return "S/C"
     
-    n_upper = str(nombre_producto).upper().strip()
     if n_upper in master_dict:
         return clean_ean_code(master_dict[n_upper])
         
@@ -304,7 +314,6 @@ if menu_opcion == "📄 Procesar Factura":
                 m_med = re.search(r'(\d+\s*(?:ML|L|LT|G|KG|OZ|Z))', str(raw_tam + " " + raw_desc).upper())
                 presentacion_limpia = m_med.group(1) if m_med else (raw_tam if raw_tam else "S/P")
 
-                # Búsqueda automática en el Catálogo Maestro EAN (exactamente igual que el proveedor anterior)
                 codigo_final = buscar_en_catalogo_maestro(nombre_completo)
 
                 cant_compra = safe_float(item.get("cantidad"), 1.0)
