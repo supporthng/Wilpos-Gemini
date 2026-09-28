@@ -85,15 +85,12 @@ def round_to_nearest_5(x):
     return float(round(round(x / 5) * 5))
 
 def clean_ean_code(code_val):
-    """Valida estrictamente que el código sea EAN estándar (8 a 14 dígitos). Descarta códigos internos cortos."""
     if not code_val: return "S/C"
     s_val = str(code_val).strip()
     if s_val.endswith('.0'): s_val = s_val[:-2]
     
     s_val = re.sub(r'\D', '', s_val)
     
-    # REGLA ESTRICTA: Los códigos de barras EAN válidos tienen entre 8 y 14 dígitos. 
-    # Códigos más cortos (como 3 o 4 dígitos de líneas de facturas) son internos y se descartan para evitar duplicidad.
     if s_val.lower() in ["nan", "none", "", "s/c", "sin codigo"] or not (8 <= len(s_val) <= 14):
         return "S/C"
         
@@ -145,7 +142,6 @@ def buscar_en_catalogo_maestro(nombre_producto):
     for m_name, m_code in master_dict.items():
         m_upper = str(m_name).upper()
         matches = sum(1 for qw in query_words if qw in m_upper)
-        # Exigimos coincidencia robusta de al menos 2 palabras clave para evitar asignaciones erróneas masivas
         if matches >= 2 and matches > max_matches:
             max_matches = matches
             best_code = clean_ean_code(m_code)
@@ -180,7 +176,7 @@ if menu_opcion == "📄 Procesar Factura":
     
     if archivo_subido is not None:
         if st.button("🚀 Procesar Factura y Validar EAN"):
-            with st.spinner("🚀 Analizando documento y filtrando códigos internos..."):
+            with st.spinner("🚀 Analizando filas y alineando códigos de barras correctamente..."):
                 try:
                     if not gemini_key:
                         raise ValueError("No se encontró ninguna clave de API configurada.")
@@ -196,10 +192,10 @@ if menu_opcion == "📄 Procesar Factura":
                     
                     prompt_unificado = (
                         f"{prov_instruccion} "
-                        "Analiza el documento completo de principio a fin. "
+                        "Analiza el documento completo de principio a fin manteniendo una estricta alineación horizontal por renglón. "
                         "1. Detecta la paginación impresa (ej: '1 de 2'). "
                         "2. Extrae los totales globales: 'subtotal_general', 'itbis_general', 'descuento_general', 'total_general'. "
-                        "3. Extrae TODOS LOS RENGLONES. Para cada renglón extrae con precisión su 'codigo_barras' oficial de 8 a 14 dígitos si aparece en la columna de códigos de barras (ignora números de línea o códigos internos cortos). "
+                        "3. Extrae TODOS LOS RENGLONES. IMPORTANTE: Revisa con extrema precisión la columna de código de barras correspondiente exactamente A LA MISMA FILA de cada producto (como VODKA INFUSIONS RASPBERRY SKYY y VODKA SKYY que tienen códigos de barras distintos en sus respectivas filas). No repitas códigos de barras entre filas diferentes a menos que la factura explícitamente muestre el mismo número exacto en ambas filas. "
                         "Estructura JSON exacta requerida: "
                         '{"paginacion": "1 de 2", "proveedor_detectado": "NOMBRE", "totales_factura": {"subtotal_general": 0.0, "itbis_general": 0.0, "descuento_general": 0.0, "total_general": 0.0}, "items": [{"descripcion": "...", "tamano": "...", "codigo_factura": "...", "cantidad": 1.0, "unidad": "...", "valor_con_itbis": 0.0}]}. '
                         "Respuesta JSON pura."
@@ -258,6 +254,20 @@ if menu_opcion == "📄 Procesar Factura":
 
         if items:
             st.markdown(f"### 📋 Detalle de Renglones Extraídos ({len(items)} ítems)")
+            
+            # Post-procesamiento preventivo: Detectar si hay códigos idénticos en productos con nombres diferentes
+            # y forzar revisión o búsqueda en catálogo maestro si no son legítimamente iguales.
+            codigos_vistos = {}
+            for item in items:
+                c_limp = clean_ean_code(item.get("codigo_factura"))
+                desc_linea = str(item.get("descripcion", "")).strip().upper()
+                if c_limp != "S/C":
+                    if c_limp in codigos_vistos and codigos_vistos[c_limp] != desc_linea:
+                        # Código repetido en productos distintos: forzar a S/C para que busque en maestro o se corrija
+                        item["codigo_factura"] = "S/C"
+                    else:
+                        codigos_vistos[c_limp] = desc_linea
+
             preview_rows = []
             wb = openpyxl.Workbook()
             ws = wb.active
@@ -273,7 +283,6 @@ if menu_opcion == "📄 Procesar Factura":
                 m_med = re.search(r'(\d+\s*(?:CL|ML|L|LT|G|KG))', str(raw_tam).upper())
                 presentacion_limpia = m_med.group(1) if m_med else str(raw_tam).strip()
 
-                # APLICACIÓN DE LA REGLA: Validación EAN estricta por línea para evitar duplicados basura
                 cod_factura_limpio = clean_ean_code(item.get("codigo_factura"))
                 if cod_factura_limpio != "S/C":
                     codigo_final = cod_factura_limpio 
