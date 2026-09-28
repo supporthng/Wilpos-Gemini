@@ -29,7 +29,7 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-# Configuración de Clave API (Prioriza la clave de pago y luego las estándar)
+# Configuración de Clave API (Prioriza clave de pago)
 gemini_key = (
     st.secrets.get("GEMINI_API_KEY_PAID") or 
     st.secrets.get("GEMINI_API_KEY") or 
@@ -65,7 +65,7 @@ if "supplier_memory" not in st.session_state:
     loaded_supps = load_json_file(SUPPLIER_MEMORY_FILE, "dict")
     if not loaded_supps:
         loaded_supps = {
-            "ALVAREZ & SANCHEZ": {"nombre": "ALVAREZ & SANCHEZ", "notas_formato": "Desglose estándar."},
+            "ALVAREZ & SANCHEZ": {"nombre": "ALVAREZ & SANCHEZ", "notas_formato": "Desglose estándar en columna tamaño (ej: 12/75 CL)."},
             "GONZALEZ CUESTA": {"nombre": "GONZALEZ CUESTA", "notas_formato": "Corporativo."}
         }
         save_json_file(SUPPLIER_MEMORY_FILE, loaded_supps)
@@ -93,15 +93,21 @@ def clean_ean_code(code_val):
         
     return str(s_val)
 
-def parse_empaque(unidad_txt="", descripcion_txt=""):
+def parse_empaque(tamano_txt="", unidad_txt="", descripcion_txt=""):
+    """Extrae la cantidad por empaque priorizando el formato '12/75' o '6/75' de la columna tamaño."""
+    combined_tamano = str(tamano_txt).upper()
+    
+    # Busca patrones tipo '12/75' o '6 / 75' al inicio de la columna tamaño
+    m_slash = re.search(r'\b(48|24|16|12|6|10|20|30|1)\s*/', combined_tamano)
+    if m_slash: 
+        return int(m_slash.group(1))
+
+    # Respaldo con descripción y unidad general
     combined = f"{str(unidad_txt)} {str(descripcion_txt)}".upper()
     m_caja = re.search(r'(?:CAJA|CAJ|PAQ|PACK|BLISTER)[^\d]*(\d+)', combined)
     if m_caja:
         val = int(m_caja.group(1))
         if 1 < val <= 120: return val
-
-    m_slash = re.search(r'\b(48|24|16|12|6|10|20|30)\s*/', combined)
-    if m_slash: return int(m_slash.group(1))
 
     if any(w in unidad_txt.upper() for w in ["BOT", "UNIDAD", "PZA"]) and not re.search(r'\d+', unidad_txt):
         return 1
@@ -137,7 +143,7 @@ menu_opcion = st.sidebar.radio("Navegación", ["📄 Procesar Factura", "📁 Ca
 # ==========================================
 if menu_opcion == "📄 Procesar Factura":
     st.markdown("<h2>📄 Procesador Inteligente de Facturas (Multi-Página)</h2>", unsafe_allow_html=True)
-    st.markdown("<p style='color: #64748b;'>Sube facturas de una o varias páginas. El sistema descarta códigos internos y cruza con tu Catálogo Maestro.</p>", unsafe_allow_html=True)
+    st.markdown("<p style='color: #64748b;'>Sube facturas de una o varias páginas. El sistema procesa el tamaño/empaque y cruza con tu Catálogo Maestro.</p>", unsafe_allow_html=True)
     st.markdown("---")
 
     if "factura_data" not in st.session_state: st.session_state["factura_data"] = None
@@ -156,10 +162,10 @@ if menu_opcion == "📄 Procesar Factura":
     
     if archivo_subido is not None:
         if st.button("🚀 Procesar Factura y Validar EAN"):
-            with st.spinner("🚀 Analizando factura con Gemini 3.8 Flash (Cuenta de Pago)..."):
+            with st.spinner("🚀 Analizando factura y desglosando tamaños con Gemini..."):
                 try:
                     if not gemini_key:
-                        raise ValueError("No se encontró ninguna clave de API configurada. Revisa tus secretos en Streamlit.")
+                        raise ValueError("No se encontró ninguna clave de API configurada.")
 
                     model = genai.GenerativeModel('gemini-3.8-flash')
                     
@@ -173,12 +179,12 @@ if menu_opcion == "📄 Procesar Factura":
                     prompt_unificado = (
                         f"{prov_instruccion} "
                         "Analiza el documento completo de principio a fin y extrae ABSOLUTAMENTE TODOS LOS RENGLONES Y PRODUCTOS, sin omitir ninguno. "
-                        "Para cada renglón extrae: "
-                        "1. 'descripcion': nombre del producto. "
-                        "2. 'tamano': presentación (ej: '750 ML'). "
-                        "3. 'codigo_factura': el código que trae la línea en la factura (aunque sea interno). "
-                        "4. 'cantidad': cantidad comprada (ej: 2.0). "
-                        "5. 'unidad': unidad de empaque (ej: 'CAJA 12'). "
+                        "Para cada renglón extrae con precisión: "
+                        "1. 'descripcion': nombre principal del producto. "
+                        "2. 'tamano': el contenido exacto de la columna TAMAÑO (ej: '12/75 CL.', '6/75 CL.'). "
+                        "3. 'codigo_factura': el código de barras o código interno de la línea. "
+                        "4. 'cantidad': cantidad comprada (ej: 1.0, 6.0). "
+                        "5. 'unidad': unidad de empaque (ej: 'CAJA', 'BOT'). "
                         "6. 'valor_con_itbis': monto TOTAL INCLUYENDO ITBIS de la línea. "
                         "Devuelve un JSON puro con esta estructura exacta: "
                         '{"proveedor_detectado": "NOMBRE_PROVEEDOR", "items": [{"descripcion": "...", "tamano": "...", "codigo_factura": "...", "cantidad": 1.0, "unidad": "...", "valor_con_itbis": 0.0}]}. '
@@ -237,7 +243,8 @@ if menu_opcion == "📄 Procesar Factura":
                 unidad = str(item.get("unidad", ""))
                 val_con_itbis = safe_float(item.get("valor_con_itbis"), 0.0)
 
-                empaque = parse_empaque(unidad, desc)
+                # Cálculo de empaque tomando en cuenta la columna tamaño (ej: 12/75 -> empaque 12)
+                empaque = parse_empaque(tamano, unidad, desc)
                 total_unidades = int(cant_compra * empaque)
                 
                 costo_sin_itbis_total = val_con_itbis / 1.18 if val_con_itbis > 0 else 0.0
@@ -254,7 +261,7 @@ if menu_opcion == "📄 Procesar Factura":
                     "Producto": nombre_completo, 
                     "Código EAN Asignado": codigo_final,
                     "Cant. Compra": cant_compra,
-                    "Empaque": empaque,
+                    "Empaque (Tamaño)": empaque,
                     "Total Unidades": total_unidades,
                     "Costo Unit. Sin ITBIS": costo_unitario_real, 
                     "Precio Venta": precio_venta
