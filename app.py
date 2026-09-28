@@ -124,20 +124,23 @@ def buscar_en_catalogo_maestro(nombre_producto):
     return best_code
 
 def llamada_segura_gemini(model, contents, max_intentos=3):
-    """Realiza llamadas a Gemini con reintentos automáticos y protección contra bloqueos indefinidos."""
+    """Llamada blindada con control de reintentos y excepciones explícitas para evitar bloqueos."""
     for intento in range(max_intentos):
         try:
-            return model.generate_content(contents)
+            response = model.generate_content(contents)
+            if response and response.text:
+                return response
+            raise ValueError("La respuesta de la IA llegó vacía.")
         except Exception as e:
             err_str = str(e)
             if "429" in err_str or "quota" in err_str.lower():
                 if intento < max_intentos - 1:
-                    tiempo_espera = 20 * (intento + 1)
-                    st.warning(f"⚠️ Límite de cuota alcanzado (429). Pausando por {tiempo_espera}s (reintento {intento+1}/{max_intentos})...")
+                    tiempo_espera = 15 * (intento + 1)
+                    st.warning(f"⚠️ Límite de cuota (429). Esperando {tiempo_espera}s (reintento {intento+1}/{max_intentos})...")
                     time.sleep(tiempo_espera)
                     continue
             raise e
-    raise Exception("Se agotaron los reintentos automáticos por límite de cuota.")
+    raise Exception("Se agotaron los reintentos automáticos.")
 
 st.sidebar.markdown("<h3 style='color: #0284c7;'>⚡ WilPOS System</h3>", unsafe_allow_html=True)
 menu_opcion = st.sidebar.radio("Navegación", ["📄 Procesar Factura", "📁 Catálogo Maestro EAN", "🏢 Gestionar Proveedores"])
@@ -166,10 +169,13 @@ if menu_opcion == "📄 Procesar Factura":
     
     if archivo_subido is not None:
         if st.button("🚀 Procesar Factura y Validar EAN"):
-            with st.spinner("Analizando documento y aplicando reglas de códigos..."):
+            # Usamos un contenedor de estado dinámico en lugar de spinner para evitar congelamientos visuales
+            with st.status("🔄 Iniciando procesamiento del documento...", expanded=True) as status:
                 try:
+                    st.write("⏳ Configurando modelo gemini-3.5-flash-lite...")
                     model = genai.GenerativeModel('gemini-3.5-flash-lite')
                     
+                    st.write("📂 Leyendo archivo y preparando datos...")
                     archivo_subido.seek(0)
                     file_bytes = archivo_subido.read()
                     f_type = getattr(archivo_subido, 'type', 'image/jpeg')
@@ -192,8 +198,11 @@ if menu_opcion == "📄 Procesar Factura":
                         "Respuesta JSON pura."
                     )
 
+                    st.write("🤖 Enviando solicitud a Gemini (esto puede tardar unos segundos)...")
                     archivo_subido.seek(0)
                     response = llamada_segura_gemini(model, [image_input, prompt_unificado])
+                    
+                    st.write("⚙️ Procesando respuesta y extrayendo estructura JSON...")
                     raw_text = response.text.strip()
                     if raw_text.startswith("```json"): raw_text = raw_text[7:]
                     if raw_text.endswith("```"): raw_text = raw_text[:-3]
@@ -211,9 +220,12 @@ if menu_opcion == "📄 Procesar Factura":
 
                     st.session_state["factura_data"] = parsed_json
                     st.session_state["prov_activo"] = prov_a_usar
-                    st.success(f"✅ Documento procesado con éxito. Proveedor: **{prov_a_usar}**")
+                    
+                    status.update(label=f"✅ ¡Factura procesada con éxito! Proveedor: {prov_a_usar}", state="complete", expanded=False)
+                    st.rerun()
                 except Exception as e:
-                    st.error(f"⚠️ Error al procesar el archivo: {str(e)}")
+                    status.update(label="❌ Error durante el procesamiento", state="error", expanded=True)
+                    st.error(f"Detalle técnico del error: {str(e)}")
     st.markdown('</div>', unsafe_allow_html=True)
 
     if st.session_state["factura_data"] is not None:
