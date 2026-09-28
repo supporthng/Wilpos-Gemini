@@ -156,7 +156,7 @@ menu_opcion = st.sidebar.radio("Navegación", ["📄 Procesar Factura", "📁 Ca
 # ==========================================
 if menu_opcion == "📄 Procesar Factura":
     st.markdown("<h2>📄 Procesador Inteligente de Facturas (Multi-Página)</h2>", unsafe_allow_html=True)
-    st.markdown("<p style='color: #64748b;'>Sube facturas, visualiza el dashboard financiero y valida códigos EAN únicos por renglón.</p>", unsafe_allow_html=True)
+    st.markdown("<p style='color: #64748b;'>Sube facturas, visualiza el dashboard financiero con totales reales y controla códigos EAN únicos.</p>", unsafe_allow_html=True)
     st.markdown("---")
 
     if "factura_data" not in st.session_state: st.session_state["factura_data"] = None
@@ -176,7 +176,7 @@ if menu_opcion == "📄 Procesar Factura":
     
     if archivo_subido is not None:
         if st.button("🚀 Procesar Factura y Validar EAN"):
-            with st.spinner("🚀 Analizando filas y alineando códigos de barras correctamente..."):
+            with st.spinner("🚀 Extrayendo montos financieros y renglones con precisión..."):
                 try:
                     if not gemini_key:
                         raise ValueError("No se encontró ninguna clave de API configurada.")
@@ -192,12 +192,16 @@ if menu_opcion == "📄 Procesar Factura":
                     
                     prompt_unificado = (
                         f"{prov_instruccion} "
-                        "Analiza el documento completo de principio a fin manteniendo una estricta alineación horizontal por renglón. "
-                        "1. Detecta la paginación impresa (ej: '1 de 2'). "
-                        "2. Extrae los totales globales: 'subtotal_general', 'itbis_general', 'descuento_general', 'total_general'. "
-                        "3. Extrae TODOS LOS RENGLONES. IMPORTANTE: Revisa con extrema precisión la columna de código de barras correspondiente exactamente A LA MISMA FILA de cada producto (como VODKA INFUSIONS RASPBERRY SKYY y VODKA SKYY que tienen códigos de barras distintos en sus respectivas filas). No repitas códigos de barras entre filas diferentes a menos que la factura explícitamente muestre el mismo número exacto en ambas filas. "
-                        "Estructura JSON exacta requerida: "
-                        '{"paginacion": "1 de 2", "proveedor_detectado": "NOMBRE", "totales_factura": {"subtotal_general": 0.0, "itbis_general": 0.0, "descuento_general": 0.0, "total_general": 0.0}, "items": [{"descripcion": "...", "tamano": "...", "codigo_factura": "...", "cantidad": 1.0, "unidad": "...", "valor_con_itbis": 0.0}]}. '
+                        "Analiza este documento completo de principio a fin. "
+                        "1. Extrae la paginación impresa (ej: '1 de 2'). "
+                        "2. Extrae los montos globales exactos de la factura ubicados al pie o en los subtotales: "
+                        "- 'subtotal': subtotal general (ej: sumatoria o subtotal gravado). "
+                        "- 'itbis': monto total de ITBIS/Impuestos. "
+                        "- 'descuentos': total de descuentos aplicados. "
+                        "- 'total': monto total general a pagar. "
+                        "3. Extrae todos los renglones de productos, asegurando que cada línea tenga su propio 'codigo_factura' correspondiente a su fila exacta (no repitas códigos de barras entre diferentes productos a menos que la factura indique el mismo número). "
+                        "Devuelve un JSON puro con esta estructura exacta y llaves en minúscula: "
+                        '{"paginacion": "1 de 2", "proveedor_detectado": "NOMBRE", "subtotal": 0.0, "itbis": 0.0, "descuentos": 0.0, "total": 0.0, "items": [{"descripcion": "...", "tamano": "...", "codigo_factura": "...", "cantidad": 1.0, "unidad": "...", "valor_con_itbis": 0.0}]}. '
                         "Respuesta JSON pura."
                     )
 
@@ -231,10 +235,23 @@ if menu_opcion == "📄 Procesar Factura":
     if st.session_state["factura_data"] is not None:
         data_resp = st.session_state["factura_data"]
         items = data_resp.get("items", [])
-        totales = data_resp.get("totales_factura", {})
         prov_actual = st.session_state.get("prov_activo", "GENERAL")
         pag_info = st.session_state.get("paginacion_detectada", "1 de 1")
         
+        # Extracción segura de montos globales del JSON
+        subtotal_val = safe_float(data_resp.get("subtotal") or data_resp.get("subtotal_general"))
+        itbis_val = safe_float(data_resp.get("itbis") or data_resp.get("itbis_general"))
+        descuentos_val = safe_float(data_resp.get("descuentos") or data_resp.get("descuento_general"))
+        total_val = safe_float(data_resp.get("total") or data_resp.get("total_general"))
+
+        # Si el subtotal o total vienen en 0 pero hay items, calculamos respaldo financiero automático
+        if subtotal_val == 0.0 and items:
+            subtotal_val = sum(safe_float(i.get("valor_con_itbis")) / 1.18 for i in items)
+        if itbis_val == 0.0 and items:
+            itbis_val = sum(safe_float(i.get("valor_con_itbis")) - (safe_float(i.get("valor_con_itbis")) / 1.18) for i in items)
+        if total_val == 0.0 and items:
+            total_val = sum(safe_float(i.get("valor_con_itbis")) for i in items)
+
         # ==========================================
         # DASHBOARD DE MONTOS Y TOTALES
         # ==========================================
@@ -242,31 +259,29 @@ if menu_opcion == "📄 Procesar Factura":
         
         col_m1, col_m2, col_m3, col_m4 = st.columns(4)
         with col_m1:
-            st.metric(label="Subtotal", value=f"${safe_float(totales.get('subtotal_general')):,.2f}")
+            st.metric(label="Subtotal", value=f"${subtotal_val:,.2f}")
         with col_m2:
-            st.metric(label="ITBIS", value=f"${safe_float(totales.get('itbis_general')):,.2f}")
+            st.metric(label="ITBIS", value=f"${itbis_val:,.2f}")
         with col_m3:
-            st.metric(label="Descuentos", value=f"${safe_float(totales.get('descuento_general')):,.2f}")
+            st.metric(label="Descuentos", value=f"${descuentos_val:,.2f}")
         with col_m4:
-            st.metric(label="Total General", value=f"${safe_float(totales.get('total_general')):,.2f}")
+            st.metric(label="Total General", value=f"${total_val:,.2f}")
         
         st.markdown("---")
 
         if items:
             st.markdown(f"### 📋 Detalle de Renglones Extraídos ({len(items)} ítems)")
             
-            # Post-procesamiento preventivo: Detectar si hay códigos idénticos en productos con nombres diferentes
-            # y forzar revisión o búsqueda en catálogo maestro si no son legítimamente iguales.
-            codigos_vistos = {}
+            # Post-procesamiento para eliminar códigos duplicados artificiales entre filas distintas
+            codigos_vistos = set()
             for item in items:
                 c_limp = clean_ean_code(item.get("codigo_factura"))
-                desc_linea = str(item.get("descripcion", "")).strip().upper()
                 if c_limp != "S/C":
-                    if c_limp in codigos_vistos and codigos_vistos[c_limp] != desc_linea:
-                        # Código repetido en productos distintos: forzar a S/C para que busque en maestro o se corrija
+                    if c_limp in codigos_vistos:
+                        # Si el código ya fue usado por otra línea anterior, lo invalidamos para evitar arrastre visual
                         item["codigo_factura"] = "S/C"
                     else:
-                        codigos_vistos[c_limp] = desc_linea
+                        codigos_vistos.add(c_limp)
 
             preview_rows = []
             wb = openpyxl.Workbook()
