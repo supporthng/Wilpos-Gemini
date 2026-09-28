@@ -29,8 +29,14 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-# Configuración de Clave API
-gemini_key = st.secrets.get("GEMINI_API_KEY") if "GEMINI_API_KEY" in st.secrets else os.environ.get("GEMINI_API_KEY")
+# Configuración de Clave API (Prioriza la clave de pago y luego las estándar)
+gemini_key = (
+    st.secrets.get("GEMINI_API_KEY_PAID") or 
+    st.secrets.get("GEMINI_API_KEY") or 
+    os.environ.get("GEMINI_API_KEY_PAID") or 
+    os.environ.get("GEMINI_API_KEY")
+)
+
 if gemini_key:
     genai.configure(api_key=gemini_key)
 
@@ -150,8 +156,11 @@ if menu_opcion == "📄 Procesar Factura":
     
     if archivo_subido is not None:
         if st.button("🚀 Procesar Factura y Validar EAN"):
-            with st.spinner("🚀 Analizando factura con Gemini 3.8 Flash..."):
+            with st.spinner("🚀 Analizando factura con Gemini 3.8 Flash (Cuenta de Pago)..."):
                 try:
+                    if not gemini_key:
+                        raise ValueError("No se encontró ninguna clave de API configurada. Revisa tus secretos en Streamlit.")
+
                     model = genai.GenerativeModel('gemini-3.8-flash')
                     
                     archivo_subido.seek(0)
