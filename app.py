@@ -133,8 +133,8 @@ def llamada_segura_gemini(model, contents, max_intentos=3):
             err_str = str(e)
             if "429" in err_str or "quota" in err_str.lower():
                 if intento < max_intentos - 1:
-                    tiempo_espera = 25 * (intento + 1) # Espera progresiva de 25s, 50s...
-                    st.warning(f"⚠️ Límite de cuota gratuito alcanzado (429). Pausando automáticamente por {tiempo_espera}s antes del reintento ({intento+1}/{max_intentos})...")
+                    tiempo_espera = 20 * (intento + 1)
+                    st.warning(f"⚠️ Límite de cuota alcanzado (429). Pausando automáticamente por {tiempo_espera}s antes del reintento ({intento+1}/{max_intentos})...")
                     time.sleep(tiempo_espera)
                     continue
             raise e
@@ -151,7 +151,7 @@ menu_opcion = st.sidebar.radio("Navegación", ["📄 Procesar Factura", "📁 Ca
 # ==========================================
 if menu_opcion == "📄 Procesar Factura":
     st.markdown("<h2>📄 Procesador Inteligente de Facturas (Multi-Página)</h2>", unsafe_allow_html=True)
-    st.markdown("<p style='color: #64748b;'>Sube facturas de una o varias páginas. El sistema leerá la totalidad de las hojas y cruzará con tu Catálogo Maestro.</p>", unsafe_allow_html=True)
+    st.markdown("<p style='color: #64748b;'>Sube facturas de una o varias páginas utilizando gemini-2.0-flash-lite.</p>", unsafe_allow_html=True)
     st.markdown("---")
 
     if "factura_data" not in st.session_state: st.session_state["factura_data"] = None
@@ -170,9 +170,10 @@ if menu_opcion == "📄 Procesar Factura":
     
     if archivo_subido is not None:
         if st.button("🚀 Procesar Todas las Páginas"):
-            with st.spinner("Analizando documento completo (con control automático de reintentos por cuota)..."):
+            with st.spinner("Analizando documento completo con Flash-Lite..."):
                 try:
-                    model = genai.GenerativeModel('gemini-3.8-flash')
+                    # Configurado con gemini-2.0-flash-lite
+                    model = genai.GenerativeModel('gemini-2.0-flash-lite')
                     file_bytes = archivo_subido.read()
                     f_type = getattr(archivo_subido, 'type', 'image/jpeg')
                     
