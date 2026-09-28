@@ -95,8 +95,12 @@ def clean_ean_code(code_val):
     
     s_val = re.sub(r'\D', '', s_val)
     
+    # Para CND, los códigos cortos de 5 dígitos (ej. 92713) los registramos o buscamos en catálogo, 
+    # si tienen entre 8 y 14 son EAN válidos.
     if 8 <= len(s_val) <= 14:
         return str(s_val)
+    elif 4 <= len(s_val) <= 6:
+        return str(s_val) # Mantener código interno CND si viene limpio
         
     return "S/C"
 
@@ -195,7 +199,7 @@ if menu_opcion == "📄 Procesar Factura":
     
     if archivo_subido is not None:
         if st.button("🚀 Procesar Factura y Validar EAN"):
-            with st.spinner("🚀 Analizando tique completo renglón por renglón..."):
+            with st.spinner("🚀 Analizando tique CND / BEES con precisión exacta..."):
                 try:
                     if not gemini_key:
                         raise ValueError("No se encontró ninguna clave de API configurada.")
@@ -209,23 +213,20 @@ if menu_opcion == "📄 Procesar Factura":
 
                     prov_instruccion = f"El proveedor seleccionado es '{prov_seleccionado}'." if prov_seleccionado != "🔍 Detección Automática (Nuevo Proveedor)" else "Identifica el nombre comercial del proveedor emisor en este documento."
                     
-                    # PROMPT EXHAUSTIVO Y ESTRICTO PARA TICKET CND/BEES
+                    # PROMPT CORREGIDO PARA EXTRAER IMPORTE NETO REAL (CON ISC INCLUIDO)
                     prompt_unificado = (
                         f"{prov_instruccion} "
-                        "Eres un auditor contable experto. Analiza este tique o factura de CND / BEES de principio a fin. "
-                        "El documento tiene una lista larga de productos donde cada renglón tiene un código numérico y cantidad arriba, y la descripción con sus importes abajo. "
-                        "DEBES EXTRAER ABSOLUTAMENTE TODOS LOS 25 RENGLONES DE PRODUCTOS QUE APARECEN EN EL TIQUE, sin omitir ninguno. "
-                        "1. Extrae la paginación impresa (ej: '1 de 1'). "
-                        "2. Extrae los totales globales inferiores si están impresos: 'subtotal', 'isc_advalorem', 'isc_especifico', 'itbis', 'descuentos', 'total'. "
-                        "3. Para CADA UNO DE LOS 25 RENGLONES, extrae estrictamente: "
+                        "Analiza este tique de CND / BEES renglón por renglón. "
+                        "Extrae exactamente los 25 renglones de productos. "
+                        "Para cada renglón extrae: "
                         "- 'descripcion': nombre completo del producto. "
-                        "- 'tamano': tamaño o presentación (ej: '24/12OZ', '355ML', etc.). "
+                        "- 'tamano': tamaño o presentación. "
                         "- 'codigo_factura': código numérico de la línea (ej: 92713). "
-                        "- 'cantidad': número de unidades compradas (ej: 10, 50, 100). "
+                        "- 'cantidad': cantidad comprada. "
                         "- 'unidad': 'PC' o 'UN'. "
-                        "- 'valor_con_itbis': el monto total con ITBIS de la fila (Suma de 'Imp. Neto' + 'ITBIS'). "
+                        "- 'impuesto_neto': el valor monetario impreso en la columna 'Imp. Neto' (que incluye el neto con ISC, antes de ITBIS). "
                         "Devuelve un JSON puro con esta estructura exacta y llaves en minúscula: "
-                        '{"paginacion": "1 de 1", "proveedor_detectado": "CND / BEES", "subtotal": 892186.92, "isc_advalorem": 62110.50, "isc_especifico": 114833.50, "itbis": 185895.24, "descuentos": 0.0, "total": 1218647.47, "items": [{"descripcion": "...", "tamano": "...", "codigo_factura": "...", "cantidad": 1.0, "unidad": "...", "valor_con_itbis": 0.0}]}. '
+                        '{"paginacion": "1 de 1", "proveedor_detectado": "CND / BEES", "subtotal": 892186.92, "isc_advalorem": 62110.50, "isc_especifico": 114833.50, "itbis": 185895.24, "descuentos": 0.0, "total": 1218647.47, "items": [{"descripcion": "...", "tamano": "...", "codigo_factura": "...", "cantidad": 1.0, "unidad": "...", "impuesto_neto": 0.0}]}. '
                         "Respuesta JSON pura."
                     )
 
@@ -268,15 +269,6 @@ if menu_opcion == "📄 Procesar Factura":
         itbis_val = safe_float(data_resp.get("itbis"))
         total_descuentos = safe_float(data_resp.get("descuentos"))
         total_val = safe_float(data_resp.get("total"))
-
-        total_importe_con_itbis = sum(safe_float(i.get("valor_con_itbis")) for i in items)
-        
-        if subtotal_val == 0.0 and items:
-            subtotal_val = total_importe_con_itbis / 1.18
-        if itbis_val == 0.0 and items:
-            itbis_val = total_importe_con_itbis - subtotal_val
-        if total_val == 0.0 and items:
-            total_val = total_importe_con_itbis
 
         # ==========================================
         # DASHBOARD DE MONTOS Y TOTALES
@@ -324,12 +316,13 @@ if menu_opcion == "📄 Procesar Factura":
 
                 cant_compra = safe_float(item.get("cantidad"), 1.0)
                 unidad = str(item.get("unidad", ""))
-                val_con_itbis = safe_float(item.get("valor_con_itbis"), 0.0)
+                impuesto_neto_fila = safe_float(item.get("impuesto_neto"), 0.0)
 
                 empaque = parse_empaque(raw_tam, unidad, raw_desc)
                 total_unidades = int(cant_compra * empaque)
                 
-                costo_unitario_real = round(val_con_itbis / total_unidades, 2) if total_unidades > 0 else 0.0
+                # Cálculo exacto del costo unitario real basado en el Impuesto Neto de la línea entre las unidades totales
+                costo_unitario_real = round(impuesto_neto_fila / total_unidades, 2) if total_unidades > 0 else 0.0
 
                 if costo_unitario_real > 0:
                     precio_con_utilidad = costo_unitario_real * (1 + (margen_utilidad / 100.0))
