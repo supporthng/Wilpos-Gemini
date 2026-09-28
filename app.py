@@ -115,23 +115,26 @@ def limpiar_nombre_producto(descripcion_raw, tamano_raw):
     return desc
 
 def parse_empaque(tamano_txt="", unidad_txt="", descripcion_txt=""):
-    """Cálculo de empaque inteligente con referencias predeterminadas para productos específicos."""
     unidad_upper = str(unidad_txt).upper()
     if "UN" in unidad_upper:
         return 1
 
     combined = f"{str(tamano_txt)} {str(unidad_txt)} {str(descripcion_txt)}".upper()
     
-    # 1. Referencias predeterminadas para productos con empaques complejos o ambiguos
-    if "CORONA" in combined or "MICHELOB" in combined or "BRAHMA" in combined or "PTE" in combined:
-        if "PC" in unidad_upper and not re.search(r'\b(6|12)\b', combined):
-            return 24 # Empaque estándar por caja de cerveza
+    if "CORONA" in combined or "MICHELOB" in combined or "BRAHMA" in combined or "PTE" in combined or "THE ONE" in combined:
+        if "PC" in unidad_upper and not re.search(r'\b(6|12|16)\b', combined):
+            return 24
     if "CLAMATO" in combined:
         return 12
     if "FOUR LOKO" in combined:
         return 12
+    if "GATORADE" in combined:
+        return 24
+    if "MY COCO" in combined:
+        return 20
+    if "ENRIQUILLO" in combined:
+        return 24
         
-    # 2. Patrones estándar de cajas/packs (ej: 24/12OZ, 6/473)
     m_pack = re.search(r'\b(48|24|16|12|6|10|20|30|4)\s*[/xX]', combined)
     if m_pack:
         return int(m_pack.group(1))
@@ -208,7 +211,9 @@ if menu_opcion == "📄 Procesar Factura":
                     
                     prompt_unificado = (
                         f"{prov_instruccion} "
-                        "Analiza este tique o factura. Extrae estrictamente la información de cada renglón relacionando la cantidad, unidad (PC o UN), descripción exacta y el monto total con ITBIS de la fila. "
+                        "Analiza este tique o factura de CND / BEES. Lee cada renglón completo uniendo la línea superior (código y cantidad) con la línea inferior (descripción y presentación). "
+                        "Extrae estrictamente los totales globales inferiores si están disponibles: 'subtotal', 'isc_advalorem', 'isc_especifico', 'itbis', 'descuentos', 'total'. "
+                        "Para CADA RENGLÓN, extrae: 'descripcion', 'tamano', 'codigo_factura', 'cantidad', 'unidad' (PC o UN), y 'valor_con_itbis' (suma de Imp. Neto + ITBIS de la fila). "
                         "Devuelve un JSON puro con esta estructura exacta y llaves en minúscula: "
                         '{"paginacion": "1 de 1", "proveedor_detectado": "NOMBRE", "subtotal": 0.0, "isc_advalorem": 0.0, "isc_especifico": 0.0, "itbis": 0.0, "descuentos": 0.0, "total": 0.0, "items": [{"descripcion": "...", "tamano": "...", "codigo_factura": "...", "cantidad": 1.0, "unidad": "...", "valor_con_itbis": 0.0}]}. '
                         "Respuesta JSON pura."
