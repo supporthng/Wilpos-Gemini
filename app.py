@@ -4,7 +4,6 @@ import os
 import time
 from datetime import datetime
 import re
-from concurrent.futures import ThreadPoolExecutor, TimeoutError
 import google.generativeai as genai
 from PIL import Image
 import streamlit as st
@@ -124,36 +123,6 @@ def buscar_en_catalogo_maestro(nombre_producto):
             
     return best_code
 
-def llamada_gemini_con_timeout(model, contents, timeout_segundos=30):
-    """Ejecuta la llamada a Gemini dentro de un hilo secundario con límite estricto de tiempo."""
-    def _ejecutar():
-        return model.generate_content(contents)
-
-    with ThreadPoolExecutor(max_workers=1) as executor:
-        future = executor.submit(_ejecutar)
-        try:
-            return future.result(timeout=timeout_segundos)
-        except TimeoutError:
-            raise Exception(f"La API de Gemini tardó más de {timeout_segundos} segundos en responder y la conexión se canceló por tiempo de espera (Timeout).")
-
-def llamada_segura_gemini(model, contents, max_intentos=3):
-    for intento in range(max_intentos):
-        try:
-            response = llamada_gemini_con_timeout(model, contents, timeout_segundos=30)
-            if response and response.text:
-                return response
-            raise ValueError("La respuesta de la IA llegó vacía.")
-        except Exception as e:
-            err_str = str(e)
-            if "429" in err_str or "quota" in err_str.lower():
-                if intento < max_intentos - 1:
-                    tiempo_espera = 15 * (intento + 1)
-                    st.warning(f"⚠️ Límite de cuota (429). Esperando {tiempo_espera}s (reintento {intento+1}/{max_intentos})...")
-                    time.sleep(tiempo_espera)
-                    continue
-            raise e
-    raise Exception("Se agotaron los reintentos automáticos.")
-
 st.sidebar.markdown("<h3 style='color: #0284c7;'>⚡ WilPOS System</h3>", unsafe_allow_html=True)
 menu_opcion = st.sidebar.radio("Navegación", ["📄 Procesar Factura", "📁 Catálogo Maestro EAN", "🏢 Gestionar Proveedores"])
 
@@ -181,12 +150,11 @@ if menu_opcion == "📄 Procesar Factura":
     
     if archivo_subido is not None:
         if st.button("🚀 Procesar Factura y Validar EAN"):
-            with st.status("🔄 Iniciando procesamiento del documento...", expanded=True) as status:
+            with st.spinner("🚀 Analizando factura con Gemini Flash..."):
                 try:
-                    st.write("⏳ Configurando modelo gemini-3.5-flash-lite...")
-                    model = genai.GenerativeModel('gemini-3.5-flash-lite')
+                    # Usamos el modelo estándar rápido y oficial
+                    model = genai.GenerativeModel('gemini-1.5-flash')
                     
-                    st.write("📂 Leyendo archivo y preparando datos...")
                     archivo_subido.seek(0)
                     file_bytes = archivo_subido.read()
                     f_type = getattr(archivo_subido, 'type', 'image/jpeg')
@@ -209,11 +177,9 @@ if menu_opcion == "📄 Procesar Factura":
                         "Respuesta JSON pura."
                     )
 
-                    st.write("🤖 Enviando solicitud protegida a Gemini (máx. 30s)...")
                     archivo_subido.seek(0)
-                    response = llamada_segura_gemini(model, [image_input, prompt_unificado])
+                    response = model.generate_content([image_input, prompt_unificado])
                     
-                    st.write("⚙️ Procesando respuesta y extrayendo estructura JSON...")
                     raw_text = response.text.strip()
                     if raw_text.startswith("```json"): raw_text = raw_text[7:]
                     if raw_text.endswith("```"): raw_text = raw_text[:-3]
@@ -231,12 +197,9 @@ if menu_opcion == "📄 Procesar Factura":
 
                     st.session_state["factura_data"] = parsed_json
                     st.session_state["prov_activo"] = prov_a_usar
-                    
-                    status.update(label=f"✅ ¡Factura procesada con éxito! Proveedor: {prov_a_usar}", state="complete", expanded=False)
-                    st.rerun()
+                    st.success(f"✅ ¡Factura procesada con éxito! Proveedor: **{prov_a_usar}**")
                 except Exception as e:
-                    status.update(label="❌ Error durante el procesamiento", state="error", expanded=True)
-                    st.error(f"Detalle técnico del error: {str(e)}")
+                    st.error(f"⚠️ Error al procesar: {str(e)}")
     st.markdown('</div>', unsafe_allow_html=True)
 
     if st.session_state["factura_data"] is not None:
