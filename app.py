@@ -155,8 +155,8 @@ if menu_opcion == "📄 Procesar Factura":
         if st.button("🚀 Procesar Todas las Páginas"):
             with st.spinner("Analizando documento completo..."):
                 try:
-                    # Actualizado a gemini-2.5-flash para evitar errores 404 de modelos retirados
-                    model = genai.GenerativeModel('gemini-2.5-flash')
+                    # Actualizado al modelo oficial sugerido: gemini-3.8-flash
+                    model = genai.GenerativeModel('gemini-3.8-flash')
                     file_bytes = archivo_subido.read()
                     f_type = getattr(archivo_subido, 'type', 'image/jpeg')
                     
