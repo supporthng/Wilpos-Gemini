@@ -97,14 +97,11 @@ def clean_ean_code(code_val):
     
     if 8 <= len(s_val) <= 14:
         return str(s_val)
-    elif 4 <= len(s_val) <= 6:
-        return str(s_val)
         
     return "S/C"
 
 def limpiar_nombre_producto(descripcion_raw, tamano_raw):
     desc = str(descripcion_raw).upper().strip()
-    # Limpiar números colados al final de la descripción (como los códigos o índices residuales)
     desc = re.sub(r'\s+\d{4,6}$', '', desc)
     desc = re.sub(r'\b(PC|UN|CAJA|CAJ|BOT|PZA)\b', '', desc)
     desc = re.sub(r'\s+', ' ', desc).strip()
@@ -126,7 +123,7 @@ def parse_empaque(tamano_txt="", unidad_txt="", descripcion_txt=""):
     combined = f"{str(tamano_txt)} {str(unidad_txt)} {str(descripcion_txt)}".upper()
     
     if "ALOE" in combined:
-        return 24 # Aloe Pure Plus viene típicamente en presentación de pack/caja de 24
+        return 24
     if "CORONA" in combined or "MICHELOB" in combined or "BRAHMA" in combined or "PTE" in combined or "THE ONE" in combined:
         if "PC" in unidad_upper and not re.search(r'\b(6|12|16)\b', combined):
             return 24
@@ -201,7 +198,7 @@ if menu_opcion == "📄 Procesar Factura":
     
     if archivo_subido is not None:
         if st.button("🚀 Procesar Factura y Validar EAN"):
-            with st.spinner("🚀 Analizando tique CND / BEES con precisión exacta..."):
+            with st.spinner("🚀 Analizando tique CND / BEES y cotejando con Catálogo Maestro..."):
                 try:
                     if not gemini_key:
                         raise ValueError("No se encontró ninguna clave de API configurada.")
@@ -218,16 +215,14 @@ if menu_opcion == "📄 Procesar Factura":
                     prompt_unificado = (
                         f"{prov_instruccion} "
                         "Analiza este tique de CND / BEES renglón por renglón con total limpieza. "
-                        "Asegúrate de separar correctamente la descripción del producto de los números de código que aparezcan al lado o arriba (como el código 92713 del primer Aloe Pure Plus). "
                         "Para cada uno de los 25 renglones, extrae estrictamente: "
-                        "- 'descripcion': nombre limpio del producto (sin incluir códigos numéricos pegados). "
+                        "- 'descripcion': nombre limpio del producto. "
                         "- 'tamano': tamaño o presentación. "
-                        "- 'codigo_factura': código numérico de la línea (ej: 92713). "
-                        "- 'cantidad': cantidad comprada (ej: 10). "
+                        "- 'cantidad': cantidad comprada. "
                         "- 'unidad': 'PC' o 'UN'. "
                         "- 'impuesto_neto': el valor monetario exacto impreso en la columna 'Imp. Neto'. "
                         "Devuelve un JSON puro con esta estructura exacta y llaves en minúscula: "
-                        '{"paginacion": "1 de 1", "proveedor_detectado": "CND / BEES", "subtotal": 892186.92, "isc_advalorem": 62110.50, "isc_especifico": 114833.50, "itbis": 185895.24, "descuentos": 0.0, "total": 1218647.47, "items": [{"descripcion": "...", "tamano": "...", "codigo_factura": "...", "cantidad": 1.0, "unidad": "...", "impuesto_neto": 0.0}]}. '
+                        '{"paginacion": "1 de 1", "proveedor_detectado": "CND / BEES", "subtotal": 892186.92, "isc_advalorem": 62110.50, "isc_especifico": 114833.50, "itbis": 185895.24, "descuentos": 0.0, "total": 1218647.47, "items": [{"descripcion": "...", "tamano": "...", "cantidad": 1.0, "unidad": "...", "impuesto_neto": 0.0}]}. '
                         "Respuesta JSON pura."
                     )
 
@@ -309,11 +304,8 @@ if menu_opcion == "📄 Procesar Factura":
                 m_med = re.search(r'(\d+\s*(?:ML|L|LT|G|KG|OZ|Z))', str(raw_tam + " " + raw_desc).upper())
                 presentacion_limpia = m_med.group(1) if m_med else (raw_tam if raw_tam else "S/P")
 
-                cod_factura_limpio = clean_ean_code(item.get("codigo_factura"))
-                if cod_factura_limpio != "S/C":
-                    codigo_final = cod_factura_limpio 
-                else:
-                    codigo_final = buscar_en_catalogo_maestro(nombre_completo) 
+                # Búsqueda automática en el Catálogo Maestro EAN (exactamente igual que el proveedor anterior)
+                codigo_final = buscar_en_catalogo_maestro(nombre_completo)
 
                 cant_compra = safe_float(item.get("cantidad"), 1.0)
                 unidad = str(item.get("unidad", ""))
