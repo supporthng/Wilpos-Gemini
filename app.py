@@ -66,9 +66,14 @@ if "supplier_memory" not in st.session_state:
     if not loaded_supps:
         loaded_supps = {
             "ALVAREZ & SANCHEZ": {"nombre": "ALVAREZ & SANCHEZ", "notas_formato": "Desglose con descuento por renglón."},
-            "GONZALEZ CUESTA": {"nombre": "GONZALEZ CUESTA", "notas_formato": "Corporativo."}
+            "CND / BEES": {"nombre": "CND / BEES", "notas_formato": "Formato tique con doble línea por producto, ISC y doble tasa ITBIS."}
         }
         save_json_file(SUPPLIER_MEMORY_FILE, loaded_supps)
+    else:
+        # Asegurar que CND / BEES esté presente si el archivo ya existía
+        if "CND / BEES" not in loaded_supps:
+            loaded_supps["CND / BEES"] = {"nombre": "CND / BEES", "notas_formato": "Formato tique con doble línea por producto, ISC y doble tasa ITBIS."}
+            save_json_file(SUPPLIER_MEMORY_FILE, loaded_supps)
     st.session_state["supplier_memory"] = loaded_supps
 
 if "master_catalog" not in st.session_state:
@@ -91,18 +96,19 @@ def clean_ean_code(code_val):
     
     s_val = re.sub(r'\D', '', s_val)
     
-    if s_val.lower() in ["nan", "none", "", "s/c", "sin codigo"] or not (8 <= len(s_val) <= 14):
-        return "S/C"
+    # Si es un código EAN estándar (8 a 14 dígitos)
+    if 8 <= len(s_val) <= 14:
+        return str(s_val)
         
-    return str(s_val)
+    return "S/C"
 
 def limpiar_nombre_producto(descripcion_raw, tamano_raw):
     desc = str(descripcion_raw).upper().strip()
-    desc = re.sub(r'\b(CAJA|CAJ|BOT|UNIDAD|PZA)\b', '', desc)
+    desc = re.sub(r'\b(PC|UN|CAJA|CAJ|BOT|PZA)\b', '', desc)
     desc = re.sub(r'\s+', ' ', desc).strip()
     
     tam = str(tamano_raw).upper().strip()
-    m_medida = re.search(r'(\d+\s*(?:CL|ML|L|LT|G|KG))', tam)
+    m_medida = re.search(r'(\d+\s*(?:ML|L|LT|G|KG|OZ|Z))\b', tam)
     medida_limpia = m_medida.group(1) if m_medida else ""
     
     if medida_limpia and medida_limpia not in desc:
@@ -111,19 +117,21 @@ def limpiar_nombre_producto(descripcion_raw, tamano_raw):
     return desc
 
 def parse_empaque(tamano_txt="", unidad_txt="", descripcion_txt=""):
-    combined_tamano = str(tamano_txt).upper()
-    m_slash = re.search(r'\b(48|24|16|12|6|10|20|30|1)\s*/', combined_tamano)
-    if m_slash: 
-        return int(m_slash.group(1))
-
-    combined = f"{str(unidad_txt)} {str(descripcion_txt)}".upper()
-    m_caja = re.search(r'(?:CAJA|CAJ|PAQ|PACK|BLISTER)[^\d]*(\d+)', combined)
+    combined = f"{str(tamano_txt)} {str(unidad_txt)} {str(descripcion_txt)}".upper()
+    
+    # Detectar empaques comunes en CND/BEES (ej: 24/12OZ, 6/473 ML, etc.)
+    m_pack = re.search(r'\b(48|24|16|12|6|10|20|30)\s*/', combined)
+    if m_pack:
+        return int(m_pack.group(1))
+        
+    m_caja = re.search(r'(?:PC|CAJA|CAJ|PACK)[^\d]*(\d+)', combined)
     if m_caja:
         val = int(m_caja.group(1))
         if 1 < val <= 120: return val
 
-    if any(w in unidad_txt.upper() for w in ["BOT", "UNIDAD", "PZA"]) and not re.search(r'\d+', unidad_txt):
+    if "UN" in unidad_txt.upper():
         return 1
+        
     return 1
 
 def buscar_en_catalogo_maestro(nombre_producto):
@@ -156,7 +164,7 @@ menu_opcion = st.sidebar.radio("Navegación", ["📄 Procesar Factura", "📁 Ca
 # ==========================================
 if menu_opcion == "📄 Procesar Factura":
     st.markdown("<h2>📄 Procesador Inteligente de Facturas (Multi-Página)</h2>", unsafe_allow_html=True)
-    st.markdown("<p style='color: #64748b;'>Sube facturas, visualiza el dashboard financiero con descuentos por línea y controla códigos EAN.</p>", unsafe_allow_html=True)
+    st.markdown("<p style='color: #64748b;'>Sube facturas, visualiza el dashboard financiero con impuestos ISC/ITBIS y controla códigos.</p>", unsafe_allow_html=True)
     st.markdown("---")
 
     if "factura_data" not in st.session_state: st.session_state["factura_data"] = None
@@ -176,7 +184,7 @@ if menu_opcion == "📄 Procesar Factura":
     
     if archivo_subido is not None:
         if st.button("🚀 Procesar Factura y Validar EAN"):
-            with st.spinner("🚀 Extrayendo descuentos por línea, totales y renglones..."):
+            with st.spinner("🚀 Analizando formato de factura / tique y extrayendo renglones..."):
                 try:
                     if not gemini_key:
                         raise ValueError("No se encontró ninguna clave de API configurada.")
@@ -192,18 +200,19 @@ if menu_opcion == "📄 Procesar Factura":
                     
                     prompt_unificado = (
                         f"{prov_instruccion} "
-                        "Analiza este documento completo de principio a fin. "
-                        "1. Extrae la paginación impresa (ej: '1 de 2' o '1'). "
-                        "2. Para CADA RENGLÓN de producto, extrae obligatoriamente: "
-                        "- 'descripcion': nombre limpio del producto. "
-                        "- 'tamano': contenido de la columna tamaño (ej: '12/70 CL.'). "
-                        "- 'codigo_factura': código de barras oficial de la línea (8 a 14 dígitos). Asegúrate de que cada línea mantenga su propio código. "
+                        "Analiza este documento (puede ser factura tradicional o tique estilo CND/BEES con bloques de doble línea). "
+                        "1. Extrae la paginación impresa (ej: '1 de 1'). "
+                        "2. Extrae los totales globales inferiores si están disponibles: 'subtotal', 'isc_advalorem', 'isc_especifico', 'itbis', 'descuentos', 'total'. "
+                        "3. Para CADA RENGLÓN de producto, extrae con precisión: "
+                        "- 'descripcion': nombre o descripción del producto. "
+                        "- 'tamano': presentación o contenido (ej: '24/12OZ', '6/473 ML', '75 CL'). "
+                        "- 'codigo_factura': código de la línea (puede ser código interno numérico de 5 dígitos o código de barras). "
                         "- 'cantidad': cantidad comprada. "
-                        "- 'unidad': unidad de empaque (ej: 'CAJA'). "
-                        "- 'valor_descuento': el valor monetario del descuento aplicado en esta línea (columna VALOR bajo DESCUENTO). "
-                        "- 'valor_con_itbis': el importe final con ITBIS de la línea. "
+                        "- 'unidad': unidad (ej: 'PC', 'UN'). "
+                        "- 'valor_descuento': valor de descuento de la línea si lo hay. "
+                        "- 'valor_con_itbis': monto total de la línea (importe con impuestos). "
                         "Devuelve un JSON puro con esta estructura exacta y llaves en minúscula: "
-                        '{"paginacion": "1 de 2", "proveedor_detectado": "NOMBRE", "items": [{"descripcion": "...", "tamano": "...", "codigo_factura": "...", "cantidad": 1.0, "unidad": "...", "valor_descuento": 0.0, "valor_con_itbis": 0.0}]}. '
+                        '{"paginacion": "1 de 1", "proveedor_detectado": "NOMBRE", "subtotal": 0.0, "isc_advalorem": 0.0, "isc_especifico": 0.0, "itbis": 0.0, "descuentos": 0.0, "total": 0.0, "items": [{"descripcion": "...", "tamano": "...", "codigo_factura": "...", "cantidad": 1.0, "unidad": "...", "valor_descuento": 0.0, "valor_con_itbis": 0.0}]}. '
                         "Respuesta JSON pura."
                     )
 
@@ -229,7 +238,7 @@ if menu_opcion == "📄 Procesar Factura":
                     st.session_state["prov_activo"] = prov_a_usar
                     st.session_state["paginacion_detectada"] = str(parsed_json.get("paginacion", "1 de 1"))
                     
-                    st.success(f"✅ ¡Factura procesada con éxito! Paginación: **{st.session_state['paginacion_detectada']}**")
+                    st.success(f"✅ ¡Factura procesada con éxito! Proveedor: **{prov_a_usar}**")
                 except Exception as e:
                     st.error(f"⚠️ Error al procesar: {str(e)}")
     st.markdown('</div>', unsafe_allow_html=True)
@@ -240,12 +249,22 @@ if menu_opcion == "📄 Procesar Factura":
         prov_actual = st.session_state.get("prov_activo", "GENERAL")
         pag_info = str(st.session_state.get("paginacion_detectada", "1 de 1"))
         
-        total_descuentos = sum(safe_float(i.get("valor_descuento")) for i in items)
+        # Extracción y respaldo de totales financieros
+        subtotal_val = safe_float(data_resp.get("subtotal"))
+        isc_adv = safe_float(data_resp.get("isc_advalorem"))
+        isc_esp = safe_float(data_resp.get("isc_especifico"))
+        itbis_val = safe_float(data_resp.get("itbis"))
+        total_descuentos = safe_float(data_resp.get("descuentos")) + sum(safe_float(i.get("valor_descuento")) for i in items)
+        total_val = safe_float(data_resp.get("total"))
+
         total_importe_con_itbis = sum(safe_float(i.get("valor_con_itbis")) for i in items)
         
-        subtotal_val = total_importe_con_itbis / 1.18
-        itbis_val = total_importe_con_itbis - subtotal_val
-        total_val = total_importe_con_itbis
+        if subtotal_val == 0.0 and items:
+            subtotal_val = total_importe_con_itbis / 1.18
+        if itbis_val == 0.0 and items:
+            itbis_val = total_importe_con_itbis - subtotal_val
+        if total_val == 0.0 and items:
+            total_val = total_importe_con_itbis
 
         # ==========================================
         # DASHBOARD DE MONTOS Y TOTALES
@@ -254,28 +273,22 @@ if menu_opcion == "📄 Procesar Factura":
         
         col_m1, col_m2, col_m3, col_m4 = st.columns(4)
         with col_m1:
-            st.metric(label="Subtotal", value=f"${subtotal_val:,.2f}")
+            st.metric(label="Subtotal / Bruto", value=f"${subtotal_val:,.2f}")
         with col_m2:
-            st.metric(label="ITBIS", value=f"${itbis_val:,.2f}")
+            st.metric(label="ITBIS Total", value=f"${itbis_val:,.2f}")
         with col_m3:
             st.metric(label="Descuentos", value=f"${total_descuentos:,.2f}")
         with col_m4:
             st.metric(label="Total General", value=f"${total_val:,.2f}")
+            
+        if isc_adv > 0 or isc_esp > 0:
+            st.info(f"💡 **Impuestos ISC Detectados:** ISC Ad-Valorem: **${isc_adv:,.2f}** | ISC Específico: **${isc_esp:,.2f}**")
         
         st.markdown("---")
 
         if items:
             st.markdown(f"### 📋 Detalle de Renglones Extraídos ({len(items)} ítems)")
             
-            codigos_vistos = set()
-            for item in items:
-                c_limp = clean_ean_code(item.get("codigo_factura"))
-                if c_limp != "S/C":
-                    if c_limp in codigos_vistos:
-                        item["codigo_factura"] = "S/C"
-                    else:
-                        codigos_vistos.add(c_limp)
-
             preview_rows = []
             wb = openpyxl.Workbook()
             ws = wb.active
@@ -288,7 +301,7 @@ if menu_opcion == "📄 Procesar Factura":
                 
                 nombre_completo = limpiar_nombre_producto(raw_desc, raw_tam)
                 
-                m_med = re.search(r'(\d+\s*(?:CL|ML|L|LT|G|KG))', str(raw_tam).upper())
+                m_med = re.search(r'(\d+\s*(?:ML|L|LT|G|KG|OZ|Z))', str(raw_tam).upper())
                 presentacion_limpia = m_med.group(1) if m_med else str(raw_tam).strip()
 
                 cod_factura_limpio = clean_ean_code(item.get("codigo_factura"))
