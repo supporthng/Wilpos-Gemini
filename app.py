@@ -115,19 +115,26 @@ def limpiar_nombre_producto(descripcion_raw, tamano_raw):
     return desc
 
 def parse_empaque(tamano_txt="", unidad_txt="", descripcion_txt=""):
-    """Extrae con precisión el factor de empaque de tiques CND/BEES (ej: 24/12OZ, 6/473, 4X, etc.)"""
+    """Extrae con precisión milimétrica el empaque combinando tamaño, unidad y descripción (maneja packs, 4X, multilíneas, etc.)"""
     combined = f"{str(tamano_txt)} {str(unidad_txt)} {str(descripcion_txt)}".upper()
     
-    # Patrón tipo 24/12, 24/12OZ, 6/473
+    # 1. Buscar patrones tipo 24/12OZ, 6/473, 24/12
     m_pack = re.search(r'\b(48|24|16|12|6|10|20|30|4)\s*[/xX]', combined)
     if m_pack:
         return int(m_pack.group(1))
         
-    # Patrón tipo 4X o similar al final o en la descripción
+    # 2. Buscar patrones tipo 4X o terminaciones numéricas de multipack en la descripción (ej: 355ML 4X o un '2' aislado en tamaño)
     m_mult = re.search(r'\b([2468])\s*X\b', combined)
     if m_mult:
         return int(m_mult.group(1))
+        
+    # Si el tamaño es estrictamente un número pequeño (ej: '2' o '4' en la línea inferior del tique)
+    if str(tamano_txt).strip().isdigit():
+        val_t = int(str(tamano_txt).strip())
+        if 1 < val_t <= 50:
+            return val_t
 
+    # 3. Buscar palabras clave de cajas
     m_caja = re.search(r'(?:PC|CAJA|CAJ|PACK)[^\d]*(\d+)', combined)
     if m_caja:
         val = int(m_caja.group(1))
@@ -188,7 +195,7 @@ if menu_opcion == "📄 Procesar Factura":
     
     if archivo_subido is not None:
         if st.button("🚀 Procesar Factura y Validar EAN"):
-            with st.spinner("🚀 Analizando empaques, stock y costos unitarios..."):
+            with st.spinner("🚀 Analizando bloques de doble línea y empaques complejos..."):
                 try:
                     if not gemini_key:
                         raise ValueError("No se encontró ninguna clave de API configurada.")
@@ -204,15 +211,15 @@ if menu_opcion == "📄 Procesar Factura":
                     
                     prompt_unificado = (
                         f"{prov_instruccion} "
-                        "Analiza este tique o factura de CND / BEES. "
+                        "Analiza este tique o factura de CND / BEES teniendo en cuenta que cada producto ocupa bloques de varias líneas (la línea superior trae el código y la cantidad, y la línea inferior trae la descripción y a veces un número suelto debajo que indica empaque o pack, ej: el '2' debajo de CORONA EXTRA o MICHELOB ULTRA). "
                         "1. Extrae la paginación impresa (ej: '1 de 1'). "
-                        "2. Extrae los totales globales inferiores si están disponibles: 'subtotal', 'isc_advalorem', 'isc_especifico', 'itbis', 'descuentos', 'total'. "
+                        "2. Extrae los totales globales inferiores: 'subtotal', 'isc_advalorem', 'isc_especifico', 'itbis', 'descuentos', 'total'. "
                         "3. Para CADA RENGLÓN de producto, extrae con extrema precisión: "
-                        "- 'descripcion': nombre completo del producto (ej: 'BRAHMA LIGHT HU 24/12OZ', 'CORONA EXTRA 330ML LP 4'). "
-                        "- 'tamano': factor de empaque o presentación contenida en la descripción o línea (ej: '24/12OZ', '16/650ML', '330ML 4'). "
-                        "- 'codigo_factura': código numérico de la línea (ej: 92713, 94270). "
-                        "- 'cantidad': cantidad comprada de cajas o unidades (ej: 10, 100). "
-                        "- 'unidad': unidad de empaque ('PC' para pack/caja, 'UN' para unidad). "
+                        "- 'descripcion': nombre completo del producto (ej: 'CORONA EXTRA 330ML LP', 'CORONA CERO 355ML', 'CLAMATO COCTEL TOMATE', 'FOUR LOKO PONCHE DE FRU'). "
+                        "- 'tamano': cualquier factor de empaque, presentación o número que aparezca al lado o en la línea inmediatamente inferior (ej: '330ML 4', '355ML 4X', o el número '2'). "
+                        "- 'codigo_factura': código numérico de la línea (ej: 94176, 94173, 93100, 93033). "
+                        "- 'cantidad': cantidad comprada (ej: 50, 10, 20). "
+                        "- 'unidad': unidad de empaque ('PC' o 'UN'). "
                         "- 'valor_con_itbis': monto TOTAL con ITBIS incluido para esa línea (suma de Imp. Neto + ITBIS de la fila). "
                         "Devuelve un JSON puro con esta estructura exacta y llaves en minúscula: "
                         '{"paginacion": "1 de 1", "proveedor_detectado": "NOMBRE", "subtotal": 0.0, "isc_advalorem": 0.0, "isc_especifico": 0.0, "itbis": 0.0, "descuentos": 0.0, "total": 0.0, "items": [{"descripcion": "...", "tamano": "...", "codigo_factura": "...", "cantidad": 1.0, "unidad": "...", "valor_con_itbis": 0.0}]}. '
@@ -316,11 +323,10 @@ if menu_opcion == "📄 Procesar Factura":
                 unidad = str(item.get("unidad", ""))
                 val_con_itbis = safe_float(item.get("valor_con_itbis"), 0.0)
 
-                # Cálculo de empaque robusto para tiques CND/BEES
+                # Cálculo de empaque reforzado
                 empaque = parse_empaque(raw_tam, unidad, raw_desc)
                 total_unidades = int(cant_compra * empaque)
                 
-                # Costo unitario real por botella/unidad dividiendo el total con impuestos entre las unidades totales
                 costo_unitario_real = round(val_con_itbis / total_unidades, 2) if total_unidades > 0 else 0.0
 
                 if costo_unitario_real > 0:
