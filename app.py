@@ -65,7 +65,7 @@ if "supplier_memory" not in st.session_state:
     loaded_supps = load_json_file(SUPPLIER_MEMORY_FILE, "dict")
     if not loaded_supps:
         loaded_supps = {
-            "ALVAREZ & SANCHEZ": {"nombre": "ALVAREZ & SANCHEZ", "notas_formato": "Desglose estándar en columna tamaño."},
+            "ALVAREZ & SANCHEZ": {"nombre": "ALVAREZ & SANCHEZ", "notas_formato": "Desglose con descuento por renglón."},
             "GONZALEZ CUESTA": {"nombre": "GONZALEZ CUESTA", "notas_formato": "Corporativo."}
         }
         save_json_file(SUPPLIER_MEMORY_FILE, loaded_supps)
@@ -156,7 +156,7 @@ menu_opcion = st.sidebar.radio("Navegación", ["📄 Procesar Factura", "📁 Ca
 # ==========================================
 if menu_opcion == "📄 Procesar Factura":
     st.markdown("<h2>📄 Procesador Inteligente de Facturas (Multi-Página)</h2>", unsafe_allow_html=True)
-    st.markdown("<p style='color: #64748b;'>Sube facturas, visualiza el dashboard financiero con totales reales y controla códigos EAN únicos.</p>", unsafe_allow_html=True)
+    st.markdown("<p style='color: #64748b;'>Sube facturas, visualiza el dashboard financiero con descuentos por línea y controla códigos EAN.</p>", unsafe_allow_html=True)
     st.markdown("---")
 
     if "factura_data" not in st.session_state: st.session_state["factura_data"] = None
@@ -176,7 +176,7 @@ if menu_opcion == "📄 Procesar Factura":
     
     if archivo_subido is not None:
         if st.button("🚀 Procesar Factura y Validar EAN"):
-            with st.spinner("🚀 Extrayendo montos financieros y renglones con precisión..."):
+            with st.spinner("🚀 Extrayendo descuentos por línea, totales y renglones..."):
                 try:
                     if not gemini_key:
                         raise ValueError("No se encontró ninguna clave de API configurada.")
@@ -194,14 +194,16 @@ if menu_opcion == "📄 Procesar Factura":
                         f"{prov_instruccion} "
                         "Analiza este documento completo de principio a fin. "
                         "1. Extrae la paginación impresa (ej: '1 de 2'). "
-                        "2. Extrae los montos globales exactos de la factura ubicados al pie o en los subtotales: "
-                        "- 'subtotal': subtotal general (ej: sumatoria o subtotal gravado). "
-                        "- 'itbis': monto total de ITBIS/Impuestos. "
-                        "- 'descuentos': total de descuentos aplicados. "
-                        "- 'total': monto total general a pagar. "
-                        "3. Extrae todos los renglones de productos, asegurando que cada línea tenga su propio 'codigo_factura' correspondiente a su fila exacta (no repitas códigos de barras entre diferentes productos a menos que la factura indique el mismo número). "
+                        "2. Para CADA RENGLÓN de producto, extrae obligatoriamente: "
+                        "- 'descripcion': nombre limpio del producto. "
+                        "- 'tamano': contenido de la columna tamaño (ej: '12/75 CL.'). "
+                        "- 'codigo_factura': código de barras oficial de la línea (8 a 14 dígitos). Asegúrate de que cada línea mantenga su propio código y no se repitan entre líneas distintas a menos que coincidan en el documento. "
+                        "- 'cantidad': cantidad comprada. "
+                        "- 'unidad': unidad de empaque (ej: 'CAJA'). "
+                        "- 'valor_descuento': el valor monetario del descuento aplicado en esta línea (columna VALOR bajo DESCUENTO). "
+                        "- 'valor_con_itbis': el importe final con ITBIS de la línea. "
                         "Devuelve un JSON puro con esta estructura exacta y llaves en minúscula: "
-                        '{"paginacion": "1 de 2", "proveedor_detectado": "NOMBRE", "subtotal": 0.0, "itbis": 0.0, "descuentos": 0.0, "total": 0.0, "items": [{"descripcion": "...", "tamano": "...", "codigo_factura": "...", "cantidad": 1.0, "unidad": "...", "valor_con_itbis": 0.0}]}. '
+                        '{"paginacion": "1 de 2", "proveedor_detectado": "NOMBRE", "items": [{"descripcion": "...", "tamano": "...", "codigo_factura": "...", "cantidad": 1.0, "unidad": "...", "valor_descuento": 0.0, "valor_con_itbis": 0.0}]}. '
                         "Respuesta JSON pura."
                     )
 
@@ -238,19 +240,14 @@ if menu_opcion == "📄 Procesar Factura":
         prov_actual = st.session_state.get("prov_activo", "GENERAL")
         pag_info = st.session_state.get("paginacion_detectada", "1 de 1")
         
-        # Extracción segura de montos globales del JSON
-        subtotal_val = safe_float(data_resp.get("subtotal") or data_resp.get("subtotal_general"))
-        itbis_val = safe_float(data_resp.get("itbis") or data_resp.get("itbis_general"))
-        descuentos_val = safe_float(data_resp.get("descuentos") or data_resp.get("descuento_general"))
-        total_val = safe_float(data_resp.get("total") or data_resp.get("total_general"))
-
-        # Si el subtotal o total vienen en 0 pero hay items, calculamos respaldo financiero automático
-        if subtotal_val == 0.0 and items:
-            subtotal_val = sum(safe_float(i.get("valor_con_itbis")) / 1.18 for i in items)
-        if itbis_val == 0.0 and items:
-            itbis_val = sum(safe_float(i.get("valor_con_itbis")) - (safe_float(i.get("valor_con_itbis")) / 1.18) for i in items)
-        if total_val == 0.0 and items:
-            total_val = sum(safe_float(i.get("valor_con_itbis")) for i in items)
+        # Cálculo financiero automático robusto basado en la suma de los renglones extraídos
+        total_descuentos = sum(safe_float(i.get("valor_descuento")) for i in items)
+        total_importe_con_itbis = sum(safe_float(i.get("valor_con_itbis")) for i in items)
+        
+        # Estimación estándar del subtotal e ITBIS a partir de los importes con ITBIS
+        subtotal_val = total_importe_con_itbis / 1.18
+        itbis_val = total_importe_con_itbis - subtotal_val
+        total_val = total_importe_con_itbis
 
         # ==========================================
         # DASHBOARD DE MONTOS Y TOTALES
@@ -263,7 +260,7 @@ if menu_opcion == "📄 Procesar Factura":
         with col_m2:
             st.metric(label="ITBIS", value=f"${itbis_val:,.2f}")
         with col_m3:
-            st.metric(label="Descuentos", value=f"${descuentos_val:,.2f}")
+            st.metric(label="Descuentos", value=f"${total_descuentos:,.2f}")
         with col_m4:
             st.metric(label="Total General", value=f"${total_val:,.2f}")
         
@@ -272,13 +269,12 @@ if menu_opcion == "📄 Procesar Factura":
         if items:
             st.markdown(f"### 📋 Detalle de Renglones Extraídos ({len(items)} ítems)")
             
-            # Post-procesamiento para eliminar códigos duplicados artificiales entre filas distintas
+            # Post-procesamiento para prevenir duplicidad artificial de códigos entre filas distintas
             codigos_vistos = set()
             for item in items:
                 c_limp = clean_ean_code(item.get("codigo_factura"))
                 if c_limp != "S/C":
                     if c_limp in codigos_vistos:
-                        # Si el código ya fue usado por otra línea anterior, lo invalidamos para evitar arrastre visual
                         item["codigo_factura"] = "S/C"
                     else:
                         codigos_vistos.add(c_limp)
