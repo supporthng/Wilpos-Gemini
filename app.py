@@ -65,7 +65,7 @@ if "supplier_memory" not in st.session_state:
     loaded_supps = load_json_file(SUPPLIER_MEMORY_FILE, "dict")
     if not loaded_supps:
         loaded_supps = {
-            "ALVAREZ & SANCHEZ": {"nombre": "ALVAREZ & SANCHEZ", "notas_formato": "Desglose estándar en columna tamaño (ej: 12/75 CL)."},
+            "ALVAREZ & SANCHEZ": {"nombre": "ALVAREZ & SANCHEZ", "notas_formato": "Desglose estándar en columna tamaño."},
             "GONZALEZ CUESTA": {"nombre": "GONZALEZ CUESTA", "notas_formato": "Corporativo."}
         }
         save_json_file(SUPPLIER_MEMORY_FILE, loaded_supps)
@@ -85,13 +85,16 @@ def round_to_nearest_5(x):
     return float(round(round(x / 5) * 5))
 
 def clean_ean_code(code_val):
+    """Valida estrictamente que el código sea EAN estándar (8 a 14 dígitos). Descarta códigos internos cortos."""
     if not code_val: return "S/C"
     s_val = str(code_val).strip()
     if s_val.endswith('.0'): s_val = s_val[:-2]
     
     s_val = re.sub(r'\D', '', s_val)
     
-    if s_val.lower() in ["nan", "none", "", "s/c", "sin codigo"] or len(s_val) < 8 or len(s_val) > 14:
+    # REGLA ESTRICTA: Los códigos de barras EAN válidos tienen entre 8 y 14 dígitos. 
+    # Códigos más cortos (como 3 o 4 dígitos de líneas de facturas) son internos y se descartan para evitar duplicidad.
+    if s_val.lower() in ["nan", "none", "", "s/c", "sin codigo"] or not (8 <= len(s_val) <= 14):
         return "S/C"
         
     return str(s_val)
@@ -142,6 +145,7 @@ def buscar_en_catalogo_maestro(nombre_producto):
     for m_name, m_code in master_dict.items():
         m_upper = str(m_name).upper()
         matches = sum(1 for qw in query_words if qw in m_upper)
+        # Exigimos coincidencia robusta de al menos 2 palabras clave para evitar asignaciones erróneas masivas
         if matches >= 2 and matches > max_matches:
             max_matches = matches
             best_code = clean_ean_code(m_code)
@@ -156,7 +160,7 @@ menu_opcion = st.sidebar.radio("Navegación", ["📄 Procesar Factura", "📁 Ca
 # ==========================================
 if menu_opcion == "📄 Procesar Factura":
     st.markdown("<h2>📄 Procesador Inteligente de Facturas (Multi-Página)</h2>", unsafe_allow_html=True)
-    st.markdown("<p style='color: #64748b;'>Sube facturas, visualiza el dashboard financiero de totales y cruza con tu Catálogo Maestro.</p>", unsafe_allow_html=True)
+    st.markdown("<p style='color: #64748b;'>Sube facturas, visualiza el dashboard financiero y valida códigos EAN únicos por renglón.</p>", unsafe_allow_html=True)
     st.markdown("---")
 
     if "factura_data" not in st.session_state: st.session_state["factura_data"] = None
@@ -176,7 +180,7 @@ if menu_opcion == "📄 Procesar Factura":
     
     if archivo_subido is not None:
         if st.button("🚀 Procesar Factura y Validar EAN"):
-            with st.spinner("🚀 Analizando documento, totales financieros y paginación..."):
+            with st.spinner("🚀 Analizando documento y filtrando códigos internos..."):
                 try:
                     if not gemini_key:
                         raise ValueError("No se encontró ninguna clave de API configurada.")
@@ -193,11 +197,11 @@ if menu_opcion == "📄 Procesar Factura":
                     prompt_unificado = (
                         f"{prov_instruccion} "
                         "Analiza el documento completo de principio a fin. "
-                        "1. Detecta la información de paginación impresa (ej: '1 de 2' o '1 de 1'). "
-                        "2. Extrae los totales globales de la factura: 'subtotal_general', 'itbis_general', 'descuento_general', 'total_general'. "
-                        "3. Extrae ABSOLUTAMENTE TODOS LOS RENGLONES Y PRODUCTOS con sus respectivos valores de línea ('descripcion', 'tamano', 'codigo_factura', 'cantidad', 'unidad', 'valor_con_itbis'). "
-                        "Devuelve un JSON puro con esta estructura exacta: "
-                        '{"paginacion": "1 de 2", "proveedor_detectado": "NOMBRE_PROVEEDOR", "totales_factura": {"subtotal_general": 0.0, "itbis_general": 0.0, "descuento_general": 0.0, "total_general": 0.0}, "items": [{"descripcion": "...", "tamano": "...", "codigo_factura": "...", "cantidad": 1.0, "unidad": "...", "valor_con_itbis": 0.0}]}. '
+                        "1. Detecta la paginación impresa (ej: '1 de 2'). "
+                        "2. Extrae los totales globales: 'subtotal_general', 'itbis_general', 'descuento_general', 'total_general'. "
+                        "3. Extrae TODOS LOS RENGLONES. Para cada renglón extrae con precisión su 'codigo_barras' oficial de 8 a 14 dígitos si aparece en la columna de códigos de barras (ignora números de línea o códigos internos cortos). "
+                        "Estructura JSON exacta requerida: "
+                        '{"paginacion": "1 de 2", "proveedor_detectado": "NOMBRE", "totales_factura": {"subtotal_general": 0.0, "itbis_general": 0.0, "descuento_general": 0.0, "total_general": 0.0}, "items": [{"descripcion": "...", "tamano": "...", "codigo_factura": "...", "cantidad": 1.0, "unidad": "...", "valor_con_itbis": 0.0}]}. '
                         "Respuesta JSON pura."
                     )
 
@@ -269,6 +273,7 @@ if menu_opcion == "📄 Procesar Factura":
                 m_med = re.search(r'(\d+\s*(?:CL|ML|L|LT|G|KG))', str(raw_tam).upper())
                 presentacion_limpia = m_med.group(1) if m_med else str(raw_tam).strip()
 
+                # APLICACIÓN DE LA REGLA: Validación EAN estricta por línea para evitar duplicados basura
                 cod_factura_limpio = clean_ean_code(item.get("codigo_factura"))
                 if cod_factura_limpio != "S/C":
                     codigo_final = cod_factura_limpio 
