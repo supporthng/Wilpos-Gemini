@@ -202,7 +202,6 @@ def buscar_en_catalogo_maestro(nombre_producto, presentacion=""):
 
     master_dict = st.session_state.get("master_catalog", {})
 
-    # Diccionario ordenado de sinónimos (las claves más largas/específicas van primero)
     cnd_sinonimos = {
         "ALOE PURE PLUS ORIGINAL 1.5 LT": "8809125063035",
         "PTE. LIGHT HU 22OZ": "70601561", "PRESIDENTE LIGHT HU 22OZ": "70601561", "PTE. CJ 22OZ": "70601561",
@@ -250,14 +249,14 @@ st.sidebar.markdown("<h3 style='color: #0284c7;'>⚡ WilPOS Multi-Proveedor</h3>
 menu_opcion = st.sidebar.radio("Navegación", ["📄 Procesar Factura", "📁 Catálogo Maestro EAN", "🏢 Gestionar Proveedores"])
 
 st.sidebar.markdown("---")
-st.sidebar.markdown("<p style='font-size: 0.8rem; color: #10b981; font-weight: 600;'>🟢 Sinónimos Ordenados por Prioridad</p>", unsafe_allow_html=True)
+st.sidebar.markdown("<p style='font-size: 0.8rem; color: #10b981; font-weight: 600;'>🟢 Aloe 1.5L por Empaque Unitario</p>", unsafe_allow_html=True)
 
 # ==========================================
 # MÓDULO 1: PROCESAR FACTURA
 # ==========================================
 if menu_opcion == "📄 Procesar Factura":
     st.markdown("<h2>📄 Procesador Inteligente Multi-Proveedor</h2>", unsafe_allow_html=True)
-    st.markdown("<p style='color: #64748b;'>Sube tu factura. El sistema asigna el código de 1.5L al de mayor precio sin alterar los nombres.</p>", unsafe_allow_html=True)
+    st.markdown("<p style='color: #64748b;'>Sube tu factura. El sistema asigna el código 1.5L al de empaque 1 y el de 500ml al de pack.</p>", unsafe_allow_html=True)
     st.markdown("---")
 
     if "factura_data" not in st.session_state: st.session_state["factura_data"] = None
@@ -388,15 +387,18 @@ if menu_opcion == "📄 Procesar Factura":
                 raw_tam = item.get("tamano", "")
                 
                 nombre_completo = limpiar_nombre_producto(raw_desc, raw_tam)
+
+                cant_compra = safe_float(item.get("cantidad"), 1.0)
+                unidad = str(item.get("unidad", ""))
                 
-                # REGLA DE CÓDIGO PARA ALOE PURE PLUS SEGÚN PRECIO (Sin alterar el nombre visual)
-                p_unit_check = safe_float(item.get("precio_unitario"), 0.0)
+                empaque = parse_empaque_proveedor(prov_actual, raw_tam, unidad, raw_desc)
+                total_unidades = int(cant_compra * empaque)
+
+                # REGLA DE CÓDIGO PARA ALOE PURE PLUS SEGÚN EMPAQUE (1 = 1.5 LT, 20 = 500 ML)
                 if "ALOE PURE PLUS ORIGINAL" in nombre_completo:
-                    if p_unit_check > 200.0:
-                        # El de mayor precio unitario ($259.88) es el de 1.5 LT (Código 8809125063035)
+                    if empaque == 1:
                         nombre_completo = "ALOE PURE PLUS ORIGINAL 1.5 LT"
                     else:
-                        # El de menor precio es el regular de 500 ml (Código 8809125063011)
                         nombre_completo = "ALOE PURE PLUS ORIGINAL"
 
                 m_med = re.search(r'(\d+\s*(?:ML|L|LT|G|KG|OZ|Z))', str((raw_tam or "") + " " + (raw_desc or "")).upper())
@@ -406,13 +408,7 @@ if menu_opcion == "📄 Procesar Factura":
 
                 nombre_display_excel = "ALOE PURE PLUS ORIGINAL" if "1.5 LT" in nombre_completo else nombre_completo
 
-                cant_compra = safe_float(item.get("cantidad"), 1.0)
-                unidad = str(item.get("unidad", ""))
-                
-                empaque = parse_empaque_proveedor(prov_actual, raw_tam, unidad, raw_desc)
-                total_unidades = int(cant_compra * empaque)
-
-                p_unit_extraido = p_unit_check
+                p_unit_extraido = safe_float(item.get("precio_unitario"), 0.0)
                 monto_neto_linea = safe_float(
                     item.get("monto_neto") or 
                     item.get("impuesto_neto") or 
