@@ -136,15 +136,8 @@ def clean_ean_code(code_val):
     s_val = str(code_val).strip()
     if s_val.endswith('.0'): s_val = s_val[:-2]
     s_val = re.sub(r'\D', '', s_val)
-    
-    # REGLA ESTRICTA: Rechazar códigos internos de tique de 5 dígitos (ej. 92xxx, 93xxx)
-    if len(s_val) == 5 and s_val.startswith("9"):
-        return "S/C"
-        
-    # Un código EAN / SAP válido debe tener entre 7 y 14 dígitos
-    if 7 <= len(s_val) <= 14: 
-        return str(s_val)
-        
+    if len(s_val) == 5 and s_val.startswith("9"): return "S/C"
+    if 7 <= len(s_val) <= 14: return str(s_val)
     return "S/C"
 
 def limpiar_nombre_producto(descripcion_raw, tamano_raw):
@@ -193,18 +186,18 @@ def parse_empaque_proveedor(proveedor_nombre, tamano_txt="", unidad_txt="", desc
 
 def buscar_en_catalogo_maestro(nombre_producto, presentacion=""):
     """
-    CONSULTA DIRECTA Y EXCLUSIVA EN EL ARCHIVO MAESTRO (catalogo_maestro_sistema.json)
+    CONSULTA DIRECTA Y EXHAUSTIVA EN EL ARCHIVO MAESTRO CON COINCIDENCIA POR PALABRAS CLAVE (TOKEN OVERLAP)
     """
     n_upper = str(nombre_producto or "").upper().strip()
     p_upper = str(presentacion or "").upper().strip()
     combined_query = f"{n_upper} {p_upper}".strip()
 
-    # 1. Verificar si hay modificación manual en sesión
+    # 1. Verificar sesión manual
     manual_dict = st.session_state.get("codigos_manuales_sesion", {})
     if combined_query in manual_dict: return clean_ean_code(manual_dict[combined_query])
     if n_upper in manual_dict: return clean_ean_code(manual_dict[n_upper])
 
-    # 2. Cargar directamente desde el archivo maestro persistente
+    # 2. Cargar archivo maestro desde disco
     master_dict = load_json_file(MASTER_CATALOG_FILE, "dict")
     st.session_state["master_catalog"] = master_dict
 
@@ -214,11 +207,32 @@ def buscar_en_catalogo_maestro(nombre_producto, presentacion=""):
     if n_upper in master_dict:
         return clean_ean_code(master_dict[n_upper])
 
-    # Coincidencia parcial / inteligente dentro del maestro
+    # 3. Búsqueda por subcadena / inclusión
     for m_name, m_code in master_dict.items():
         m_clean = str(m_name).upper().strip()
         if m_clean in n_upper or n_upper in m_clean or m_clean in combined_query or combined_query in m_clean:
             return clean_ean_code(m_code)
+
+    # 4. Búsqueda inteligente por intersección de palabras clave (Token Overlap)
+    tokens_query = set(re.findall(r'\b[A-Z0-9]+\b', combined_query))
+    # Ignorar palabras muy cortas o genéricas de ruido
+    tokens_query = {t for t in tokens_query if len(t) > 2 or t in ["HU", "CJ"]}
+    
+    mejor_coincidencia = None
+    max_matches = 0
+
+    for m_name, m_code in master_dict.items():
+        tokens_master = set(re.findall(r'\b[A-Z0-9]+\b', str(m_name).upper()))
+        comunes = tokens_query.intersection(tokens_master)
+        score = len(comunes)
+        
+        # Si comparten al menos 2 palabras clave clave (ej. "FOUR" + "LOKO" o "CLAMATO")
+        if score >= 2 and score > max_matches:
+            max_matches = score
+            mejor_coincidencia = m_code
+
+    if mejor_coincidencia and clean_ean_code(mejor_coincidencia) != "S/C":
+        return clean_ean_code(mejor_coincidencia)
 
     return "S/C"
 
@@ -226,14 +240,14 @@ st.sidebar.markdown("<h3 style='color: #0284c7;'>⚡ WilPOS Multi-Proveedor</h3>
 menu_opcion = st.sidebar.radio("Navegación", ["📄 Procesar Factura", "📁 Catálogo Maestro EAN", "🏢 Gestionar Proveedores"])
 
 st.sidebar.markdown("---")
-st.sidebar.markdown("<p style='font-size: 0.8rem; color: #10b981; font-weight: 600;'>🟢 Filtro Estricto Maestro Activo</p>", unsafe_allow_html=True)
+st.sidebar.markdown("<p style='font-size: 0.8rem; color: #10b981; font-weight: 600;'>🟢 Búsqueda Inteligente Tokenizada</p>", unsafe_allow_html=True)
 
 # ==========================================
 # MÓDULO 1: PROCESAR FACTURA
 # ==========================================
 if menu_opcion == "📄 Procesar Factura":
-    st.markdown("<h2>📄 Procesador con Consulta Directa al Archivo Maestro</h2>", unsafe_allow_html=True)
-    st.markdown("<p style='color: #64748b;'>Sube tu factura. El sistema consultará el catálogo maestro en disco para asignar cada código EAN.</p>", unsafe_allow_html=True)
+    st.markdown("<h2>📄 Procesador con Búsqueda Inteligente en Archivo Maestro</h2>", unsafe_allow_html=True)
+    st.markdown("<p style='color: #64748b;'>Sube tu factura. El sistema buscará en el archivo maestro incluso si hay variaciones en el nombre.</p>", unsafe_allow_html=True)
     st.markdown("---")
 
     if "factura_data" not in st.session_state: st.session_state["factura_data"] = None
@@ -244,7 +258,7 @@ if menu_opcion == "📄 Procesar Factura":
     
     col_s1, col_s2 = st.columns([2, 1])
     with col_s1:
-        st.info("💡 Sube tu documento. Se aplicará el perfil del proveedor y la consulta automática al maestro.")
+        st.info("💡 Sube tu documento. Se aplicará la coincidencia tokenizada contra el archivo maestro.")
     with col_s2:
         margen_utilidad = st.number_input("⚙️ Margen Utilidad (%)", min_value=0.0, max_value=500.0, value=25.0, step=1.0)
         
@@ -380,7 +394,7 @@ if menu_opcion == "📄 Procesar Factura":
                 m_med = re.search(r'(\d+\s*(?:ML|L|LT|G|KG|OZ|Z))', str((raw_tam or "") + " " + (raw_desc or "")).upper())
                 presentacion_limpia = m_med.group(1) if m_med else (raw_tam if raw_tam else "S/P")
 
-                # Consulta directa en el archivo maestro filtrando códigos de 5 dígitos
+                # Consulta inteligente tokenizada en el archivo maestro
                 codigo_final = buscar_en_catalogo_maestro(nombre_completo, presentacion_limpia)
 
                 nombre_display_excel = "ALOE PURE PLUS ORIGINAL" if "1.5 LT" in nombre_completo else nombre_completo
