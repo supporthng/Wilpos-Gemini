@@ -220,7 +220,7 @@ st.sidebar.markdown("<h3 style='color: #0284c7;'>⚡ WilPOS Multi-Proveedor</h3>
 menu_opcion = st.sidebar.radio("Navegación", ["📄 Procesar Factura", "📁 Catálogo Maestro EAN", "🏢 Gestionar Proveedores"])
 
 st.sidebar.markdown("---")
-st.sidebar.markdown("<p style='font-size: 0.8rem; color: #10b981; font-weight: 600;'>🟢 Motores Independientes Activos</p>", unsafe_allow_html=True)
+st.sidebar.markdown("<p style='font-size: 0.8rem; color: #10b981; font-weight: 600;'>🟢 Parser Robusto Activo</p>", unsafe_allow_html=True)
 
 # ==========================================
 # MÓDULO 1: PROCESAR FACTURA
@@ -283,7 +283,6 @@ if menu_opcion == "📄 Procesar Factura":
                             if prov_encontrado == "PROVEEDOR GENERAL":
                                 prov_encontrado = prov_raw
 
-                        # INSTRUCCIÓN EXCLUSIVA DEL PROVEEDOR (AISLADA)
                         instruccion_proveedor = st.session_state["supplier_memory"].get(prov_encontrado, {}).get(
                             "instruccion_prompt", 
                             "Extrae 'codigo_barras', 'descripcion', 'tamano', 'cantidad', 'unidad' y 'monto_neto'."
@@ -301,12 +300,27 @@ if menu_opcion == "📄 Procesar Factura":
                         if raw_text.startswith("```json"): raw_text = raw_text[7:]
                         if raw_text.endswith("```"): raw_text = raw_text[:-3]
                         
-                        parsed_page = json.loads(raw_text.strip())
-                        todos_los_items.extend(parsed_page.get("items", []))
-                        subtotal_acum += safe_float(parsed_page.get("subtotal"))
-                        itbis_acum += safe_float(parsed_page.get("itbis"))
-                        descuentos_acum += safe_float(parsed_page.get("descuentos"))
-                        total_acum += safe_float(parsed_page.get("total"))
+                        parsed_data = json.loads(raw_text.strip())
+                        
+                        # PARSER ROBUSTO: Acepta tanto lista [...] como diccionario {...}
+                        if isinstance(parsed_data, list):
+                            page_items = parsed_data
+                            page_subtotal = page_itbis = page_descuentos = page_total = 0.0
+                        elif isinstance(parsed_data, dict):
+                            page_items = parsed_data.get("items", [])
+                            page_subtotal = safe_float(parsed_data.get("subtotal"))
+                            page_itbis = safe_float(parsed_data.get("itbis"))
+                            page_descuentos = safe_float(parsed_data.get("descuentos"))
+                            page_total = safe_float(parsed_data.get("total"))
+                        else:
+                            page_items = []
+                            page_subtotal = page_itbis = page_descuentos = page_total = 0.0
+
+                        todos_los_items.extend(page_items)
+                        subtotal_acum += page_subtotal
+                        itbis_acum += page_itbis
+                        descuentos_acum += page_descuentos
+                        total_acum += page_total
 
                     factura_consolidada = {
                         "proveedor_detectado": prov_encontrado,
