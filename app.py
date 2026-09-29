@@ -79,7 +79,7 @@ if "supplier_memory" not in st.session_state:
         "GONZALEZ CUESTA & SUCS": {
             "nombre": "GONZALEZ CUESTA & SUCS",
             "tipo_formato": "factura_sap_desglose",
-            "instruccion_prompt": "Analiza esta factura de GONZALEZ CUESTA & SUCS renglón por renglón. Extrae el código SAP (columna SAP), la descripción (DESCRIPCIÓN), la cantidad pedida (CANT. UND. PED.), la unidad de medida (UMV, ej: CAJ, PZA) y el monto neto o total."
+            "instruccion_prompt": "Analiza esta factura de GONZALEZ CUESTA & SUCS renglón por renglón. Extrae el código SAP (columna SAP), la descripción (DESCRIPCIÓN), la cantidad pedida (columna CANT. UND. PED. o cantidad), la unidad de venta/empaque (columna UMV, ej: 12 PZA, 6 PZA, CAJ) y el monto neto o total."
         }
     }
     for k, v in default_profiles.items():
@@ -103,24 +103,11 @@ if "master_catalog" not in st.session_state:
         "ALOE PURE PLUS ORIGINAL 1.5 LT": "8809125063035",
         "ALOE PURE PLUS ORIGINAL": "8809125063011", 
         "MY COCO PURE PLUS": "8809125063011",
-        # Álvarez & Sánchez / González Cuesta
-        "SANTA HELENA MERLOT 75 CL": "7804300120986",
-        "SANTA HELENA RESERVADO RED BLEND 75 CL": "7804300150082",
-        "SANTA HELENA SAUVIGNON BLANC 75 CL": "7804300150041",
-        "SANTA HELENA VINO DULCE TINTO 75 CL": "7804300149307",
-        "SANTIAGO RUIZ ALBARIÑO 1.5 LT": "8420976010063",
-        "SANTIAGO RUIZ ALBARIÑO 375 CL": "8420976010087",
-        "SANTIAGO RUIZ ALBARIÑO 75 CL": "842097601070",
-        "SCHWEPPES AGUA TONICA 4 PACK 18 CL": "2000011980849",
-        "SCHWEPPES TONICA 1 LT": "2117974",
-        "SCHWEPPES TONICA ZERO 1 LT": "2138531",
-        "SELA BODEGAS RODA VINO TINTO 75 CL": "8014396003073",
-        "SOLAN DE CABRAS AGUA MINERAL NAT 1.5 LT": "8436538810767",
         # González Cuesta códigos SAP específicos de la factura
-        "SANTA HELENA MERLOT 75 CL VEB19056": "2036911",
-        "SANTA HELENA RESERVADO RED BLEND 75 CL VEB14817": "2195471",
-        "SANTA HELENA SAUVIGNON BLANC 75 CL VEB12673": "2036912",
-        "SANTA HELENA VINO DULCE TINTO 75 CL VEB16220": "2227176",
+        "SANTA HELENA MERLOT 75 CL": "2036911",
+        "SANTA HELENA RESERVADO RED BLEND 75 CL": "2195471",
+        "SANTA HELENA SAUVIGNON BLANC 75 CL": "2036912",
+        "SANTA HELENA VINO DULCE TINTO 75 CL": "2227176",
         "SANTIAGO RUIZ ALBARIÑO 1.5 LT": "2241603",
         "SANTIAGO RUIZ ALBARIÑO 375 CL": "2119405",
         "SANTIAGO RUIZ ALBARIÑO 75 CL": "842097601070",
@@ -172,25 +159,18 @@ def limpiar_nombre_producto(descripcion_raw, tamano_raw):
     return desc
 
 def parse_empaque_proveedor(proveedor_nombre, tamano_txt="", unidad_txt="", descripcion_txt=""):
-    prov_up = str(proveedor_nombre).upper().strip()
+    combined = f"{str(tamano_txt or '')} {str(unidad_txt or '')} {str(descripcion_txt or '')}".upper()
     
-    if "CND" in prov_up or "BEES" in prov_up:
-        unidad_upper = str(unidad_txt or "").upper().strip()
-        if unidad_upper == "UN": return 1
-        combined = f"{str(tamano_txt or '')} {str(unidad_txt or '')} {str(descripcion_txt or '')}".upper()
-        if "4X6" in combined: return 24
-        m_slash = re.search(r'\b(48|24|20|18|16|12|6|4)\s*/', combined)
-        if m_slash: return int(m_slash.group(1))
-        return 1
-
-    # Para González Cuesta / Álvarez & Sánchez (UMV ej: 12 PZA, 6 PZA, 24 PZA)
-    combined_gen = f"{str(tamano_txt or '')} {str(unidad_txt or '')} {str(descripcion_txt or '')}".upper()
-    m_pza = re.search(r'\b(48|24|12|6|4)\s*PZA\b', combined_gen)
+    # Buscar patrones como "12 PZA", "24 PZA", "6 PZA"
+    m_pza = re.search(r'\b(48|24|12|6|4)\s*PZA\b', combined)
     if m_pza: return int(m_pza.group(1))
-    
-    m_gen = re.search(r'\b(24|12|6)\b', combined_gen)
+
+    m_slash = re.search(r'\b(48|24|20|18|16|12|6|4)\s*/', combined)
+    if m_slash: return int(m_slash.group(1))
+
+    m_gen = re.search(r'\b(48|24|12|6|4)\b', combined)
     if m_gen: return int(m_gen.group(1))
-    
+
     return 1
 
 def buscar_en_catalogo_maestro(nombre_producto, presentacion=""):
@@ -219,14 +199,14 @@ st.sidebar.markdown("<h3 style='color: #0284c7;'>⚡ WilPOS Multi-Proveedor</h3>
 menu_opcion = st.sidebar.radio("Navegación", ["📄 Procesar Factura", "📁 Catálogo Maestro EAN", "🏢 Gestionar Proveedores"])
 
 st.sidebar.markdown("---")
-st.sidebar.markdown("<p style='font-size: 0.8rem; color: #10b981; font-weight: 600;'>🟢 González Cuesta Integrado</p>", unsafe_allow_html=True)
+st.sidebar.markdown("<p style='font-size: 0.8rem; color: #10b981; font-weight: 600;'>🟢 Stock y Empaques Sincronizados</p>", unsafe_allow_html=True)
 
 # ==========================================
 # MÓDULO 1: PROCESAR FACTURA
 # ==========================================
 if menu_opcion == "📄 Procesar Factura":
     st.markdown("<h2>📄 Procesador Inteligente Multi-Proveedor</h2>", unsafe_allow_html=True)
-    st.markdown("<p style='color: #64748b;'>Sube tu factura. Reconoce automáticamente CND, Álvarez & Sánchez, González Cuesta y más.</p>", unsafe_allow_html=True)
+    st.markdown("<p style='color: #64748b;'>Sube tu factura. El sistema calcula correctamente el stock multiplicando las cantidades por su empaque UMV.</p>", unsafe_allow_html=True)
     st.markdown("---")
 
     if "factura_data" not in st.session_state: st.session_state["factura_data"] = None
@@ -256,8 +236,7 @@ if menu_opcion == "📄 Procesar Factura":
                     image_input = {"mime_type": "application/pdf", "data": file_bytes} if "pdf" in f_type.lower() else Image.open(io.BytesIO(file_bytes))
 
                     prompt_deteccion = (
-                        "Analiza este documento comercial (factura o tique) e identifica estrictamente el nombre comercial del proveedor emisor "
-                        "(por ejemplo GONZALEZ CUESTA, ALVAREZ & SANCHEZ, CND, BEES, etc.). "
+                        "Analiza este documento comercial (factura o tique) e identifica estrictamente el nombre comercial del proveedor emisor. "
                         "Devuelve únicamente un JSON con esta estructura: {\"proveedor_detectado\": \"NOMBRE DEL PROVEEDOR\"}"
                     )
                     
@@ -292,9 +271,9 @@ if menu_opcion == "📄 Procesar Factura":
                     prompt_unificado = (
                         f"Estás procesando un tique o factura del proveedor: '{prov_encontrado}'. "
                         f"Instrucción específica: {instruccion_proveedor} "
-                        "Extrae 'precio_unitario' o 'monto_neto' exactamente como aparece en el documento y la 'unidad' (ej. CAJ, PZA, UN). "
+                        "Extrae 'cantidad' (número de bultos/cajas pedidas), 'unidad' (columna UMV o unidad, ej: 12 PZA, 6 PZA), 'precio_unitario' y 'monto_neto'. "
                         "Devuelve un JSON puro con esta estructura exacta y llaves en minúscula: "
-                        '{"paginacion": "1 de 1", "proveedor_detectado": "' + prov_encontrado + '", "subtotal": 0.0, "itbis": 0.0, "descuentos": 0.0, "total": 0.0, "items": [{"descripcion": "...", "tamano": "...", "cantidad": 1.0, "unidad": "PZA", "precio_unitario": 0.0, "monto_neto": 0.0}]}. '
+                        '{"paginacion": "1 de 1", "proveedor_detectado": "' + prov_encontrado + '", "subtotal": 0.0, "itbis": 0.0, "descuentos": 0.0, "total": 0.0, "items": [{"descripcion": "...", "tamano": "...", "cantidad": 1.0, "unidad": "12 PZA", "precio_unitario": 0.0, "monto_neto": 0.0}]}. '
                         "Respuesta JSON pura."
                     )
 
@@ -359,7 +338,7 @@ if menu_opcion == "📄 Procesar Factura":
                 
                 nombre_completo = limpiar_nombre_producto(raw_desc, raw_tam)
 
-                cant_compra = safe_float(item.get("cantidad"), 1.0)
+                cant_compra = safe_float(item.get("cantidad") or item.get("cant_und_ped"), 1.0)
                 unidad = str(item.get("unidad", ""))
                 
                 empaque = parse_empaque_proveedor(prov_actual, raw_tam, unidad, raw_desc)
@@ -437,7 +416,7 @@ if menu_opcion == "📄 Procesar Factura":
 
                 preview_rows.append({
                     "No.": idx, "Producto": nombre_display_excel, "Código EAN/SAP Asignado": display_codigo,
-                    "Cant. Compra": cant_compra, "Empaque": empaque, "Stock (Unidades)": total_unidades,
+                    "Cant. Compra": cant_compra, "Empaque (UMV)": empaque, "Stock (Unidades)": total_unidades,
                     "Costo Unit. Real": costo_unitario_real, "Precio Venta": precio_venta
                 })
 
