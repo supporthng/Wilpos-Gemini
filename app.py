@@ -14,7 +14,7 @@ import pandas as pd
 # CONFIGURACIÓN DE LA PÁGINA Y ESTILOS
 # ==========================================
 st.set_page_config(
-    page_title="WilPOS - Facturas Multi-Página", 
+    page_title="WilPOS - Facturas Multi-Proveedor", 
     page_icon="⚡", 
     layout="wide"
 )
@@ -29,7 +29,6 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-# Configuración de Clave API (Prioriza clave de pago)
 gemini_key = (
     st.secrets.get("GEMINI_API_KEY_PAID") or 
     st.secrets.get("GEMINI_API_KEY") or 
@@ -62,55 +61,78 @@ def save_json_file(filepath, data):
         pass
 
 # ==========================================
-# INICIALIZACIÓN Y RESPALDO AUTOMÁTICO
+# INICIALIZACIÓN DE MEMORIAS INDIVIDUALES
 # ==========================================
 if "supplier_memory" not in st.session_state:
     loaded_supps = load_json_file(SUPPLIER_MEMORY_FILE, "dict")
-    if not loaded_supps:
-        loaded_supps = {
-            "ALVAREZ & SANCHEZ": {"nombre": "ALVAREZ & SANCHEZ", "notas_formato": "Desglose con descuento por renglón."},
-            "CND / BEES": {"nombre": "CND / BEES", "notas_formato": "Formato tique con doble línea por producto, ISC y doble tasa ITBIS."}
+    # Perfiles predeterminados individuales por proveedor con sus instrucciones de formato exactas
+    default_profiles = {
+        "CND / BEES": {
+            "nombre": "CND / BEES",
+            "tipo_formato": "tique_doble_linea_isc",
+            "instruccion_prompt": (
+                "Analiza este tique o factura de CND / BEES de principio a fin. "
+                "El documento tiene una lista larga de productos donde cada renglón tiene un código numérico y cantidad arriba, y la descripción con sus importes abajo. "
+                "DEBES EXTRAER ABSOLUTAMENTE TODOS LOS RENGLONES DE PRODUCTOS QUE APARECEN EN EL TIQUE. "
+                "Para cada renglón extrae: 'descripcion', 'tamano', 'codigo_factura', 'cantidad', 'unidad' (PC/UN), "
+                "y el valor monetario exacto impreso en la columna 'Imp. Neto' (antes de ITBIS). "
+                "Extrae también los totales inferiores: 'subtotal', 'isc_advalorem', 'isc_especifico', 'itbis', 'descuentos', 'total'."
+            )
+        },
+        "ALVAREZ & SANCHEZ": {
+            "nombre": "ALVAREZ & SANCHEZ",
+            "tipo_formato": "factura_desglose_descuentos",
+            "instruccion_prompt": (
+                "Analiza esta factura de ALVAREZ & SUECS / ALVAREZ & SANCHEZ renglón por renglón. "
+                "El documento presenta códigos SAP, descripción, presentación, cantidades (en CAJ o PZA), "
+                "precio unitario, valor bruto, porcentaje de descuento, monto neto y tasa de ITBIS. "
+                "Extrae estrictamente cada renglón con: 'descripcion', 'tamano', 'cantidad', 'unidad' (CAJ/PZA), "
+                "y el valor monetario exacto de la columna 'MONTO NETO' de la línea. "
+                "Extrae los totales globales: 'subtotal', 'itbis', 'descuentos', 'total'."
+            )
         }
-        save_json_file(SUPPLIER_MEMORY_FILE, loaded_supps)
+    }
+    
+    if not loaded_supps:
+        loaded_supps = default_profiles
+    else:
+        for p_key, p_val in default_profiles.items():
+            if p_key not in loaded_supps:
+                loaded_supps[p_key] = p_val
+                
+    save_json_file(SUPPLIER_MEMORY_FILE, loaded_supps)
     st.session_state["supplier_memory"] = loaded_supps
 
 if "master_catalog" not in st.session_state:
     loaded_master = load_json_file(MASTER_CATALOG_FILE, "dict")
-    # Catálogo base precargado automáticamente en cualquier PC nueva para garantizar 0 fallos
     base_defaults = {
-        "PTE. LIGHT HU 22OZ": "70601561",
-        "PRESIDENTE LIGHT HU 22OZ": "70601561",
-        "PTE. CJ 22OZ": "70601561",
-        "PTE. HU 12OZ": "74621774",
-        "PTE. LIGHT HU 12OZ": "74621774",
-        "BRAHMA LIGHT HU 12OZ": "7468973200194",
-        "BRAHMA LIGHT HU 16/650M": "7468973200200",
-        "BRAHMA LIGHT 650ML": "7468973200200",
-        "CORONA EXTRA 330ML": "7503034941200",
-        "CORONA CERO 355ML": "750304423180",
-        "MICHELOB ULTRA 355ML": "7422110104967",
-        "THE ONE HU 12OZ": "74601325",
-        "THE ONE HU 22OZ": "74601127",
-        "CLAMATO COCTEL TOMATE C": "01484035",
-        "ENRIQUILLO SODA 400 ML": "7463172803733",
-        "GATORADE FRUIT PUNCH": "7460548000154",
-        "GATORADE NARANJA": "92735",
-        "GATORADE UVA": "92736",
-        "FOUR LOKO MARACUYA": "849806004962",
-        "FOUR LOKO PONCHE DE FRUTAS": "849806001220",
-        "FOUR LOKO GREEN": "849806001855",
-        "FOUR LOKO PURPLE": "849806002746",
-        "FOUR LOKO GOLD": "849806001756",
-        "FOUR LOKO SANDIA": "849806001206",
-        "FOUR LOKO WHITE": "849806005754",
-        "ALOE PURE PLUS ORIGINAL": "8809125063011",
-        "MY COCO PURE PLUS": "8809125063011"
+        "PTE. LIGHT HU 22OZ": "70601561", "PRESIDENTE LIGHT HU 22OZ": "70601561", "PTE. CJ 22OZ": "70601561",
+        "PTE. HU 12OZ": "74621774", "PTE. LIGHT HU 12OZ": "74621774", "BRAHMA LIGHT HU 12OZ": "7468973200194",
+        "BRAHMA LIGHT HU 16/650M": "7468973200200", "BRAHMA LIGHT 650ML": "7468973200200",
+        "CORONA EXTRA 330ML": "7503034941200", "CORONA CERO 355ML": "750304423180", "MICHELOB ULTRA 355ML": "7422110104967",
+        "THE ONE HU 12OZ": "74601325", "THE ONE HU 22OZ": "74601127", "CLAMATO COCTEL TOMATE C": "01484035",
+        "ENRIQUILLO SODA 400 ML": "7463172803733", "GATORADE FRUIT PUNCH": "7460548000154", "GATORADE NARANJA": "92735",
+        "GATORADE UVA": "92736", "FOUR LOKO MARACUYA": "849806004962", "FOUR LOKO PONCHE DE FRUTAS": "849806001220",
+        "FOUR LOKO GREEN": "849806001855", "FOUR LOKO PURPLE": "849806002746", "FOUR LOKO GOLD": "849806001756",
+        "FOUR LOKO SANDIA": "849806001206", "FOUR LOKO WHITE": "849806005754", "ALOE PURE PLUS ORIGINAL": "8809125063011",
+        "MY COCO PURE PLUS": "8809125063011",
+        # Álvarez & Sánchez (Pág. 3)
+        "SANTA HELENA MERLOT 75 CL": "7804300120986",
+        "SANTA HELENA RESERVADO RED BLEND 75 CL": "7804300150082",
+        "SANTA HELENA SAUVIGNON BLANC 75 CL": "7804300150041",
+        "SANTA HELENA VINO DULCE TINTO 75 CL": "7804300149307",
+        "SANTIAGO RUIZ ALBARIÑO 1.5 LT": "8420976010063",
+        "SANTIAGO RUIZ ALBARIÑO 375 CL": "8420976010087",
+        "SANTIAGO RUIZ ALBARIÑO 75 CL": "842097601070",
+        "SCHWEPPES AGUA TONICA 4 PACK 18 CL": "2000011980849",
+        "SCHWEPPES TONICA 1 LT": "2117974",
+        "SCHWEPPES TONICA ZERO 1 LT": "2138531",
+        "SELA BODEGAS RODA VINO TINTO 75 CL": "8014396003073",
+        "SOLAN DE CABRAS AGUA MINERAL NAT 1.5 LT": "8436538810767"
     }
-    # Fusionar lo que ya existía con los valores base por defecto
     for k, v in base_defaults.items():
         if k not in loaded_master:
             loaded_master[k] = v
-    
     save_json_file(MASTER_CATALOG_FILE, loaded_master)
     st.session_state["master_catalog"] = loaded_master
 
@@ -155,36 +177,27 @@ def parse_empaque(tamano_txt="", unidad_txt="", descripcion_txt=""):
 
     combined = f"{str(tamano_txt)} {str(unidad_txt)} {str(descripcion_txt)}".upper()
     
-    if "ALOE" in combined:
-        return 24
+    if "CAJ" in unidad_upper or "CAJA" in unidad_upper:
+        m_pack = re.search(r'\b(24|12|6|18|4)\b', combined)
+        if m_pack:
+            return int(m_pack.group(1))
+            
+    if "ALOE" in combined: return 24
     if "CORONA" in combined or "MICHELOB" in combined or "BRAHMA" in combined or "PTE" in combined or "THE ONE" in combined:
-        if "PC" in unidad_upper and not re.search(r'\b(6|12|16)\b', combined):
-            return 24
-    if "CLAMATO" in combined:
-        return 12
-    if "FOUR LOKO" in combined:
-        return 12
-    if "GATORADE" in combined:
-        return 24
-    if "MY COCO" in combined:
-        return 20
-    if "ENRIQUILLO" in combined:
-        return 24
+        if "PC" in unidad_upper and not re.search(r'\b(6|12|16)\b', combined): return 24
+    if "CLAMATO" in combined: return 12
+    if "FOUR LOKO" in combined: return 12
+    if "GATORADE" in combined: return 24
+    if "MY COCO" in combined: return 20
+    if "ENRIQUILLO" in combined: return 24
         
     m_pack = re.search(r'\b(48|24|16|12|6|10|20|30|4)\s*[/xX]', combined)
     if m_pack:
         return int(m_pack.group(1))
-        
-    m_mult = re.search(r'\b([2468])\s*X\b', combined)
-    if m_mult:
-        return int(m_mult.group(1))
 
     return 1
 
 def buscar_en_catalogo_maestro(nombre_producto, presentacion=""):
-    """
-    Búsqueda Avanzada con Sinónimos de CND / BEES y Catálogo Maestro Sincronizado.
-    """
     n_upper = str(nombre_producto).upper().strip()
     p_upper = str(presentacion).upper().strip()
     combined_query = f"{n_upper} {p_upper}".strip()
@@ -192,33 +205,15 @@ def buscar_en_catalogo_maestro(nombre_producto, presentacion=""):
     master_dict = st.session_state.get("master_catalog", {})
 
     cnd_sinonimos = {
-        "PTE. LIGHT HU 22OZ": "70601561",
-        "PRESIDENTE LIGHT HU 22OZ": "70601561",
-        "PTE. CJ 22OZ": "70601561",
-        "PTE. HU 12OZ": "74621774",
-        "PTE. LIGHT HU 12OZ": "74621774",
-        "BRAHMA LIGHT HU 12OZ": "7468973200194",
-        "BRAHMA LIGHT HU": "7468973200194",
-        "BRAHMA LIGHT HU 16/650M": "7468973200200",
-        "BRAHMA LIGHT 650ML": "7468973200200",
-        "CORONA EXTRA 330ML": "7503034941200",
-        "CORONA CERO 355ML": "750304423180",
-        "MICHELOB ULTRA 355ML": "7422110104967",
-        "THE ONE HU 12OZ": "74601325",
-        "THE ONE HU 22OZ": "74601127",
-        "CLAMATO COCTEL TOMATE C": "01484035",
-        "ENRIQUILLO SODA 400 ML": "7463172803733",
-        "GATORADE FRUIT PUNCH": "7460548000154",
-        "GATORADE NARANJA": "92735",
-        "GATORADE UVA": "92736",
-        "FOUR LOKO MARACUYA": "849806004962",
-        "FOUR LOKO PONCHE DE FRUTAS": "849806001220",
-        "FOUR LOKO GREEN": "849806001855",
-        "FOUR LOKO PURPLE": "849806002746",
-        "FOUR LOKO GOLD": "849806001756",
-        "FOUR LOKO SANDIA": "849806001206",
-        "FOUR LOKO WHITE": "849806005754",
-        "ALOE PURE PLUS ORIGINAL": "8809125063011",
+        "PTE. LIGHT HU 22OZ": "70601561", "PRESIDENTE LIGHT HU 22OZ": "70601561", "PTE. CJ 22OZ": "70601561",
+        "PTE. HU 12OZ": "74621774", "PTE. LIGHT HU 12OZ": "74621774", "BRAHMA LIGHT HU 12OZ": "7468973200194",
+        "BRAHMA LIGHT HU": "7468973200194", "BRAHMA LIGHT HU 16/650M": "7468973200200", "BRAHMA LIGHT 650ML": "7468973200200",
+        "CORONA EXTRA 330ML": "7503034941200", "CORONA CERO 355ML": "750304423180", "MICHELOB ULTRA 355ML": "7422110104967",
+        "THE ONE HU 12OZ": "74601325", "THE ONE HU 22OZ": "74601127", "CLAMATO COCTEL TOMATE C": "01484035",
+        "ENRIQUILLO SODA 400 ML": "7463172803733", "GATORADE FRUIT PUNCH": "7460548000154", "GATORADE NARANJA": "92735",
+        "GATORADE UVA": "92736", "FOUR LOKO MARACUYA": "849806004962", "FOUR LOKO PONCHE DE FRUTAS": "849806001220",
+        "FOUR LOKO GREEN": "849806001855", "FOUR LOKO PURPLE": "849806002746", "FOUR LOKO GOLD": "849806001756",
+        "FOUR LOKO SANDIA": "849806001206", "FOUR LOKO WHITE": "849806005754", "ALOE PURE PLUS ORIGINAL": "8809125063011",
         "MY COCO PURE PLUS": "8809125063011"
     }
 
@@ -231,6 +226,9 @@ def buscar_en_catalogo_maestro(nombre_producto, presentacion=""):
             return clean_ean_code(master_dict[combined_query])
         if n_upper in master_dict:
             return clean_ean_code(master_dict[n_upper])
+        for m_name, m_code in master_dict.items():
+            if m_name in n_upper or n_upper in m_name:
+                return clean_ean_code(m_code)
 
     return "S/C"
 
@@ -238,14 +236,14 @@ st.sidebar.markdown("<h3 style='color: #0284c7;'>⚡ WilPOS System</h3>", unsafe
 menu_opcion = st.sidebar.radio("Navegación", ["📄 Procesar Factura", "📁 Catálogo Maestro EAN", "🏢 Gestionar Proveedores"])
 
 st.sidebar.markdown("---")
-st.sidebar.markdown("<p style='font-size: 0.8rem; color: #10b981; font-weight: 600;'>🟢 Respaldo automático activo</p>", unsafe_allow_html=True)
+st.sidebar.markdown("<p style='font-size: 0.8rem; color: #10b981; font-weight: 600;'>🟢 Formatos y Maestro Sincronizados</p>", unsafe_allow_html=True)
 
 # ==========================================
 # MÓDULO 1: PROCESAR FACTURA
 # ==========================================
 if menu_opcion == "📄 Procesar Factura":
-    st.markdown("<h2>📄 Procesador Inteligente de Facturas (Multi-Página)</h2>", unsafe_allow_html=True)
-    st.markdown("<p style='color: #64748b;'>Sube facturas, visualiza el dashboard financiero con impuestos ISC/ITBIS y controla códigos.</p>", unsafe_allow_html=True)
+    st.markdown("<h2>📄 Procesador Inteligente de Facturas (Multi-Proveedor)</h2>", unsafe_allow_html=True)
+    st.markdown("<p style='color: #64748b;'>Selecciona un proveedor para aplicar su configuración de formato independiente.</p>", unsafe_allow_html=True)
     st.markdown("---")
 
     if "factura_data" not in st.session_state: st.session_state["factura_data"] = None
@@ -261,11 +259,11 @@ if menu_opcion == "📄 Procesar Factura":
     with col_s2:
         margen_utilidad = st.number_input("⚙️ Margen Utilidad (%)", min_value=0.0, max_value=500.0, value=25.0, step=1.0)
         
-    archivo_subido = st.file_uploader("📂 Sube tu factura (PDF multi-página o Imagen)", type=["pdf", "png", "jpg", "jpeg"])
+    archivo_subido = st.file_uploader("📂 Sube tu factura o tique (PDF multi-página o Imagen)", type=["pdf", "png", "jpg", "jpeg"])
     
     if archivo_subido is not None:
-        if st.button("🚀 Procesar Factura y Validar EAN"):
-            with st.spinner("🚀 Analizando tique con respaldo y catálogo automático..."):
+        if st.button("🚀 Procesar Factura con Perfil de Proveedor"):
+            with st.spinner("🚀 Aplicando configuración de formato específica del proveedor..."):
                 try:
                     if not gemini_key:
                         raise ValueError("No se encontró ninguna clave de API configurada.")
@@ -277,19 +275,19 @@ if menu_opcion == "📄 Procesar Factura":
                     f_type = getattr(archivo_subido, 'type', 'image/jpeg')
                     image_input = {"mime_type": "application/pdf", "data": file_bytes} if "pdf" in f_type.lower() else Image.open(io.BytesIO(file_bytes))
 
-                    prov_instruccion = f"El proveedor seleccionado es '{prov_seleccionado}'." if prov_seleccionado != "🔍 Detección Automática (Nuevo Proveedor)" else "Identifica el nombre comercial del proveedor emisor en este documento."
-                    
+                    # Obtener la instrucción específica guardada para este proveedor
+                    supp_mem = st.session_state["supplier_memory"]
+                    if prov_seleccionado != "🔍 Detección Automática (Nuevo Proveedor)" and prov_seleccionado in supp_mem:
+                        instruccion_proveedor = supp_mem[prov_seleccionado].get("instruccion_prompt", "Extrae todos los ítems y totales.")
+                        prov_nombre_objetivo = prov_seleccionado
+                    else:
+                        instruccion_proveedor = "Identifica el nombre comercial del proveedor y extrae todos sus ítems y totales con precisión."
+                        prov_nombre_objetivo = "PROVEEDOR NUEVO"
+
                     prompt_unificado = (
-                        f"{prov_instruccion} "
-                        "Analiza este tique de CND / BEES renglón por renglón con total precisión. "
-                        "Para cada uno de los renglones, extrae estrictamente: "
-                        "- 'descripcion': nombre limpio del producto. "
-                        "- 'tamano': tamaño, presentación o volumen exacto. "
-                        "- 'cantidad': cantidad comprada. "
-                        "- 'unidad': 'PC' o 'UN'. "
-                        "- 'impuesto_neto': el valor monetario exacto impreso en la columna 'Imp. Neto'. "
+                        f"El proveedor seleccionado es '{prov_nombre_objetivo}'. Instrucción de formato específica: {instruccion_proveedor} "
                         "Devuelve un JSON puro con esta estructura exacta y llaves en minúscula: "
-                        '{"paginacion": "1 de 1", "proveedor_detectado": "CND / BEES", "subtotal": 0.0, "isc_advalorem": 0.0, "isc_especifico": 0.0, "itbis": 0.0, "descuentos": 0.0, "total": 0.0, "items": [{"descripcion": "...", "tamano": "...", "cantidad": 1.0, "unidad": "...", "impuesto_neto": 0.0}]}. '
+                        '{"paginacion": "1 de 1", "proveedor_detectado": "...", "subtotal": 0.0, "itbis": 0.0, "descuentos": 0.0, "total": 0.0, "items": [{"descripcion": "...", "tamano": "...", "cantidad": 1.0, "unidad": "...", "monto_neto": 0.0}]}. '
                         "Respuesta JSON pura."
                     )
 
@@ -304,18 +302,21 @@ if menu_opcion == "📄 Procesar Factura":
                     
                     prov_a_usar = prov_seleccionado
                     if prov_seleccionado == "🔍 Detección Automática (Nuevo Proveedor)":
-                        prov_a_usar = str(parsed_json.get("proveedor_detectado") or "CND / BEES").upper().strip()
-                        supps = st.session_state["supplier_memory"]
-                        if prov_a_usar not in supps:
-                            supps[prov_a_usar] = {"nombre": prov_a_usar, "notas_formato": "Auto-registrado."}
-                            st.session_state["supplier_memory"] = supps
-                            save_json_file(SUPPLIER_MEMORY_FILE, supps)
+                        prov_a_usar = str(parsed_json.get("proveedor_detectado") or "PROVEEDOR NUEVO").upper().strip()
+                        if prov_a_usar not in supp_mem:
+                            supp_mem[prov_a_usar] = {
+                                "nombre": prov_a_usar,
+                                "tipo_formato": "personalizado",
+                                "instruccion_prompt": "Extrae los ítems renglón por renglón con descripción, cantidad, unidad y monto neto."
+                            }
+                            st.session_state["supplier_memory"] = supp_mem
+                            save_json_file(SUPPLIER_MEMORY_FILE, supp_mem)
 
                     st.session_state["factura_data"] = parsed_json
                     st.session_state["prov_activo"] = prov_a_usar
                     st.session_state["paginacion_detectada"] = str(parsed_json.get("paginacion", "1 de 1"))
                     
-                    st.success(f"✅ ¡Factura procesada con éxito! Se extrajeron **{len(parsed_json.get('items', []))}** renglones.")
+                    st.success(f"✅ ¡Factura procesada con el perfil de **{prov_a_usar}**! Se extrajeron **{len(parsed_json.get('items', []))}** renglones.")
                 except Exception as e:
                     st.error(f"⚠️ Error al procesar: {str(e)}")
     st.markdown('</div>', unsafe_allow_html=True)
@@ -327,30 +328,22 @@ if menu_opcion == "📄 Procesar Factura":
         pag_info = str(st.session_state.get("paginacion_detectada", "1 de 1"))
         
         subtotal_val = safe_float(data_resp.get("subtotal"))
-        isc_adv = safe_float(data_resp.get("isc_advalorem"))
-        isc_esp = safe_float(data_resp.get("isc_especifico"))
         itbis_val = safe_float(data_resp.get("itbis"))
         total_descuentos = safe_float(data_resp.get("descuentos"))
         total_val = safe_float(data_resp.get("total"))
 
-        # ==========================================
-        # DASHBOARD DE MONTOS Y TOTALES
-        # ==========================================
+        total_importe_neto = sum(safe_float(i.get("monto_neto") or i.get("impuesto_neto")) for i in items)
+        if subtotal_val == 0.0 and items: subtotal_val = total_importe_neto
+        if total_val == 0.0 and items: total_val = subtotal_val * 1.18
+
         st.markdown(f"### 📊 Dashboard Financiero | Proveedor: {prov_actual} (Pág. {pag_info})")
         
         col_m1, col_m2, col_m3, col_m4 = st.columns(4)
-        with col_m1:
-            st.metric(label="Subtotal / Bruto", value=f"${subtotal_val:,.2f}")
-        with col_m2:
-            st.metric(label="ITBIS Total", value=f"${itbis_val:,.2f}")
-        with col_m3:
-            st.metric(label="Descuentos", value=f"${total_descuentos:,.2f}")
-        with col_m4:
-            st.metric(label="Total General", value=f"${total_val:,.2f}")
+        with col_m1: st.metric(label="Subtotal / Bruto", value=f"${subtotal_val:,.2f}")
+        with col_m2: st.metric(label="ITBIS Total", value=f"${itbis_val:,.2f}")
+        with col_m3: st.metric(label="Descuentos", value=f"${total_descuentos:,.2f}")
+        with col_m4: st.metric(label="Total General", value=f"${total_val:,.2f}")
             
-        if isc_adv > 0 or isc_esp > 0:
-            st.info(f"💡 **Impuestos ISC Detectados:** ISC Ad-Valorem: **${isc_adv:,.2f}** | ISC Específico: **${isc_esp:,.2f}**")
-        
         st.markdown("---")
 
         if items:
@@ -367,7 +360,6 @@ if menu_opcion == "📄 Procesar Factura":
                 raw_tam = item.get("tamano", "")
                 
                 nombre_completo = limpiar_nombre_producto(raw_desc, raw_tam)
-                
                 m_med = re.search(r'(\d+\s*(?:ML|L|LT|G|KG|OZ|Z))', str(raw_tam + " " + raw_desc).upper())
                 presentacion_limpia = m_med.group(1) if m_med else (raw_tam if raw_tam else "S/P")
 
@@ -375,12 +367,12 @@ if menu_opcion == "📄 Procesar Factura":
 
                 cant_compra = safe_float(item.get("cantidad"), 1.0)
                 unidad = str(item.get("unidad", ""))
-                impuesto_neto_fila = safe_float(item.get("impuesto_neto"), 0.0)
+                monto_neto_fila = safe_float(item.get("monto_neto") or item.get("impuesto_neto"), 0.0)
 
                 empaque = parse_empaque(raw_tam, unidad, raw_desc)
                 total_unidades = int(cant_compra * empaque)
                 
-                costo_unitario_real = round(impuesto_neto_fila / total_unidades, 2) if total_unidades > 0 else 0.0
+                costo_unitario_real = round(monto_neto_fila / total_unidades, 2) if total_unidades > 0 else 0.0
 
                 if costo_unitario_real > 0:
                     precio_con_utilidad = costo_unitario_real * (1 + (margen_utilidad / 100.0))
@@ -389,14 +381,9 @@ if menu_opcion == "📄 Procesar Factura":
                     precio_venta = 0.0
 
                 preview_rows.append({
-                    "No.": idx, 
-                    "Producto": nombre_completo, 
-                    "Código EAN Asignado": codigo_final,
-                    "Cant. Compra": cant_compra,
-                    "Empaque": empaque,
-                    "Total Unidades": total_unidades,
-                    "Costo Unit. Real": costo_unitario_real, 
-                    "Precio Venta": precio_venta
+                    "No.": idx, "Producto": nombre_completo, "Código EAN Asignado": codigo_final,
+                    "Cant. Compra": cant_compra, "Empaque": empaque, "Total Unidades": total_unidades,
+                    "Costo Unit. Real": costo_unitario_real, "Precio Venta": precio_venta
                 })
 
                 ws.append([
@@ -420,58 +407,7 @@ if menu_opcion == "📄 Procesar Factura":
 # ==========================================
 elif menu_opcion == "📁 Catálogo Maestro EAN":
     st.markdown("<h2>📁 Gestión del Catálogo Maestro de Productos</h2>", unsafe_allow_html=True)
-    st.markdown("<p style='color: #64748b;'>Sube tu archivo Excel masivo o registra productos de forma manual uno a uno.</p>", unsafe_allow_html=True)
     st.markdown("---")
-
-    tab_masivo, tab_manual = st.tabs(["📂 Carga Masiva (Excel)", "➕ Agregar Producto Manualmente"])
-
-    with tab_masivo:
-        master_file = st.file_uploader("📂 Sube tu Catálogo Maestro (Excel)", type=["xlsx"])
-        if master_file is not None:
-            df_master = pd.read_excel(master_file, dtype=str)
-            cols = df_master.columns.tolist()
-            col_c1, col_c2 = st.columns(2)
-            with col_c1: col_name = st.selectbox("Columna con Nombre del Producto", cols)
-            with col_c2: col_code = st.selectbox("Columna con Código de Barra EAN", cols)
-            if st.button("🔄 Guardar Catálogo Masivo"):
-                temp_dict = st.session_state["master_catalog"]
-                count = 0
-                for _, row in df_master.iterrows():
-                    p_name = str(row[col_name]).strip().upper()
-                    p_code = clean_ean_code(row[col_code])
-                    if p_name and p_code != "S/C":
-                        temp_dict[p_name] = p_code
-                        count += 1
-                st.session_state["master_catalog"] = temp_dict
-                save_json_file(MASTER_CATALOG_FILE, temp_dict) # Respaldo automático inmediato
-                st.success(f"¡Catálogo actualizado y respaldado automáticamente! Se cargaron **{count}** productos.")
-
-    with tab_manual:
-        st.markdown("### ✍️ Registrar Producto Individual")
-        with st.form("form_nuevo_producto"):
-            col_m1, col_m2 = st.columns([2, 1])
-            with col_m1:
-                input_nombre = st.text_input("Nombre y Presentación del Producto (Ej: VINO SANTA HELENA 750 ML)")
-            with col_m2:
-                input_codigo = st.text_input("Código de Barra EAN (8 a 14 dígitos)")
-            
-            btn_guardar_manual = st.form_submit_button("💾 Guardar en Catálogo Maestro")
-            
-            if btn_guardar_manual:
-                n_limpio = str(input_nombre).strip().upper()
-                c_limpio = clean_ean_code(input_codigo)
-                
-                if not n_limpio:
-                    st.error("⚠️ Debes ingresar el nombre del producto.")
-                elif c_limpio == "S/C":
-                    st.error("⚠️ El código EAN ingresado no es válido (debe ser un código de barras estándar de 8 a 14 dígitos).")
-                else:
-                    master_dict = st.session_state["master_catalog"]
-                    master_dict[n_limpio] = c_limpio
-                    st.session_state["master_catalog"] = master_dict
-                    save_json_file(MASTER_CATALOG_FILE, master_dict) # Respaldo automático inmediato
-                    st.success(f"✅ ¡Producto guardado y respaldado automáticamente! **{n_limpio}** -> EAN: **{c_limpio}**")
-
     master_data = st.session_state.get("master_catalog", {})
     if master_data:
         st.markdown(f"### 📋 Productos en Catálogo Maestro ({len(master_data):,} registros)")
@@ -479,13 +415,24 @@ elif menu_opcion == "📁 Catálogo Maestro EAN":
         st.dataframe(df_show, use_container_width=True, hide_index=True)
 
 # ==========================================
-# MÓDULO 3: GESTIONAR PROVEEDORES
+# MÓDULO 3: GESTIONAR PROVEEDORES Y FORMATOS
 # ==========================================
 elif menu_opcion == "🏢 Gestionar Proveedores":
-    st.markdown("<h2>🏢 Perfiles de Proveedores Memorizados</h2>", unsafe_allow_html=True)
+    st.markdown("<h2>🏢 Perfiles y Configuración de Formatos por Proveedor</h2>", unsafe_allow_html=True)
+    st.markdown("<p style='color: #64748b;'>Edita las instrucciones de extracción individuales para cada proveedor.</p>", unsafe_allow_html=True)
     st.markdown("---")
+
     supps = st.session_state["supplier_memory"]
     for p_name, p_data in supps.items():
-        with st.expander(f"🏢 {p_name}"):
-            st.write(f"**Nombre:** {p_data.get('nombre', p_name)}")
-            st.write(f"**Detalles:** {p_data.get('notas_formato', 'N/A')}")
+        with st.expander(f"🏢 Proveedor: {p_name}"):
+            with st.form(f"form_prov_{p_name}"):
+                nuevo_nombre = st.text_input("Nombre del Proveedor", value=p_data.get("nombre", p_name))
+                nueva_instruccion = st.text_area("Instrucción de Formato / Prompt de Extracción", value=p_data.get("instruccion_prompt", ""), height=100)
+                
+                btn_guardar_perfil = st.form_submit_button("💾 Guardar Configuración de Proveedor")
+                if btn_guardar_perfil:
+                    supps[p_name]["nombre"] = nuevo_nombre
+                    supps[p_name]["instruccion_prompt"] = nueva_instruccion
+                    st.session_state["supplier_memory"] = supps
+                    save_json_file(SUPPLIER_MEMORY_FILE, supps)
+                    st.success(f"✅ ¡Configuración de formato para **{p_name}** actualizada y respaldada con éxito!")
