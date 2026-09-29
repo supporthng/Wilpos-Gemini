@@ -75,11 +75,17 @@ if "supplier_memory" not in st.session_state:
             "nombre": "ALVAREZ & SANCHEZ",
             "tipo_formato": "factura_desglose",
             "instruccion_prompt": "Analiza esta factura de ALVAREZ & SANCHEZ renglón por renglón. Extrae 'descripcion', 'tamano', 'cantidad', 'unidad' y 'monto_neto'."
+        },
+        "GONZALEZ CUESTA & SUCS": {
+            "nombre": "GONZALEZ CUESTA & SUCS",
+            "tipo_formato": "factura_sap_desglose",
+            "instruccion_prompt": "Analiza esta factura de GONZALEZ CUESTA & SUCS renglón por renglón. Extrae el código SAP (columna SAP), la descripción (DESCRIPCIÓN), la cantidad pedida (CANT. UND. PED.), la unidad de medida (UMV, ej: CAJ, PZA) y el monto neto o total."
         }
     }
-    if not loaded_supps or "CND / BEES" not in loaded_supps:
-        loaded_supps.update(default_profiles)
-        save_json_file(SUPPLIER_MEMORY_FILE, loaded_supps)
+    for k, v in default_profiles.items():
+        if k not in loaded_supps:
+            loaded_supps[k] = v
+    save_json_file(SUPPLIER_MEMORY_FILE, loaded_supps)
     st.session_state["supplier_memory"] = loaded_supps
 
 if "master_catalog" not in st.session_state:
@@ -90,14 +96,14 @@ if "master_catalog" not in st.session_state:
         "BRAHMA LIGHT HU 16/650M": "7468973200200", "BRAHMA LIGHT 650ML": "7468973200200",
         "CORONA EXTRA 330ML": "7503034941200", "CORONA CERO 355ML": "750304423180", "MICHELOB ULTRA 355ML": "7422110104967",
         "THE ONE HU 12OZ": "74601325", "THE ONE HU 22OZ": "74601127", "CLAMATO COCTEL TOMATE C": "01484035",
-        "ENRIQUILLO SODA 400 ML": "7463172803733", "GATORADE FRUIT PUNCH": "7460548000154", "GATORADE NARANJA": "92735",
+        "ENRIQUILLO SODA 400 ML": "7463172803733", "GATORADE FRUIT PUNCH": "7460548000154", "GATORADE NARANJA": "052000324884",
         "GATORADE UVA": "052000324822", "FOUR LOKO MARACUYA": "849806004962", "FOUR LOKO PONCHE DE FRUTAS": "849806001220",
         "FOUR LOKO GREEN": "849806001855", "FOUR LOKO PURPLE": "849806002746", "FOUR LOKO GOLD": "849806001756",
         "FOUR LOKO SANDIA": "849806001206", "FOUR LOKO WHITE": "849806005754", 
         "ALOE PURE PLUS ORIGINAL 1.5 LT": "8809125063035",
         "ALOE PURE PLUS ORIGINAL": "8809125063011", 
         "MY COCO PURE PLUS": "8809125063011",
-        # Álvarez & Sánchez
+        # Álvarez & Sánchez / González Cuesta
         "SANTA HELENA MERLOT 75 CL": "7804300120986",
         "SANTA HELENA RESERVADO RED BLEND 75 CL": "7804300150082",
         "SANTA HELENA SAUVIGNON BLANC 75 CL": "7804300150041",
@@ -109,7 +115,20 @@ if "master_catalog" not in st.session_state:
         "SCHWEPPES TONICA 1 LT": "2117974",
         "SCHWEPPES TONICA ZERO 1 LT": "2138531",
         "SELA BODEGAS RODA VINO TINTO 75 CL": "8014396003073",
-        "SOLAN DE CABRAS AGUA MINERAL NAT 1.5 LT": "8436538810767"
+        "SOLAN DE CABRAS AGUA MINERAL NAT 1.5 LT": "8436538810767",
+        # González Cuesta códigos SAP específicos de la factura
+        "SANTA HELENA MERLOT 75 CL VEB19056": "2036911",
+        "SANTA HELENA RESERVADO RED BLEND 75 CL VEB14817": "2195471",
+        "SANTA HELENA SAUVIGNON BLANC 75 CL VEB12673": "2036912",
+        "SANTA HELENA VINO DULCE TINTO 75 CL VEB16220": "2227176",
+        "SANTIAGO RUIZ ALBARIÑO 1.5 LT": "2241603",
+        "SANTIAGO RUIZ ALBARIÑO 375 CL": "2119405",
+        "SANTIAGO RUIZ ALBARIÑO 75 CL": "842097601070",
+        "SCHWEPPES AGUA TONICA 4 PACK 18 CL": "2000011980849",
+        "SCHWEPPES TONICA 1 LT": "2117974",
+        "SCHWEPPES TONICA ZERO 1 LT": "2138531",
+        "SELA BODEGAS RODA VINO TINTO 75 CL": "2157751",
+        "SOLAN DE CABRAS AGUA MINERAL NAT 1.5 LT": "2070771"
     }
     for k, v in base_defaults.items():
         if k not in loaded_master: loaded_master[k] = v
@@ -134,17 +153,17 @@ def clean_ean_code(code_val):
     s_val = str(code_val).strip()
     if s_val.endswith('.0'): s_val = s_val[:-2]
     s_val = re.sub(r'\D', '', s_val)
-    if 7 <= len(s_val) <= 14: return str(s_val)
+    if 4 <= len(s_val) <= 14: return str(s_val)
     return "S/C"
 
 def limpiar_nombre_producto(descripcion_raw, tamano_raw):
     desc = str(descripcion_raw or "").upper().strip()
     desc = re.sub(r'\s+\d{4,6}$', '', desc)
-    desc = re.sub(r'\b(PC|UN|CAJA|CAJ|BOT|PZA)\b', '', desc)
+    desc = re.sub(r'\b(PC|UN|CAJA|CAJ|BOT|PZA|CAJ /)\b', '', desc)
     desc = re.sub(r'\s+', ' ', desc).strip()
     
     tam = str(tamano_raw or "").upper().strip()
-    m_medida = re.search(r'(\d+\s*(?:ML|L|LT|G|KG|OZ|Z))', tam + " " + desc)
+    m_medida = re.search(r'(\d+\s*(?:ML|L|LT|G|KG|OZ|Z|CL))', tam + " " + desc)
     medida_limpia = m_medida.group(1) if m_medida else ""
     
     if medida_limpia and medida_limpia not in desc:
@@ -157,38 +176,21 @@ def parse_empaque_proveedor(proveedor_nombre, tamano_txt="", unidad_txt="", desc
     
     if "CND" in prov_up or "BEES" in prov_up:
         unidad_upper = str(unidad_txt or "").upper().strip()
-        if unidad_upper == "UN":
-            return 1
-
+        if unidad_upper == "UN": return 1
         combined = f"{str(tamano_txt or '')} {str(unidad_txt or '')} {str(descripcion_txt or '')}".upper()
-        
-        if "4X6" in combined:
-            return 24
-
+        if "4X6" in combined: return 24
         m_slash = re.search(r'\b(48|24|20|18|16|12|6|4)\s*/', combined)
-        if m_slash:
-            val = int(m_slash.group(1))
-            if val > 1: return val
-
-        if "LP 4" in combined or "4X" in combined: return 24
-
-        if "ALOE PURE PLUS" in combined or "MY COCO PURE PLUS" in combined:
-            return 20
-        if "GATORADE" in combined:
-            return 24
-        if "FOUR LOKO" in combined:
-            return 6
-        if "CLAMATO" in combined:
-            return 12
-        if "ENRIQUILLO" in combined:
-            return 24
-
+        if m_slash: return int(m_slash.group(1))
         return 1
 
+    # Para González Cuesta / Álvarez & Sánchez (UMV ej: 12 PZA, 6 PZA, 24 PZA)
     combined_gen = f"{str(tamano_txt or '')} {str(unidad_txt or '')} {str(descripcion_txt or '')}".upper()
+    m_pza = re.search(r'\b(48|24|12|6|4)\s*PZA\b', combined_gen)
+    if m_pza: return int(m_pza.group(1))
+    
     m_gen = re.search(r'\b(24|12|6)\b', combined_gen)
-    if m_gen:
-        return int(m_gen.group(1))
+    if m_gen: return int(m_gen.group(1))
+    
     return 1
 
 def buscar_en_catalogo_maestro(nombre_producto, presentacion=""):
@@ -201,38 +203,6 @@ def buscar_en_catalogo_maestro(nombre_producto, presentacion=""):
     if n_upper in manual_dict: return manual_dict[n_upper]
 
     master_dict = st.session_state.get("master_catalog", {})
-
-    cnd_sinonimos = {
-        "ALOE PURE PLUS ORIGINAL 1.5 LT": "8809125063035",
-        "PTE. LIGHT HU 22OZ": "70601561", "PRESIDENTE LIGHT HU 22OZ": "70601561", "PTE. CJ 22OZ": "70601561",
-        "PTE. HU 12OZ": "74621774", "PTE. LIGHT HU 12OZ": "74621774", "BRAHMA LIGHT HU 12OZ": "7468973200194",
-        "BRAHMA LIGHT HU": "7468973200194", "BRAHMA LIGHT HU 16/650M": "7468973200200", "BRAHMA LIGHT 650ML": "7468973200200",
-        "CORONA EXTRA 330ML": "7503034941200", "CORONA CERO 355ML": "750304423180", "MICHELOB ULTRA 355ML": "7422110104967",
-        "THE ONE HU 12OZ": "74601325", "THE ONE HU 22OZ": "74601127", "CLAMATO COCTEL TOMATE C": "01484035",
-        "ENRIQUILLO SODA 400 ML": "7463172803733", "GATORADE FRUIT PUNCH": "7460548000154", "GATORADE NARANJA": "92735",
-        "GATORADE UVA": "052000324822", "FOUR LOKO MARACUYA": "849806004962", "FOUR LOKO PONCHE DE FRUTAS": "849806001220",
-        "FOUR LOKO GREEN": "849806001855", "FOUR LOKO PURPLE": "849806002746", "FOUR LOKO GOLD": "849806001756",
-        "FOUR LOKO SANDIA": "849806001206", "FOUR LOKO WHITE": "849806005754", 
-        "ALOE PURE PLUS ORIGINAL": "8809125063011", 
-        "MY COCO PURE PLUS": "8809125063011",
-        # Álvarez & Sánchez
-        "SANTA HELENA MERLOT 75 CL": "7804300120986",
-        "SANTA HELENA RESERVADO RED BLEND 75 CL": "7804300150082",
-        "SANTA HELENA SAUVIGNON BLANC 75 CL": "7804300150041",
-        "SANTA HELENA VINO DULCE TINTO 75 CL": "7804300149307",
-        "SANTIAGO RUIZ ALBARIÑO 1.5 LT": "8420976010063",
-        "SANTIAGO RUIZ ALBARIÑO 375 CL": "8420976010087",
-        "SANTIAGO RUIZ ALBARIÑO 75 CL": "842097601070",
-        "SCHWEPPES AGUA TONICA 4 PACK 18 CL": "2000011980849",
-        "SCHWEPPES TONICA 1 LT": "2117974",
-        "SCHWEPPES TONICA ZERO 1 LT": "2138531",
-        "SELA BODEGAS RODA VINO TINTO 75 CL": "8014396003073",
-        "SOLAN DE CABRAS AGUA MINERAL NAT 1.5 LT": "8436538810767"
-    }
-
-    for key, code in cnd_sinonimos.items():
-        if key in n_upper or key in combined_query:
-            return clean_ean_code(code)
 
     if master_dict:
         if combined_query in master_dict:
@@ -249,14 +219,14 @@ st.sidebar.markdown("<h3 style='color: #0284c7;'>⚡ WilPOS Multi-Proveedor</h3>
 menu_opcion = st.sidebar.radio("Navegación", ["📄 Procesar Factura", "📁 Catálogo Maestro EAN", "🏢 Gestionar Proveedores"])
 
 st.sidebar.markdown("---")
-st.sidebar.markdown("<p style='font-size: 0.8rem; color: #10b981; font-weight: 600;'>🟢 Búsqueda Web Google Activa</p>", unsafe_allow_html=True)
+st.sidebar.markdown("<p style='font-size: 0.8rem; color: #10b981; font-weight: 600;'>🟢 González Cuesta Integrado</p>", unsafe_allow_html=True)
 
 # ==========================================
 # MÓDULO 1: PROCESAR FACTURA
 # ==========================================
 if menu_opcion == "📄 Procesar Factura":
     st.markdown("<h2>📄 Procesador Inteligente Multi-Proveedor</h2>", unsafe_allow_html=True)
-    st.markdown("<p style='color: #64748b;'>Sube tu factura. Usa el botón de buscar en la web para abrir Google y encontrar el código exacto.</p>", unsafe_allow_html=True)
+    st.markdown("<p style='color: #64748b;'>Sube tu factura. Reconoce automáticamente CND, Álvarez & Sánchez, González Cuesta y más.</p>", unsafe_allow_html=True)
     st.markdown("---")
 
     if "factura_data" not in st.session_state: st.session_state["factura_data"] = None
@@ -286,7 +256,8 @@ if menu_opcion == "📄 Procesar Factura":
                     image_input = {"mime_type": "application/pdf", "data": file_bytes} if "pdf" in f_type.lower() else Image.open(io.BytesIO(file_bytes))
 
                     prompt_deteccion = (
-                        "Analiza este documento comercial (factura o tique) e identifica estrictamente el nombre comercial del proveedor emisor. "
+                        "Analiza este documento comercial (factura o tique) e identifica estrictamente el nombre comercial del proveedor emisor "
+                        "(por ejemplo GONZALEZ CUESTA, ALVAREZ & SANCHEZ, CND, BEES, etc.). "
                         "Devuelve únicamente un JSON con esta estructura: {\"proveedor_detectado\": \"NOMBRE DEL PROVEEDOR\"}"
                     )
                     
@@ -321,9 +292,9 @@ if menu_opcion == "📄 Procesar Factura":
                     prompt_unificado = (
                         f"Estás procesando un tique o factura del proveedor: '{prov_encontrado}'. "
                         f"Instrucción específica: {instruccion_proveedor} "
-                        "Extrae 'precio_unitario' exactamente como aparece en el documento y la 'unidad' (PC o UN). "
+                        "Extrae 'precio_unitario' o 'monto_neto' exactamente como aparece en el documento y la 'unidad' (ej. CAJ, PZA, UN). "
                         "Devuelve un JSON puro con esta estructura exacta y llaves en minúscula: "
-                        '{"paginacion": "1 de 1", "proveedor_detectado": "' + prov_encontrado + '", "subtotal": 0.0, "itbis": 0.0, "descuentos": 0.0, "total": 0.0, "items": [{"descripcion": "...", "tamano": "...", "cantidad": 1.0, "unidad": "PC", "precio_unitario": 0.0, "monto_neto": 0.0}]}. '
+                        '{"paginacion": "1 de 1", "proveedor_detectado": "' + prov_encontrado + '", "subtotal": 0.0, "itbis": 0.0, "descuentos": 0.0, "total": 0.0, "items": [{"descripcion": "...", "tamano": "...", "cantidad": 1.0, "unidad": "PZA", "precio_unitario": 0.0, "monto_neto": 0.0}]}. '
                         "Respuesta JSON pura."
                     )
 
@@ -394,19 +365,12 @@ if menu_opcion == "📄 Procesar Factura":
                 empaque = parse_empaque_proveedor(prov_actual, raw_tam, unidad, raw_desc)
                 total_unidades = int(cant_compra * empaque)
 
-                # REGLA DE CÓDIGO PARA ALOE PURE PLUS SEGÚN EMPAQUE
-                if "ALOE PURE PLUS ORIGINAL" in nombre_completo:
-                    if empaque == 1:
-                        nombre_completo = "ALOE PURE PLUS ORIGINAL 1.5 LT"
-                    else:
-                        nombre_completo = "ALOE PURE PLUS ORIGINAL"
-
-                m_med = re.search(r'(\d+\s*(?:ML|L|LT|G|KG|OZ|Z))', str((raw_tam or "") + " " + (raw_desc or "")).upper())
+                m_med = re.search(r'(\d+\s*(?:ML|L|LT|G|KG|OZ|Z|CL))', str((raw_tam or "") + " " + (raw_desc or "")).upper())
                 presentacion_limpia = m_med.group(1) if m_med else (raw_tam if raw_tam else "S/P")
 
                 codigo_final = buscar_en_catalogo_maestro(nombre_completo, presentacion_limpia)
 
-                nombre_display_excel = "ALOE PURE PLUS ORIGINAL" if "1.5 LT" in nombre_completo else nombre_completo
+                nombre_display_excel = nombre_completo
 
                 p_unit_extraido = safe_float(item.get("precio_unitario"), 0.0)
                 monto_neto_linea = safe_float(
@@ -444,8 +408,8 @@ if menu_opcion == "📄 Procesar Factura":
                         if sel_maestro != "-- Buscar en Maestro --":
                             display_codigo = master_dict[sel_maestro]
                     with col_c2:
-                        codigo_manual_input = st.text_input("Ingresar código manual", key=f"manual_input_{idx}_{nombre_display_excel}_{idx}", placeholder="Ej. 052000324884")
-                        if codigo_manual_input and len(codigo_manual_input.strip()) >= 7:
+                        codigo_manual_input = st.text_input("Ingresar código manual", key=f"manual_input_{idx}_{nombre_display_excel}_{idx}", placeholder="Ej. 2036911")
+                        if codigo_manual_input and len(codigo_manual_input.strip()) >= 4:
                             clean_m = clean_ean_code(codigo_manual_input)
                             if clean_m != "S/C":
                                 display_codigo = clean_m
@@ -472,7 +436,7 @@ if menu_opcion == "📄 Procesar Factura":
                                 display_codigo = "S/C"
 
                 preview_rows.append({
-                    "No.": idx, "Producto": nombre_display_excel, "Código EAN Asignado": display_codigo,
+                    "No.": idx, "Producto": nombre_display_excel, "Código EAN/SAP Asignado": display_codigo,
                     "Cant. Compra": cant_compra, "Empaque": empaque, "Stock (Unidades)": total_unidades,
                     "Costo Unit. Real": costo_unitario_real, "Precio Venta": precio_venta
                 })
@@ -507,9 +471,9 @@ elif menu_opcion == "📁 Catálogo Maestro EAN":
         with st.form("form_agregar_maestro"):
             col_m1, col_m2 = st.columns([2, 1])
             with col_m1:
-                nuevo_prod_nombre = st.text_input("Nombre / Descripción del Producto (Ej: SCHWEPPES TONICA 1 LT)")
+                nuevo_prod_nombre = st.text_input("Nombre / Descripción del Producto (Ej: SANTA HELENA MERLOT 75 CL)")
             with col_m2:
-                nuevo_prod_codigo = st.text_input("Código EAN / SAP Oficial (Ej: 2117974)")
+                nuevo_prod_codigo = st.text_input("Código EAN / SAP Oficial (Ej: 2036911)")
             
             btn_guardar_maestro = st.form_submit_button("💾 Guardar en Catálogo Maestro")
             if btn_guardar_maestro:
