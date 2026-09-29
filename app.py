@@ -47,19 +47,22 @@ def load_json_file(filepath, default_type="dict"):
         try:
             with open(filepath, "r", encoding="utf-8") as f:
                 data = json.load(f)
-                if default_type == "list" and isinstance(data, list): return data
-                if default_type == "dict" and isinstance(data, dict):
-                    cleaned = {str(k).upper().strip(): str(v).strip() for k, v in data.items() if k and v}
-                    return cleaned
+                if default_type == "dict":
+                    if isinstance(data, dict):
+                        return {str(k).upper().strip(): v for k, v in data.items() if k}
+                    return {}
+                elif default_type == "list":
+                    if isinstance(data, list):
+                        return data
+                    return []
         except Exception:
             pass
-    return [] if default_type == "list" else {}
+    return {} if default_type == "dict" else []
 
 def save_json_file(filepath, data):
     try:
-        cleaned = {str(k).upper().strip(): str(v).strip() for k, v in data.items() if k and v}
         with open(filepath, "w", encoding="utf-8") as f:
-            json.dump(cleaned, f, ensure_ascii=False, indent=4)
+            json.dump(data, f, ensure_ascii=False, indent=4)
     except Exception:
         pass
 
@@ -173,22 +176,17 @@ def parse_empaque_proveedor(proveedor_nombre, tamano_txt="", unidad_txt="", desc
     return 1
 
 def buscar_en_catalogo_maestro(nombre_producto, presentacion=""):
-    """
-    CONSULTA PURA Y DIRECTA EN EL ARCHIVO MAESTRO
-    """
     n_upper = str(nombre_producto or "").upper().strip()
     p_upper = str(presentacion or "").upper().strip()
     combined_query = f"{n_upper} {p_upper}".strip()
 
     master_dict = load_json_file(MASTER_CATALOG_FILE, "dict")
 
-    # 1. Coincidencia exacta
     if combined_query in master_dict:
         return clean_ean_code(master_dict[combined_query])
     if n_upper in master_dict:
         return clean_ean_code(master_dict[n_upper])
 
-    # 2. Coincidencia por palabra clave exacta en las llaves del maestro
     for m_name, m_code in master_dict.items():
         m_clean = str(m_name).upper().strip()
         if m_clean in n_upper or n_upper in m_clean:
@@ -196,7 +194,6 @@ def buscar_en_catalogo_maestro(nombre_producto, presentacion=""):
             if code_clean != "S/C":
                 return code_clean
 
-    # 3. Coincidencia por palabras clave individuales (Token Match)
     tokens_query = set(re.findall(r'\b[A-Z0-9]+\b', n_upper))
     tokens_query = {t for t in tokens_query if len(t) > 2 or t in ["HU", "CJ"]}
 
@@ -213,14 +210,14 @@ st.sidebar.markdown("<h3 style='color: #0284c7;'>⚡ WilPOS Multi-Proveedor</h3>
 menu_opcion = st.sidebar.radio("Navegación", ["📄 Procesar Factura", "📁 Catálogo Maestro EAN", "🏢 Gestionar Proveedores"])
 
 st.sidebar.markdown("---")
-st.sidebar.markdown("<p style='font-size: 0.8rem; color: #10b981; font-weight: 600;'>🟢 Maestro Protegido Activo</p>", unsafe_allow_html=True)
+st.sidebar.markdown("<p style='font-size: 0.8rem; color: #10b981; font-weight: 600;'>🟢 Maestro Blindado Activo</p>", unsafe_allow_html=True)
 
 # ==========================================
 # MÓDULO 1: PROCESAR FACTURA
 # ==========================================
 if menu_opcion == "📄 Procesar Factura":
     st.markdown("<h2>📄 Procesador con Consulta Directa al Maestro</h2>", unsafe_allow_html=True)
-    st.markdown("<p style='color: #64748b;'>Sube tu factura. Los códigos del tique se ignoran y se busca directamente en el archivo maestro limpio.</p>", unsafe_allow_html=True)
+    st.markdown("<p style='color: #64748b;'>Sube tu factura. Los códigos del tique se ignoran y se busca directamente en el archivo maestro.</p>", unsafe_allow_html=True)
     st.markdown("---")
 
     if "factura_data" not in st.session_state: st.session_state["factura_data"] = None
@@ -231,7 +228,7 @@ if menu_opcion == "📄 Procesar Factura":
     
     col_s1, col_s2 = st.columns([2, 1])
     with col_s1:
-        st.info("💡 Sube tu documento. Se consultará directamente el archivo maestro sin alteraciones automáticas.")
+        st.info("💡 Sube tu documento. Se consultará directamente el archivo maestro.")
     with col_s2:
         margen_utilidad = st.number_input("⚙️ Margen Utilidad (%)", min_value=0.0, max_value=500.0, value=25.0, step=1.0)
         
@@ -263,8 +260,9 @@ if menu_opcion == "📄 Procesar Factura":
                     nombre_detectado_raw = str(det_json.get("proveedor_detectado", "PROVEEDOR GENERAL")).upper().strip()
 
                     supp_mem = st.session_state["supplier_memory"]
-                    prov_encontrado = None
+                    if not isinstance(supp_mem, dict): supp_mem = {}
                     
+                    prov_encontrado = None
                     for p_key in supp_mem.keys():
                         if p_key in nombre_detectado_raw or nombre_detectado_raw in p_key:
                             prov_encontrado = p_key
@@ -280,7 +278,9 @@ if menu_opcion == "📄 Procesar Factura":
                         st.session_state["supplier_memory"] = supp_mem
                         save_json_file(SUPPLIER_MEMORY_FILE, supp_mem)
 
-                    instruccion_proveedor = supp_mem[prov_encontrado].get("instruccion_prompt", "Extrae todos los ítems.")
+                    prov_dict_data = supp_mem.get(prov_encontrado, {})
+                    if not isinstance(prov_dict_data, dict): prov_dict_data = {}
+                    instruccion_proveedor = prov_dict_data.get("instruccion_prompt", "Extrae todos los ítems.")
 
                     prompt_unificado = (
                         f"Estás procesando un tique o factura del proveedor: '{prov_encontrado}'. "
@@ -395,7 +395,7 @@ if menu_opcion == "📄 Procesar Factura":
                 display_codigo = codigo_final
                 if codigo_final == "S/C":
                     st.markdown("---")
-                    st.markdown(f"⚠️ **{nombre_display_excel} ({presentacion_limpia})** sin código en el archivo maestro.")
+                    st.markdown(f"⚠️️ **{nombre_display_excel} ({presentacion_limpia})** sin código en el archivo maestro.")
                     
                     col_c1, col_c2, col_c3 = st.columns([2, 1, 1])
                     with col_c1:
@@ -452,47 +452,47 @@ if menu_opcion == "📄 Procesar Factura":
 # ==========================================
 elif menu_opcion == "📁 Catálogo Maestro EAN":
     st.markdown("<h2>📁 Gestión, Carga y Limpieza del Archivo Maestro EAN</h2>", unsafe_allow_html=True)
-    st.markdown("<p style='color: #64748b;'>Sube tu archivo maestro (Excel), limpia registros duplicados o agrega productos manualmente.</p>", unsafe_allow_html=True)
+    st.markdown("<p style='color: #64748b;'>Sube tu archivo Excel con el catálogo maestro, limpia registros duplicados o agrega productos individualmente.</p>", unsafe_allow_html=True)
     st.markdown("---")
 
     master_dict = load_json_file(MASTER_CATALOG_FILE, "dict")
 
-    # 📤 SECCIÓN PARA CARGAR ARCHIVO MAESTRO EXTERNO
-    st.markdown("### 📤 Cargar Archivo Maestro Masivo (Excel / CSV)")
-    with st.container():
-        archivo_maestro_subido = st.file_uploader("Sube tu archivo Excel con el Catálogo Maestro", type=["xlsx", "xls", "csv"])
-        if archivo_maestro_subido is not None:
-            if st.button("📥 Procesar y Cargar al Archivo Maestro"):
-                try:
-                    if archivo_maestro_subido.name.endswith('.csv'):
-                        df_m = pd.read_csv(archivo_maestro_subido)
-                    else:
-                        df_m = pd.read_excel(archivo_maestro_subido)
-                    
-                    # Intentar detectar columnas de nombre y código de barras
-                    cols_up = [str(c).upper().strip() for c in df_m.columns]
-                    col_nombre_idx = next((i for i, c in enumerate(cols_up) if any(k in c for k in ['NOMBRE', 'DESCRIPCION', 'PRODUCTO'])), 0)
-                    col_codigo_idx = next((i for i, c in enumerate(cols_up) if any(k in c for k in ['CODIGO', 'EAN', 'BARRA', 'SAP'])), 1)
+    st.markdown('<div class="card-container">', unsafe_allow_html=True)
+    st.markdown("### 📤 Cargar Archivo Masivo al Catálogo Maestro")
+    st.markdown("<p style='font-size: 0.85rem; color: #64748b;'>Sube tu Excel o CSV con tu listado de productos y códigos oficiales. El sistema fusionará todo automáticamente.</p>", unsafe_allow_html=True)
+    
+    archivo_maestro_subido = st.file_uploader("Sube tu archivo Excel/CSV del Catálogo Maestro", type=["xlsx", "xls", "csv"], key="uploader_maestro_masivo")
+    if archivo_maestro_subido is not None:
+        if st.button("📥 Procesar, Fusionar y Guardar en Archivo Maestro"):
+            try:
+                if archivo_maestro_subido.name.endswith('.csv'):
+                    df_m = pd.read_csv(archivo_maestro_subido)
+                else:
+                    df_m = pd.read_excel(archivo_maestro_subido)
+                
+                cols_up = [str(c).upper().strip() for c in df_m.columns]
+                col_nombre_idx = next((i for i, c in enumerate(cols_up) if any(k in c for k in ['NOMBRE', 'DESCRIPCION', 'PRODUCTO'])), 0)
+                col_codigo_idx = next((i for i, c in enumerate(cols_up) if any(k in c for k in ['CODIGO', 'EAN', 'BARRA', 'SAP'])), 1)
 
-                    nuevos_cargados = 0
-                    for _, row in df_m.iterrows():
-                        p_nombre = str(row.iloc[col_nombre_idx]).upper().strip()
-                        p_codigo = str(row.iloc[col_codigo_idx]).strip()
-                        clean_c = clean_ean_code(p_codigo)
-                        if p_nombre and p_nombre != "NAN" and clean_c != "S/C":
-                            master_dict[p_nombre] = clean_c
-                            nuevos_cargados += 1
-                    
-                    save_json_file(MASTER_CATALOG_FILE, master_dict)
-                    st.success(f"✅ ¡Se cargaron y fusionaron **{nuevos_cargados}** productos exitosamente al archivo maestro!")
-                    time.sleep(1)
-                    st.rerun()
-                except Exception as e:
-                    st.error(f"⚠️️ Error al leer el archivo maestro: {str(e)}")
+                nuevos_cargados = 0
+                for _, row in df_m.iterrows():
+                    p_nombre = str(row.iloc[col_nombre_idx]).upper().strip()
+                    p_codigo = str(row.iloc[col_codigo_idx]).strip()
+                    clean_c = clean_ean_code(p_codigo)
+                    if p_nombre and p_nombre != "NAN" and clean_c != "S/C":
+                        master_dict[p_nombre] = clean_c
+                        nuevos_cargados += 1
+                
+                save_json_file(MASTER_CATALOG_FILE, master_dict)
+                st.success(f"✅ ¡Se cargaron y fusionaron **{nuevos_cargados}** productos exitosamente al archivo maestro!")
+                time.sleep(1)
+                st.rerun()
+            except Exception as e:
+                st.error(f"⚠️ Error al procesar el archivo: {str(e)}")
+    st.markdown('</div>', unsafe_allow_html=True)
 
     st.markdown("---")
 
-    # 🧹 HERRAMIENTAS DE MANTENIMIENTO
     st.markdown("### 🧹 Herramientas de Mantenimiento")
     col_l1, col_l2 = st.columns([1, 2])
     with col_l1:
@@ -509,11 +509,11 @@ elif menu_opcion == "📁 Catálogo Maestro EAN":
             time.sleep(0.5)
             st.rerun()
     with col_l2:
-        st.info("ℹ️️ Borra entradas corruptas y restaura los productos base esenciales.")
+        st.info("ℹ️ Borra entradas corruptas y restaura los productos base esenciales.")
 
     st.markdown("---")
 
-    with st.expander("➕ Agregar Producto Individual al Archivo Maestro", expanded=False):
+    with st.expander("➕ Agregar Producto Individual Manualmente", expanded=False):
         with st.form("form_agregar_maestro"):
             col_m1, col_m2 = st.columns([2, 1])
             with col_m1:
@@ -547,7 +547,10 @@ elif menu_opcion == "🏢 Gestionar Proveedores":
     st.markdown("---")
 
     supps = st.session_state["supplier_memory"]
+    if not isinstance(supps, dict): supps = {}
+    
     for p_name, p_data in list(supps.items()):
+        if not isinstance(p_data, dict): p_data = {}
         with st.expander(f"🏢 Proveedor: {p_name}"):
             with st.form(f"form_prov_{p_name}"):
                 nuevo_nombre = st.text_input("Nombre del Proveedor", value=p_data.get("nombre", p_name))
@@ -560,8 +563,7 @@ elif menu_opcion == "🏢 Gestionar Proveedores":
                     btn_eliminar = st.form_submit_button("🗑️ Eliminar Perfil")
                 
                 if btn_guardar:
-                    supps[p_name]["nombre"] = nuevo_nombre
-                    supps[p_name]["instruccion_prompt"] = nueva_instruccion
+                    supps[p_name] = {"nombre": nuevo_nombre, "instruccion_prompt": nueva_instruccion}
                     if nuevo_nombre != p_name:
                         supps[nuevo_nombre] = supps.pop(p_name)
                     st.session_state["supplier_memory"] = supps
