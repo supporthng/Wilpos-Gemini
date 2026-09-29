@@ -87,7 +87,7 @@ if "master_catalog" not in st.session_state:
     base_defaults = {
         "PTE. LIGHT HU 22OZ": "70601561", "PRESIDENTE LIGHT HU 22OZ": "70601561", "PTE. CJ 22OZ": "70601561",
         "PTE. HU 12OZ": "74621774", "PTE. LIGHT HU 12OZ": "74621774", "BRAHMA LIGHT HU 12OZ": "7468973200194",
-        "BRAHMA LIGHT HU 16/650M": "7468973200200", "BRAHMA LIGHT 650ML": "7468973200200",
+        "BRAHMA LIGHT HU": "7468973200194", "BRAHMA LIGHT HU 16/650M": "7468973200200", "BRAHMA LIGHT 650ML": "7468973200200",
         "CORONA EXTRA 330ML": "7503034941200", "CORONA CERO 355ML": "750304423180", "MICHELOB ULTRA 355ML": "7422110104967",
         "THE ONE HU 12OZ": "74601325", "THE ONE HU 22OZ": "74601127", "CLAMATO COCTEL TOMATE C": "01484035",
         "ENRIQUILLO SODA 400 ML": "7463172803733", "GATORADE FRUIT PUNCH": "7460548000154", "GATORADE NARANJA": "92735",
@@ -249,14 +249,14 @@ st.sidebar.markdown("<h3 style='color: #0284c7;'>⚡ WilPOS Multi-Proveedor</h3>
 menu_opcion = st.sidebar.radio("Navegación", ["📄 Procesar Factura", "📁 Catálogo Maestro EAN", "🏢 Gestionar Proveedores"])
 
 st.sidebar.markdown("---")
-st.sidebar.markdown("<p style='font-size: 0.8rem; color: #10b981; font-weight: 600;'>🟢 Aloe 1.5L por Empaque Unitario</p>", unsafe_allow_html=True)
+st.sidebar.markdown("<p style='font-size: 0.8rem; color: #10b981; font-weight: 600;'>🟢 Buscador Maestro Restaurado</p>", unsafe_allow_html=True)
 
 # ==========================================
 # MÓDULO 1: PROCESAR FACTURA
 # ==========================================
 if menu_opcion == "📄 Procesar Factura":
     st.markdown("<h2>📄 Procesador Inteligente Multi-Proveedor</h2>", unsafe_allow_html=True)
-    st.markdown("<p style='color: #64748b;'>Sube tu factura. El sistema asigna el código 1.5L al de empaque 1 y el de 500ml al de pack.</p>", unsafe_allow_html=True)
+    st.markdown("<p style='color: #64748b;'>Sube tu factura. El sistema procesa los ítems y te permite asignar códigos faltantes fácilmente.</p>", unsafe_allow_html=True)
     st.markdown("---")
 
     if "factura_data" not in st.session_state: st.session_state["factura_data"] = None
@@ -394,7 +394,7 @@ if menu_opcion == "📄 Procesar Factura":
                 empaque = parse_empaque_proveedor(prov_actual, raw_tam, unidad, raw_desc)
                 total_unidades = int(cant_compra * empaque)
 
-                # REGLA DE CÓDIGO PARA ALOE PURE PLUS SEGÚN EMPAQUE (1 = 1.5 LT, 20 = 500 ML)
+                # REGLA DE CÓDIGO PARA ALOE PURE PLUS SEGÚN EMPAQUE
                 if "ALOE PURE PLUS ORIGINAL" in nombre_completo:
                     if empaque == 1:
                         nombre_completo = "ALOE PURE PLUS ORIGINAL 1.5 LT"
@@ -432,7 +432,7 @@ if menu_opcion == "📄 Procesar Factura":
                 display_codigo = codigo_final
                 if codigo_final == "S/C":
                     st.markdown("---")
-                    col_c1, col_c2 = st.columns([2, 1])
+                    col_c1, col_c2, col_c3 = st.columns([2, 1, 1])
                     with col_c1:
                         st.markdown(f"⚠️ **{nombre_display_excel} ({presentacion_limpia})** sin código.")
                         sel_maestro = st.selectbox(
@@ -446,11 +446,11 @@ if menu_opcion == "📄 Procesar Factura":
                             st.session_state["codigos_manuales_sesion"][nombre_display_excel] = display_codigo
                             master_dict[nombre_display_excel] = display_codigo
                             save_json_file(MASTER_CATALOG_FILE, master_dict)
-                            st.success(f"¡Relacionado con '{sel_maestro}' y guardado en el Catálogo Maestro!")
+                            st.success(f"¡Relacionado con '{sel_maestro}' y guardado!")
                             st.rerun()
                     with col_c2:
                         st.markdown("<br>", unsafe_allow_html=True)
-                        codigo_manual_input = st.text_input("O ingresa código manual", key=f"manual_input_{idx}_{nombre_display_excel}_{idx}", placeholder="Ej. 052000324822")
+                        codigo_manual_input = st.text_input("Ingresar código manual", key=f"manual_input_{idx}_{nombre_display_excel}_{idx}", placeholder="Ej. 052000324822")
                         if codigo_manual_input and len(codigo_manual_input.strip()) >= 7:
                             clean_m = clean_ean_code(codigo_manual_input)
                             if clean_m != "S/C":
@@ -459,6 +459,13 @@ if menu_opcion == "📄 Procesar Factura":
                                 master_dict[nombre_display_excel] = display_codigo
                                 save_json_file(MASTER_CATALOG_FILE, master_dict)
                                 st.rerun()
+                    with col_c3:
+                        st.markdown("<br>", unsafe_allow_html=True)
+                        if st.button("🌐 Buscar en Web", key=f"btn_web_{idx}_{nombre_display_excel}"):
+                            st.info((
+                                f"Búsqueda sugerida para copiar: 'EAN barcode {nombre_display_excel} {presentacion_limpia}'. "
+                                "Copia el código y pégalo en el recuadro de al lado para registrarlo permanentemente."
+                            ))
 
                 preview_rows.append({
                     "No.": idx, "Producto": nombre_display_excel, "Código EAN Asignado": display_codigo,
