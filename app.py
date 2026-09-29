@@ -95,19 +95,19 @@ if "master_catalog" not in st.session_state:
         "FOUR LOKO GREEN": "849806001855", "FOUR LOKO PURPLE": "849806002746", "FOUR LOKO GOLD": "849806001756",
         "FOUR LOKO SANDIA": "849806001206", "FOUR LOKO WHITE": "849806005754", "ALOE PURE PLUS ORIGINAL": "8809125063011",
         "MY COCO PURE PLUS": "8809125063011",
-        # Álvarez & Sánchez[cite: 3]
-        "SANTA HELENA MERLOT 75 CL": "7804300120986",[cite: 3]
-        "SANTA HELENA RESERVADO RED BLEND 75 CL": "7804300150082",[cite: 3]
-        "SANTA HELENA SAUVIGNON BLANC 75 CL": "7804300150041",[cite: 3]
-        "SANTA HELENA VINO DULCE TINTO 75 CL": "7804300149307",[cite: 3]
-        "SANTIAGO RUIZ ALBARIÑO 1.5 LT": "8420976010063",[cite: 3]
-        "SANTIAGO RUIZ ALBARIÑO 375 CL": "8420976010087",[cite: 3]
-        "SANTIAGO RUIZ ALBARIÑO 75 CL": "842097601070",[cite: 3]
-        "SCHWEPPES AGUA TONICA 4 PACK 18 CL": "2000011980849",[cite: 3]
-        "SCHWEPPES TONICA 1 LT": "2117974",[cite: 3]
-        "SCHWEPPES TONICA ZERO 1 LT": "2138531",[cite: 3]
-        "SELA BODEGAS RODA VINO TINTO 75 CL": "8014396003073",[cite: 3]
-        "SOLAN DE CABRAS AGUA MINERAL NAT 1.5 LT": "8436538810767"[cite: 3]
+        # Álvarez & Sánchez
+        "SANTA HELENA MERLOT 75 CL": "7804300120986",
+        "SANTA HELENA RESERVADO RED BLEND 75 CL": "7804300150082",
+        "SANTA HELENA SAUVIGNON BLANC 75 CL": "7804300150041",
+        "SANTA HELENA VINO DULCE TINTO 75 CL": "7804300149307",
+        "SANTIAGO RUIZ ALBARIÑO 1.5 LT": "8420976010063",
+        "SANTIAGO RUIZ ALBARIÑO 375 CL": "8420976010087",
+        "SANTIAGO RUIZ ALBARIÑO 75 CL": "842097601070",
+        "SCHWEPPES AGUA TONICA 4 PACK 18 CL": "2000011980849",
+        "SCHWEPPES TONICA 1 LT": "2117974",
+        "SCHWEPPES TONICA ZERO 1 LT": "2138531",
+        "SELA BODEGAS RODA VINO TINTO 75 CL": "8014396003073",
+        "SOLAN DE CABRAS AGUA MINERAL NAT 1.5 LT": "8436538810767"
     }
     for k, v in base_defaults.items():
         if k not in loaded_master: loaded_master[k] = v
@@ -187,19 +187,19 @@ def buscar_en_catalogo_maestro(nombre_producto, presentacion=""):
         "FOUR LOKO GREEN": "849806001855", "FOUR LOKO PURPLE": "849806002746", "FOUR LOKO GOLD": "849806001756",
         "FOUR LOKO SANDIA": "849806001206", "FOUR LOKO WHITE": "849806005754", "ALOE PURE PLUS ORIGINAL": "8809125063011",
         "MY COCO PURE PLUS": "8809125063011",
-        # Álvarez & Sánchez[cite: 3]
-        "SANTA HELENA MERLOT 75 CL": "7804300120986",[cite: 3]
-        "SANTA HELENA RESERVADO RED BLEND 75 CL": "7804300150082",[cite: 3]
-        "SANTA HELENA SAUVIGNON BLANC 75 CL": "7804300150041",[cite: 3]
-        "SANTA HELENA VINO DULCE TINTO 75 CL": "7804300149307",[cite: 3]
-        "SANTIAGO RUIZ ALBARIÑO 1.5 LT": "8420976010063",[cite: 3]
-        "SANTIAGO RUIZ ALBARIÑO 375 CL": "8420976010087",[cite: 3]
-        "SANTIAGO RUIZ ALBARIÑO 75 CL": "842097601070",[cite: 3]
-        "SCHWEPPES AGUA TONICA 4 PACK 18 CL": "2000011980849",[cite: 3]
-        "SCHWEPPES TONICA 1 LT": "2117974",[cite: 3]
-        "SCHWEPPES TONICA ZERO 1 LT": "2138531",[cite: 3]
-        "SELA BODEGAS RODA VINO TINTO 75 CL": "8014396003073",[cite: 3]
-        "SOLAN DE CABRAS AGUA MINERAL NAT 1.5 LT": "8436538810767"[cite: 3]
+        # Álvarez & Sánchez
+        "SANTA HELENA MERLOT 75 CL": "7804300120986",
+        "SANTA HELENA RESERVADO RED BLEND 75 CL": "7804300150082",
+        "SANTA HELENA SAUVIGNON BLANC 75 CL": "7804300150041",
+        "SANTA HELENA VINO DULCE TINTO 75 CL": "7804300149307",
+        "SANTIAGO RUIZ ALBARIÑO 1.5 LT": "8420976010063",
+        "SANTIAGO RUIZ ALBARIÑO 375 CL": "8420976010087",
+        "SANTIAGO RUIZ ALBARIÑO 75 CL": "842097601070",
+        "SCHWEPPES AGUA TONICA 4 PACK 18 CL": "2000011980849",
+        "SCHWEPPES TONICA 1 LT": "2117974",
+        "SCHWEPPES TONICA ZERO 1 LT": "2138531",
+        "SELA BODEGAS RODA VINO TINTO 75 CL": "8014396003073",
+        "SOLAN DE CABRAS AGUA MINERAL NAT 1.5 LT": "8436538810767"
     }
 
     for key, code in cnd_sinonimos.items():
@@ -257,7 +257,6 @@ if menu_opcion == "📄 Procesar Factura":
                     f_type = getattr(archivo_subido, 'type', 'image/jpeg')
                     image_input = {"mime_type": "application/pdf", "data": file_bytes} if "pdf" in f_type.lower() else Image.open(io.BytesIO(file_bytes))
 
-                    # Paso 1: Detección rápida del nombre del proveedor en el documento
                     prompt_deteccion = (
                         "Analiza este documento comercial (factura o tique) e identifica estrictamente el nombre comercial del proveedor emisor "
                         "(por ejemplo: ALVAREZ & SANCHEZ, CND, BEES, CASA BRUGAL, etc.). "
@@ -272,7 +271,6 @@ if menu_opcion == "📄 Procesar Factura":
                     det_json = json.loads(raw_det_text.strip())
                     nombre_detectado_raw = str(det_json.get("proveedor_detectado", "PROVEEDOR GENERAL")).upper().strip()
 
-                    # Buscar coincidencia en la memoria de proveedores
                     supp_mem = st.session_state["supplier_memory"]
                     prov_encontrado = None
                     
@@ -282,7 +280,6 @@ if menu_opcion == "📄 Procesar Factura":
                             break
                     
                     if not prov_encontrado:
-                        # Si no existe en memoria, se crea un perfil automático para él
                         prov_encontrado = nombre_detectado_raw
                         supp_mem[prov_encontrado] = {
                             "nombre": prov_encontrado,
@@ -292,10 +289,8 @@ if menu_opcion == "📄 Procesar Factura":
                         st.session_state["supplier_memory"] = supp_mem
                         save_json_file(SUPPLIER_MEMORY_FILE, supp_mem)
 
-                    # Obtener la instrucción exclusiva de este proveedor
                     instruccion_proveedor = supp_mem[prov_encontrado].get("instruccion_prompt", "Extrae todos los ítems.")
 
-                    # Paso 2: Procesamiento completo con el perfil individual del proveedor detectado
                     prompt_unificado = (
                         f"Estás procesando una factura del proveedor detectado: '{prov_encontrado}'. "
                         f"Instrucción de formato específica: {instruccion_proveedor} "
