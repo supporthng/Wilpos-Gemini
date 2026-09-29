@@ -14,7 +14,7 @@ import pandas as pd
 # CONFIGURACIÓN DE LA PÁGINA Y ESTILOS
 # ==========================================
 st.set_page_config(
-    page_title="WilPOS - Facturas Multi-Proveedor", 
+    page_title="WilPOS - Sistema Multi-Proveedor Blindado", 
     page_icon="⚡", 
     layout="wide"
 )
@@ -61,14 +61,14 @@ def save_json_file(filepath, data):
         pass
 
 # ==========================================
-# GESTIÓN DE PERFILES Y CATÁLOGO
+# GESTIÓN DE PERFILES Y CATÁLOGO BLINDADO
 # ==========================================
 if "supplier_memory" not in st.session_state:
     loaded_supps = load_json_file(SUPPLIER_MEMORY_FILE, "dict")
     default_profiles = {
         "CND / BEES": {
             "nombre": "CND / BEES",
-            "tipo_formato": "tique_doble_linea",
+            "tipo_formato": "tique_doble_linea_blindado",
             "instruccion_prompt": "Analiza este tique de CND / BEES donde cada ítem tiene dos líneas: la línea 1 con código, unidad (PC o UN) y descripción, y la línea 2 con cantidad, precio unitario (P.Unit) e impuesto neto. Extrae 'descripcion', 'tamano', 'cantidad', 'unidad' y 'precio_unitario'."
         },
         "ALVAREZ & SANCHEZ": {
@@ -77,8 +77,8 @@ if "supplier_memory" not in st.session_state:
             "instruccion_prompt": "Analiza esta factura de ALVAREZ & SANCHEZ renglón por renglón. Extrae 'descripcion', 'tamano', 'cantidad', 'unidad' y 'monto_neto'."
         }
     }
-    if not loaded_supps:
-        loaded_supps = default_profiles
+    if not loaded_supps or "CND / BEES" not in loaded_supps:
+        loaded_supps.update(default_profiles)
         save_json_file(SUPPLIER_MEMORY_FILE, loaded_supps)
     st.session_state["supplier_memory"] = loaded_supps
 
@@ -93,7 +93,8 @@ if "master_catalog" not in st.session_state:
         "ENRIQUILLO SODA 400 ML": "7463172803733", "GATORADE FRUIT PUNCH": "7460548000154", "GATORADE NARANJA": "92735",
         "GATORADE UVA": "052000324822", "FOUR LOKO MARACUYA": "849806004962", "FOUR LOKO PONCHE DE FRUTAS": "849806001220",
         "FOUR LOKO GREEN": "849806001855", "FOUR LOKO PURPLE": "849806002746", "FOUR LOKO GOLD": "849806001756",
-        "FOUR LOKO SANDIA": "849806001206", "FOUR LOKO WHITE": "849806005754", "ALOE PURE PLUS ORIGINAL": "8809125063011",
+        "FOUR LOKO SANDIA": "849806001206", "FOUR LOKO WHITE": "849806005754", 
+        "ALOE PURE PLUS ORIGINAL": "8809125063011", "ALOE PURE PLUS ORIGINAL 1.5 LT": "8809125063035",
         "MY COCO PURE PLUS": "8809125063011",
         # Álvarez & Sánchez
         "SANTA HELENA MERLOT 75 CL": "7804300120986",
@@ -116,9 +117,6 @@ if "master_catalog" not in st.session_state:
 
 if "codigos_manuales_sesion" not in st.session_state:
     st.session_state["codigos_manuales_sesion"] = {}
-
-if "web_encontrado_temporal" not in st.session_state:
-    st.session_state["web_encontrado_temporal"] = {}
 
 def safe_float(val, default=0.0):
     try:
@@ -153,39 +151,43 @@ def limpiar_nombre_producto(descripcion_raw, tamano_raw):
     
     return desc
 
-def parse_empaque(tamano_txt="", unidad_txt="", descripcion_txt=""):
-    unidad_upper = str(unidad_txt or "").upper().strip()
+def parse_empaque_proveedor(proveedor_nombre, tamano_txt="", unidad_txt="", descripcion_txt=""):
+    prov_up = str(proveedor_nombre).upper().strip()
     
-    # REGLA ABSOLUTA: Si el tique indica explícitamente que es unidad suelta ("UN"), el empaque es 1
-    if unidad_upper == "UN":
+    if "CND" in prov_up or "BEES" in prov_up:
+        unidad_upper = str(unidad_txt or "").upper().strip()
+        if unidad_upper == "UN":
+            return 1
+
+        combined = f"{str(tamano_txt or '')} {str(unidad_txt or '')} {str(descripcion_txt or '')}".upper()
+        
+        if "4X6" in combined:
+            return 24
+
+        m_slash = re.search(r'\b(48|24|20|18|16|12|6|4)\s*/', combined)
+        if m_slash:
+            val = int(m_slash.group(1))
+            if val > 1: return val
+
+        if "LP 4" in combined or "4X" in combined: return 24
+
+        if "ALOE PURE PLUS" in combined or "MY COCO PURE PLUS" in combined:
+            return 20
+        if "GATORADE" in combined:
+            return 24
+        if "FOUR LOKO" in combined:
+            return 6
+        if "CLAMATO" in combined:
+            return 12
+        if "ENRIQUILLO" in combined:
+            return 24
+
         return 1
 
-    combined = f"{str(tamano_txt or '')} {str(unidad_txt or '')} {str(descripcion_txt or '')}".upper()
-    
-    # Excepción Corona Cero / 4x6 (significa 4 paquetes de 6 = 24 unidades totales)
-    if "4X6" in combined:
-        return 24
-
-    # 1. Detección por patrones generales con barra
-    m_slash = re.search(r'\b(48|24|20|18|16|12|6|4)\s*/', combined)
-    if m_slash:
-        val = int(m_slash.group(1))
-        if val > 1: return val
-
-    if "LP 4" in combined or "4X" in combined: return 24
-
-    # 2. Diccionario de respaldo por palabras clave (solo para cajas / packs PC)
-    if "ALOE PURE PLUS" in combined or "MY COCO PURE PLUS" in combined:
-        return 20
-    if "GATORADE" in combined:
-        return 24
-    if "FOUR LOKO" in combined:
-        return 6
-    if "CLAMATO" in combined:
-        return 12
-    if "ENRIQUILLO" in combined:
-        return 24
-
+    combined_gen = f"{str(tamano_txt or '')} {str(unidad_txt or '')} {str(descripcion_txt or '')}".upper()
+    m_gen = re.search(r'\b(24|12|6)\b', combined_gen)
+    if m_gen:
+        return int(m_gen.group(1))
     return 1
 
 def buscar_en_catalogo_maestro(nombre_producto, presentacion=""):
@@ -208,7 +210,8 @@ def buscar_en_catalogo_maestro(nombre_producto, presentacion=""):
         "ENRIQUILLO SODA 400 ML": "7463172803733", "GATORADE FRUIT PUNCH": "7460548000154", "GATORADE NARANJA": "92735",
         "GATORADE UVA": "052000324822", "FOUR LOKO MARACUYA": "849806004962", "FOUR LOKO PONCHE DE FRUTAS": "849806001220",
         "FOUR LOKO GREEN": "849806001855", "FOUR LOKO PURPLE": "849806002746", "FOUR LOKO GOLD": "849806001756",
-        "FOUR LOKO SANDIA": "849806001206", "FOUR LOKO WHITE": "849806005754", "ALOE PURE PLUS ORIGINAL": "8809125063011",
+        "FOUR LOKO SANDIA": "849806001206", "FOUR LOKO WHITE": "849806005754", 
+        "ALOE PURE PLUS ORIGINAL": "8809125063011", "ALOE PURE PLUS ORIGINAL 1.5 LT": "8809125063035",
         "MY COCO PURE PLUS": "8809125063011",
         # Álvarez & Sánchez
         "SANTA HELENA MERLOT 75 CL": "7804300120986",
@@ -240,18 +243,18 @@ def buscar_en_catalogo_maestro(nombre_producto, presentacion=""):
 
     return "S/C"
 
-st.sidebar.markdown("<h3 style='color: #0284c7;'>⚡ WilPOS System</h3>", unsafe_allow_html=True)
+st.sidebar.markdown("<h3 style='color: #0284c7;'>⚡ WilPOS Multi-Proveedor</h3>", unsafe_allow_html=True)
 menu_opcion = st.sidebar.radio("Navegación", ["📄 Procesar Factura", "📁 Catálogo Maestro EAN", "🏢 Gestionar Proveedores"])
 
 st.sidebar.markdown("---")
-st.sidebar.markdown("<p style='font-size: 0.8rem; color: #10b981; font-weight: 600;'>🟢 Corona Cero y Enriquillo Calibrados</p>", unsafe_allow_html=True)
+st.sidebar.markdown("<p style='font-size: 0.8rem; color: #10b981; font-weight: 600;'>🟢 Aloe 1.5L e Independientes Activos</p>", unsafe_allow_html=True)
 
 # ==========================================
 # MÓDULO 1: PROCESAR FACTURA
 # ==========================================
 if menu_opcion == "📄 Procesar Factura":
-    st.markdown("<h2>📄 Procesador Inteligente con Detección Automática</h2>", unsafe_allow_html=True)
-    st.markdown("<p style='color: #64748b;'>Sube tu factura o tique. El sistema calcula costos unitarios por pieza sin ITBIS aplicando el empaque correcto.</p>", unsafe_allow_html=True)
+    st.markdown("<h2>📄 Procesador Inteligente Multi-Proveedor</h2>", unsafe_allow_html=True)
+    st.markdown("<p style='color: #64748b;'>Sube tu factura. El sistema aplica automáticamente la regla de empaque y distingue presentaciones por costo.</p>", unsafe_allow_html=True)
     st.markdown("---")
 
     if "factura_data" not in st.session_state: st.session_state["factura_data"] = None
@@ -262,7 +265,7 @@ if menu_opcion == "📄 Procesar Factura":
     
     col_s1, col_s2 = st.columns([2, 1])
     with col_s1:
-        st.info("💡 Sube tu documento. El sistema reconocerá el proveedor y validará los códigos EAN automáticamente.")
+        st.info("💡 Sube tu documento. El sistema reconocerá el proveedor y aplicará sus reglas dedicadas.")
     with col_s2:
         margen_utilidad = st.number_input("⚙️ Margen Utilidad (%)", min_value=0.0, max_value=500.0, value=25.0, step=1.0)
         
@@ -270,7 +273,7 @@ if menu_opcion == "📄 Procesar Factura":
     
     if archivo_subido is not None:
         if st.button("🚀 Detectar Proveedor y Procesar Documento"):
-            with st.spinner("🔍 Analizando documento y extrayendo ítems..."):
+            with st.spinner("🔍 Analizando documento y aplicando perfil del proveedor..."):
                 try:
                     if not gemini_key: raise ValueError("No hay clave de API configurada.")
                     model = genai.GenerativeModel('gemini-3.8-flash')
@@ -316,8 +319,7 @@ if menu_opcion == "📄 Procesar Factura":
                     prompt_unificado = (
                         f"Estás procesando un tique o factura del proveedor: '{prov_encontrado}'. "
                         f"Instrucción específica: {instruccion_proveedor} "
-                        "IMPORTANTE (Estructura de tique CND/BEES): Cada producto tiene una línea de texto arriba (con el nombre y formato ej. 24/591) y una línea abajo con la cantidad, la unidad (PC o UN), el precio unitario exacto (P.Unit) y el importe neto. "
-                        "Extrae 'precio_unitario' exactamente como aparece en la columna P.Unit del tique y la 'unidad' (PC o UN). "
+                        "Extrae 'precio_unitario' exactamente como aparece en el documento y la 'unidad' (PC o UN). "
                         "Devuelve un JSON puro con esta estructura exacta y llaves en minúscula: "
                         '{"paginacion": "1 de 1", "proveedor_detectado": "' + prov_encontrado + '", "subtotal": 0.0, "itbis": 0.0, "descuentos": 0.0, "total": 0.0, "items": [{"descripcion": "...", "tamano": "...", "cantidad": 1.0, "unidad": "PC", "precio_unitario": 0.0, "monto_neto": 0.0}]}. '
                         "Respuesta JSON pura."
@@ -377,13 +379,20 @@ if menu_opcion == "📄 Procesar Factura":
 
             master_dict = st.session_state.get("master_catalog", {})
             nombres_maestro_lista = list(master_dict.keys())
-            web_temp = st.session_state.get("web_encontrado_temporal", {})
 
             for idx, item in enumerate(items, start=1):
                 raw_desc = item.get("descripcion", "")
                 raw_tam = item.get("tamano", "")
                 
                 nombre_completo = limpiar_nombre_producto(raw_desc, raw_tam)
+                
+                # REGLA DE DISTINCIÓN DE ALOE PURE PLUS POR COSTO UNITARIO
+                if "ALOE PURE PLUS ORIGINAL" in nombre_completo:
+                    p_unit_check = safe_float(item.get("precio_unitario"), 0.0)
+                    if p_unit_check > 200.0:
+                        nombre_completo = "ALOE PURE PLUS ORIGINAL 1.5 LT"
+                        raw_tam = "1.5 LT"
+
                 m_med = re.search(r'(\d+\s*(?:ML|L|LT|G|KG|OZ|Z))', str((raw_tam or "") + " " + (raw_desc or "")).upper())
                 presentacion_limpia = m_med.group(1) if m_med else (raw_tam if raw_tam else "S/P")
 
@@ -391,7 +400,8 @@ if menu_opcion == "📄 Procesar Factura":
 
                 cant_compra = safe_float(item.get("cantidad"), 1.0)
                 unidad = str(item.get("unidad", ""))
-                empaque = parse_empaque(raw_tam, unidad, raw_desc)
+                
+                empaque = parse_empaque_proveedor(prov_actual, raw_tam, unidad, raw_desc)
                 total_unidades = int(cant_compra * empaque)
 
                 p_unit_extraido = safe_float(item.get("precio_unitario"), 0.0)
@@ -418,10 +428,7 @@ if menu_opcion == "📄 Procesar Factura":
                 display_codigo = codigo_final
                 if codigo_final == "S/C":
                     st.markdown("---")
-                    
-                    key_temp = f"{idx}_{nombre_completo}"
-                    
-                    col_c1, col_c2, col_c3 = st.columns([2, 1, 1])
+                    col_c1, col_c2 = st.columns([2, 1])
                     with col_c1:
                         st.markdown(f"⚠️ **{nombre_completo} ({presentacion_limpia})** sin código.")
                         sel_maestro = st.selectbox(
@@ -438,50 +445,6 @@ if menu_opcion == "📄 Procesar Factura":
                             st.success(f"¡Relacionado con '{sel_maestro}' y guardado en el Catálogo Maestro!")
                             st.rerun()
                     with col_c2:
-                        st.markdown("<br>", unsafe_allow_html=True)
-                        if key_temp not in web_temp:
-                            if st.button(f"🌐 Buscar en Web", key=f"web_btn_{idx}_{nombre_completo}"):
-                                with st.spinner(f"Consultando bases de datos de códigos UPC/EAN..."):
-                                    try:
-                                        model_web = genai.GenerativeModel('gemini-3.8-flash')
-                                        prompt_web = (
-                                            f"Actúa como un experto en logística de inventarios y códigos de barras de productos de consumo masivo (supermercados y POS). "
-                                            f"Busca en internet el código de barras UPC o EAN oficial exacto para la unidad individual del producto: '{nombre_completo} con presentación {presentacion_limpia}'. "
-                                            "IMPORTANTE: Asegúrate de que corresponda al código de barras de la unidad/botella y no a una caja de empaque múltiple. "
-                                            "Devuelve estrictamente y únicamente el número de código de barras puro (de 8 a 14 dígitos). No agregues texto ni explicaciones."
-                                        )
-                                        res_web = model_web.generate_content(prompt_web)
-                                        codigo_web = clean_ean_code(res_web.text.strip())
-                                        if codigo_web != "S/C":
-                                            web_temp[key_temp] = codigo_web
-                                            st.session_state["web_encontrado_temporal"] = web_temp
-                                            st.rerun()
-                                        else:
-                                            st.warning("No se halló el código en la web automáticamente.")
-                                    except Exception:
-                                        st.error("Error al consultar la web.")
-                        else:
-                            codigo_hallado = web_temp[key_temp]
-                            st.info(f"✨ Hallado: **{codigo_hallado}**")
-                            
-                            sub_col_b1, sub_col_b2 = st.columns(2)
-                            with sub_col_b1:
-                                if st.button(f"✅ Confirmar", key=f"conf_btn_{idx}_{nombre_completo}"):
-                                    display_codigo = codigo_hallado
-                                    st.session_state["codigos_manuales_sesion"][nombre_completo] = display_codigo
-                                    master_dict[nombre_completo] = display_codigo
-                                    save_json_file(MASTER_CATALOG_FILE, master_dict)
-                                    del web_temp[key_temp]
-                                    st.session_state["web_encontrado_temporal"] = web_temp
-                                    st.success(f"¡Agregado y asignado!")
-                                    st.rerun()
-                            with sub_col_b2:
-                                if st.button(f"❌ Rechazar", key=f"rej_btn_{idx}_{nombre_completo}"):
-                                    del web_temp[key_temp]
-                                    st.session_state["web_encontrado_temporal"] = web_temp
-                                    st.warning("Resultado rechazado. Puedes volver a buscar.")
-                                    st.rerun()
-                    with col_c3:
                         st.markdown("<br>", unsafe_allow_html=True)
                         codigo_manual_input = st.text_input("O ingresa código manual", key=f"manual_input_{idx}_{nombre_completo}", placeholder="Ej. 052000324822")
                         if codigo_manual_input and len(codigo_manual_input.strip()) >= 7:
