@@ -231,14 +231,14 @@ st.sidebar.markdown("<h3 style='color: #0284c7;'>⚡ WilPOS System</h3>", unsafe
 menu_opcion = st.sidebar.radio("Navegación", ["📄 Procesar Factura", "📁 Catálogo Maestro EAN", "🏢 Gestionar Proveedores"])
 
 st.sidebar.markdown("---")
-st.sidebar.markdown("<p style='font-size: 0.8rem; color: #10b981; font-weight: 600;'>🟢 Consulta Web Experta Activa</p>", unsafe_allow_html=True)
+st.sidebar.markdown("<p style='font-size: 0.8rem; color: #10b981; font-weight: 600;'>🟢 Validación Web Activa</p>", unsafe_allow_html=True)
 
 # ==========================================
 # MÓDULO 1: PROCESAR FACTURA
 # ==========================================
 if menu_opcion == "📄 Procesar Factura":
     st.markdown("<h2>📄 Procesador Inteligente con Detección Automática</h2>", unsafe_allow_html=True)
-    st.markdown("<p style='color: #64748b;'>Sube tu factura. El botón 'Buscar en Web' utiliza un motor experto para garantizar códigos UPC/EAN de unidad precisos.</p>", unsafe_allow_html=True)
+    st.markdown("<p style='color: #64748b;'>Sube tu factura. Puedes confirmar el código hallado o rechazarlo para reintentar la búsqueda web.</p>", unsafe_allow_html=True)
     st.markdown("---")
 
     if "factura_data" not in st.session_state: st.session_state["factura_data"] = None
@@ -420,12 +420,11 @@ if menu_opcion == "📄 Procesar Factura":
                                 with st.spinner(f"Consultando bases de datos de códigos UPC/EAN..."):
                                     try:
                                         model_web = genai.GenerativeModel('gemini-3.8-flash')
-                                        # Consulta web experta optimizada para retail y códigos unitarios
                                         prompt_web = (
                                             f"Actúa como un experto en logística de inventarios y códigos de barras de productos de consumo masivo (supermercados y POS). "
                                             f"Busca en internet el código de barras UPC o EAN oficial exacto para la unidad individual del producto: '{nombre_completo} con presentación {presentacion_limpia}'. "
-                                            "IMPORTANTE: Asegúrate de que corresponda al código de barras de la unidad/botella y no a una caja de empaque múltiple o de mayoristas a menos que sea un tique de caja. "
-                                            "Devuelve estrictamente y únicamente el número de código de barras puro (de 8 a 14 dígitos). No agregues texto, comentarios ni explicaciones."
+                                            "IMPORTANTE: Asegúrate de que corresponda al código de barras de la unidad/botella y no a una caja de empaque múltiple. "
+                                            "Devuelve estrictamente y únicamente el número de código de barras puro (de 8 a 14 dígitos). No agregues texto ni explicaciones."
                                         )
                                         res_web = model_web.generate_content(prompt_web)
                                         codigo_web = clean_ean_code(res_web.text.strip())
@@ -440,15 +439,24 @@ if menu_opcion == "📄 Procesar Factura":
                         else:
                             codigo_hallado = web_temp[key_temp]
                             st.info(f"✨ Hallado: **{codigo_hallado}**")
-                            if st.button(f"✅ Confirmar y Agregar", key=f"conf_btn_{idx}_{nombre_completo}"):
-                                display_codigo = codigo_hallado
-                                st.session_state["codigos_manuales_sesion"][nombre_completo] = display_codigo
-                                master_dict[nombre_completo] = display_codigo
-                                save_json_file(MASTER_CATALOG_FILE, master_dict)
-                                del web_temp[key_temp]
-                                st.session_state["web_encontrado_temporal"] = web_temp
-                                st.success(f"¡Agregado al Catálogo Maestro y asignado!")
-                                st.rerun()
+                            
+                            sub_col_b1, sub_col_b2 = st.columns(2)
+                            with sub_col_b1:
+                                if st.button(f"✅ Confirmar", key=f"conf_btn_{idx}_{nombre_completo}"):
+                                    display_codigo = codigo_hallado
+                                    st.session_state["codigos_manuales_sesion"][nombre_completo] = display_codigo
+                                    master_dict[nombre_completo] = display_codigo
+                                    save_json_file(MASTER_CATALOG_FILE, master_dict)
+                                    del web_temp[key_temp]
+                                    st.session_state["web_encontrado_temporal"] = web_temp
+                                    st.success(f"¡Agregado y asignado!")
+                                    st.rerun()
+                            with sub_col_b2:
+                                if st.button(f"❌ Rechazar", key=f"rej_btn_{idx}_{nombre_completo}"):
+                                    del web_temp[key_temp]
+                                    st.session_state["web_encontrado_temporal"] = web_temp
+                                    st.warning("Resultado rechazado. Puedes volver a buscar.")
+                                    st.rerun()
                     with col_c3:
                         st.markdown("<br>", unsafe_allow_html=True)
                         codigo_manual_input = st.text_input("O ingresa código manual", key=f"manual_input_{idx}_{nombre_completo}", placeholder="Ej. 052000324822")
