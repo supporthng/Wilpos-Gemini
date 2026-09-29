@@ -231,14 +231,14 @@ st.sidebar.markdown("<h3 style='color: #0284c7;'>⚡ WilPOS System</h3>", unsafe
 menu_opcion = st.sidebar.radio("Navegación", ["📄 Procesar Factura", "📁 Catálogo Maestro EAN", "🏢 Gestionar Proveedores"])
 
 st.sidebar.markdown("---")
-st.sidebar.markdown("<p style='font-size: 0.8rem; color: #10b981; font-weight: 600;'>🟢 Notificación Web Activa</p>", unsafe_allow_html=True)
+st.sidebar.markdown("<p style='font-size: 0.8rem; color: #10b981; font-weight: 600;'>🟢 Consulta Web Experta Activa</p>", unsafe_allow_html=True)
 
 # ==========================================
 # MÓDULO 1: PROCESAR FACTURA
 # ==========================================
 if menu_opcion == "📄 Procesar Factura":
     st.markdown("<h2>📄 Procesador Inteligente con Detección Automática</h2>", unsafe_allow_html=True)
-    st.markdown("<p style='color: #64748b;'>Sube tu factura. Al buscar en la web, el sistema te pedirá confirmación antes de agregarlo al maestro.</p>", unsafe_allow_html=True)
+    st.markdown("<p style='color: #64748b;'>Sube tu factura. El botón 'Buscar en Web' utiliza un motor experto para garantizar códigos UPC/EAN de unidad precisos.</p>", unsafe_allow_html=True)
     st.markdown("---")
 
     if "factura_data" not in st.session_state: st.session_state["factura_data"] = None
@@ -399,7 +399,6 @@ if menu_opcion == "📄 Procesar Factura":
                 if codigo_final == "S/C":
                     st.markdown("---")
                     
-                    # Verificar si ya se encontró un código en web pendiente de confirmación para este ítem
                     key_temp = f"{idx}_{nombre_completo}"
                     
                     col_c1, col_c2, col_c3 = st.columns([2, 1, 1])
@@ -418,12 +417,15 @@ if menu_opcion == "📄 Procesar Factura":
                         st.markdown("<br>", unsafe_allow_html=True)
                         if key_temp not in web_temp:
                             if st.button(f"🌐 Buscar en Web", key=f"web_btn_{idx}_{nombre_completo}"):
-                                with st.spinner(f"Buscando código EAN oficial en la web..."):
+                                with st.spinner(f"Consultando bases de datos de códigos UPC/EAN..."):
                                     try:
                                         model_web = genai.GenerativeModel('gemini-3.8-flash')
+                                        # Consulta web experta optimizada para retail y códigos unitarios
                                         prompt_web = (
-                                            f"Busca en internet el código de barras UPC o EAN exacto de este producto: '{nombre_completo} {presentacion_limpia}'. "
-                                            "Devuelve únicamente el número de código de barras (por ejemplo, 052000324822). No agregues texto ni explicación."
+                                            f"Actúa como un experto en logística de inventarios y códigos de barras de productos de consumo masivo (supermercados y POS). "
+                                            f"Busca en internet el código de barras UPC o EAN oficial exacto para la unidad individual del producto: '{nombre_completo} con presentación {presentacion_limpia}'. "
+                                            "IMPORTANTE: Asegúrate de que corresponda al código de barras de la unidad/botella y no a una caja de empaque múltiple o de mayoristas a menos que sea un tique de caja. "
+                                            "Devuelve estrictamente y únicamente el número de código de barras puro (de 8 a 14 dígitos). No agregues texto, comentarios ni explicaciones."
                                         )
                                         res_web = model_web.generate_content(prompt_web)
                                         codigo_web = clean_ean_code(res_web.text.strip())
@@ -432,11 +434,10 @@ if menu_opcion == "📄 Procesar Factura":
                                             st.session_state["web_encontrado_temporal"] = web_temp
                                             st.rerun()
                                         else:
-                                            st.warning("No se halló en la web automáticamente.")
+                                            st.warning("No se halló el código en la web automáticamente.")
                                     except Exception:
                                         st.error("Error al consultar la web.")
                         else:
-                            # Notificación y confirmación del código hallado en web
                             codigo_hallado = web_temp[key_temp]
                             st.info(f"✨ Hallado: **{codigo_hallado}**")
                             if st.button(f"✅ Confirmar y Agregar", key=f"conf_btn_{idx}_{nombre_completo}"):
