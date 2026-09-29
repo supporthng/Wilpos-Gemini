@@ -95,19 +95,19 @@ if "master_catalog" not in st.session_state:
         "FOUR LOKO GREEN": "849806001855", "FOUR LOKO PURPLE": "849806002746", "FOUR LOKO GOLD": "849806001756",
         "FOUR LOKO SANDIA": "849806001206", "FOUR LOKO WHITE": "849806005754", "ALOE PURE PLUS ORIGINAL": "8809125063011",
         "MY COCO PURE PLUS": "8809125063011",
-        # Álvarez & Sánchez
-        "SANTA HELENA MERLOT 75 CL": "7804300120986",
-        "SANTA HELENA RESERVADO RED BLEND 75 CL": "7804300150082",
-        "SANTA HELENA SAUVIGNON BLANC 75 CL": "7804300150041",
-        "SANTA HELENA VINO DULCE TINTO 75 CL": "7804300149307",
-        "SANTIAGO RUIZ ALBARIÑO 1.5 LT": "8420976010063",
-        "SANTIAGO RUIZ ALBARIÑO 375 CL": "8420976010087",
-        "SANTIAGO RUIZ ALBARIÑO 75 CL": "842097601070",
-        "SCHWEPPES AGUA TONICA 4 PACK 18 CL": "2000011980849",
-        "SCHWEPPES TONICA 1 LT": "2117974",
-        "SCHWEPPES TONICA ZERO 1 LT": "2138531",
-        "SELA BODEGAS RODA VINO TINTO 75 CL": "8014396003073",
-        "SOLAN DE CABRAS AGUA MINERAL NAT 1.5 LT": "8436538810767"
+        # Álvarez & Sánchez[cite: 3]
+        "SANTA HELENA MERLOT 75 CL": "7804300120986",[cite: 3]
+        "SANTA HELENA RESERVADO RED BLEND 75 CL": "7804300150082",[cite: 3]
+        "SANTA HELENA SAUVIGNON BLANC 75 CL": "7804300150041",[cite: 3]
+        "SANTA HELENA VINO DULCE TINTO 75 CL": "7804300149307",[cite: 3]
+        "SANTIAGO RUIZ ALBARIÑO 1.5 LT": "8420976010063",[cite: 3]
+        "SANTIAGO RUIZ ALBARIÑO 375 CL": "8420976010087",[cite: 3]
+        "SANTIAGO RUIZ ALBARIÑO 75 CL": "842097601070",[cite: 3]
+        "SCHWEPPES AGUA TONICA 4 PACK 18 CL": "2000011980849",[cite: 3]
+        "SCHWEPPES TONICA 1 LT": "2117974",[cite: 3]
+        "SCHWEPPES TONICA ZERO 1 LT": "2138531",[cite: 3]
+        "SELA BODEGAS RODA VINO TINTO 75 CL": "8014396003073",[cite: 3]
+        "SOLAN DE CABRAS AGUA MINERAL NAT 1.5 LT": "8436538810767"[cite: 3]
     }
     for k, v in base_defaults.items():
         if k not in loaded_master: loaded_master[k] = v
@@ -187,19 +187,19 @@ def buscar_en_catalogo_maestro(nombre_producto, presentacion=""):
         "FOUR LOKO GREEN": "849806001855", "FOUR LOKO PURPLE": "849806002746", "FOUR LOKO GOLD": "849806001756",
         "FOUR LOKO SANDIA": "849806001206", "FOUR LOKO WHITE": "849806005754", "ALOE PURE PLUS ORIGINAL": "8809125063011",
         "MY COCO PURE PLUS": "8809125063011",
-        # Álvarez & Sánchez
-        "SANTA HELENA MERLOT 75 CL": "7804300120986",
-        "SANTA HELENA RESERVADO RED BLEND 75 CL": "7804300150082",
-        "SANTA HELENA SAUVIGNON BLANC 75 CL": "7804300150041",
-        "SANTA HELENA VINO DULCE TINTO 75 CL": "7804300149307",
-        "SANTIAGO RUIZ ALBARIÑO 1.5 LT": "8420976010063",
-        "SANTIAGO RUIZ ALBARIÑO 375 CL": "8420976010087",
-        "SANTIAGO RUIZ ALBARIÑO 75 CL": "842097601070",
-        "SCHWEPPES AGUA TONICA 4 PACK 18 CL": "2000011980849",
-        "SCHWEPPES TONICA 1 LT": "2117974",
-        "SCHWEPPES TONICA ZERO 1 LT": "2138531",
-        "SELA BODEGAS RODA VINO TINTO 75 CL": "8014396003073",
-        "SOLAN DE CABRAS AGUA MINERAL NAT 1.5 LT": "8436538810767"
+        # Álvarez & Sánchez[cite: 3]
+        "SANTA HELENA MERLOT 75 CL": "7804300120986",[cite: 3]
+        "SANTA HELENA RESERVADO RED BLEND 75 CL": "7804300150082",[cite: 3]
+        "SANTA HELENA SAUVIGNON BLANC 75 CL": "7804300150041",[cite: 3]
+        "SANTA HELENA VINO DULCE TINTO 75 CL": "7804300149307",[cite: 3]
+        "SANTIAGO RUIZ ALBARIÑO 1.5 LT": "8420976010063",[cite: 3]
+        "SANTIAGO RUIZ ALBARIÑO 375 CL": "8420976010087",[cite: 3]
+        "SANTIAGO RUIZ ALBARIÑO 75 CL": "842097601070",[cite: 3]
+        "SCHWEPPES AGUA TONICA 4 PACK 18 CL": "2000011980849",[cite: 3]
+        "SCHWEPPES TONICA 1 LT": "2117974",[cite: 3]
+        "SCHWEPPES TONICA ZERO 1 LT": "2138531",[cite: 3]
+        "SELA BODEGAS RODA VINO TINTO 75 CL": "8014396003073",[cite: 3]
+        "SOLAN DE CABRAS AGUA MINERAL NAT 1.5 LT": "8436538810767"[cite: 3]
     }
 
     for key, code in cnd_sinonimos.items():
@@ -221,14 +221,14 @@ st.sidebar.markdown("<h3 style='color: #0284c7;'>⚡ WilPOS System</h3>", unsafe
 menu_opcion = st.sidebar.radio("Navegación", ["📄 Procesar Factura", "📁 Catálogo Maestro EAN", "🏢 Gestionar Proveedores"])
 
 st.sidebar.markdown("---")
-st.sidebar.markdown("<p style='font-size: 0.8rem; color: #10b981; font-weight: 600;'>🟢 Catálogo y Perfiles Activos</p>", unsafe_allow_html=True)
+st.sidebar.markdown("<p style='font-size: 0.8rem; color: #10b981; font-weight: 600;'>🟢 Detección Automática Activa</p>", unsafe_allow_html=True)
 
 # ==========================================
-# MÓDULO 1: PROCESAR FACTURA
+# MÓDULO 1: PROCESAR FACTURA (CON DETECCIÓN AUTOMÁTICA)
 # ==========================================
 if menu_opcion == "📄 Procesar Factura":
-    st.markdown("<h2>📄 Procesador Inteligente por Proveedor</h2>", unsafe_allow_html=True)
-    st.markdown("<p style='color: #64748b;'>Selecciona el proveedor exacto para aplicar su perfil de formato independiente.</p>", unsafe_allow_html=True)
+    st.markdown("<h2>📄 Procesador Inteligente con Detección Automática de Proveedor</h2>", unsafe_allow_html=True)
+    st.markdown("<p style='color: #64748b;'>Sube tu factura o tique. El sistema detectará el proveedor y aplicará su perfil y empaques automáticamente.</p>", unsafe_allow_html=True)
     st.markdown("---")
 
     if "factura_data" not in st.session_state: st.session_state["factura_data"] = None
@@ -236,19 +236,18 @@ if menu_opcion == "📄 Procesar Factura":
     if "paginacion_detectada" not in st.session_state: st.session_state["paginacion_detectada"] = ""
 
     st.markdown('<div class="card-container">', unsafe_allow_html=True)
-    lista_proveedores = list(st.session_state["supplier_memory"].keys()) + ["➕ Registrar Nuevo Proveedor"]
     
     col_s1, col_s2 = st.columns([2, 1])
     with col_s1:
-        prov_seleccionado = st.selectbox("🏢 Selecciona el Proveedor", lista_proveedores)
+        st.info("💡 **Modo Automático:** Sube tu archivo y el sistema reconocerá el proveedor por sí mismo.")
     with col_s2:
         margen_utilidad = st.number_input("⚙️ Margen Utilidad (%)", min_value=0.0, max_value=500.0, value=25.0, step=1.0)
         
     archivo_subido = st.file_uploader("📂 Sube tu factura o tique (PDF multi-página o Imagen)", type=["pdf", "png", "jpg", "jpeg"])
     
     if archivo_subido is not None:
-        if st.button("🚀 Procesar Factura con Perfil Aislado"):
-            with st.spinner(f"🚀 Leyendo factura bajo la configuración exclusiva de '{prov_seleccionado}'..."):
+        if st.button("🚀 Detectar Proveedor y Procesar Documento"):
+            with st.spinner("🔍 Analizando documento y detectando proveedor automáticamente..."):
                 try:
                     if not gemini_key: raise ValueError("No hay clave de API configurada.")
                     model = genai.GenerativeModel('gemini-3.8-flash')
@@ -258,20 +257,50 @@ if menu_opcion == "📄 Procesar Factura":
                     f_type = getattr(archivo_subido, 'type', 'image/jpeg')
                     image_input = {"mime_type": "application/pdf", "data": file_bytes} if "pdf" in f_type.lower() else Image.open(io.BytesIO(file_bytes))
 
-                    supp_mem = st.session_state["supplier_memory"]
+                    # Paso 1: Detección rápida del nombre del proveedor en el documento
+                    prompt_deteccion = (
+                        "Analiza este documento comercial (factura o tique) e identifica estrictamente el nombre comercial del proveedor emisor "
+                        "(por ejemplo: ALVAREZ & SANCHEZ, CND, BEES, CASA BRUGAL, etc.). "
+                        "Devuelve únicamente un JSON con esta estructura: {\"proveedor_detectado\": \"NOMBRE DEL PROVEEDOR\"}"
+                    )
                     
-                    if prov_seleccionado == "➕ Registrar Nuevo Proveedor":
-                        instruccion_proveedor = "Analiza el documento, identifica el nombre comercial del proveedor y extrae todos sus renglones con descripción, tamaño, cantidad, unidad y monto neto."
-                        prov_nombre_objetivo = "NUEVO PROVEEDOR"
-                    else:
-                        instruccion_proveedor = supp_mem[prov_seleccionado].get("instruccion_prompt", "Extrae todos los ítems.")
-                        prov_nombre_objetivo = prov_seleccionado
+                    response_det = model.generate_content([image_input, prompt_deteccion])
+                    raw_det_text = response_det.text.strip()
+                    if raw_det_text.startswith("```json"): raw_det_text = raw_det_text[7:]
+                    if raw_det_text.endswith("```"): raw_det_text = raw_det_text[:-3]
+                    
+                    det_json = json.loads(raw_det_text.strip())
+                    nombre_detectado_raw = str(det_json.get("proveedor_detectado", "PROVEEDOR GENERAL")).upper().strip()
 
+                    # Buscar coincidencia en la memoria de proveedores
+                    supp_mem = st.session_state["supplier_memory"]
+                    prov_encontrado = None
+                    
+                    for p_key in supp_mem.keys():
+                        if p_key in nombre_detectado_raw or nombre_detectado_raw in p_key:
+                            prov_encontrado = p_key
+                            break
+                    
+                    if not prov_encontrado:
+                        # Si no existe en memoria, se crea un perfil automático para él
+                        prov_encontrado = nombre_detectado_raw
+                        supp_mem[prov_encontrado] = {
+                            "nombre": prov_encontrado,
+                            "tipo_formato": "factura_desglose",
+                            "instruccion_prompt": f"Analiza esta factura de {prov_encontrado} renglón por renglón. Extrae 'descripcion', 'tamano', 'cantidad', 'unidad' y 'monto_neto'."
+                        }
+                        st.session_state["supplier_memory"] = supp_mem
+                        save_json_file(SUPPLIER_MEMORY_FILE, supp_mem)
+
+                    # Obtener la instrucción exclusiva de este proveedor
+                    instruccion_proveedor = supp_mem[prov_encontrado].get("instruccion_prompt", "Extrae todos los ítems.")
+
+                    # Paso 2: Procesamiento completo con el perfil individual del proveedor detectado
                     prompt_unificado = (
-                        f"Estás procesando un documento del proveedor '{prov_nombre_objetivo}'. "
-                        f"Instrucción de formato específica para este proveedor: {instruccion_proveedor} "
+                        f"Estás procesando una factura del proveedor detectado: '{prov_encontrado}'. "
+                        f"Instrucción de formato específica: {instruccion_proveedor} "
                         "Devuelve un JSON puro con esta estructura exacta y llaves en minúscula: "
-                        '{"paginacion": "1 de 1", "proveedor_detectado": "...", "subtotal": 0.0, "itbis": 0.0, "descuentos": 0.0, "total": 0.0, "items": [{"descripcion": "...", "tamano": "...", "cantidad": 1.0, "unidad": "...", "monto_neto": 0.0}]}. '
+                        '{"paginacion": "1 de 1", "proveedor_detectado": "' + prov_encontrado + '", "subtotal": 0.0, "itbis": 0.0, "descuentos": 0.0, "total": 0.0, "items": [{"descripcion": "...", "tamano": "...", "cantidad": 1.0, "unidad": "...", "monto_neto": 0.0}]}. '
                         "Respuesta JSON pura."
                     )
 
@@ -283,24 +312,12 @@ if menu_opcion == "📄 Procesar Factura":
                     if raw_text.endswith("```"): raw_text = raw_text[:-3]
                     
                     parsed_json = json.loads(raw_text.strip())
-                    
-                    prov_a_usar = prov_seleccionado
-                    if prov_seleccionado == "➕ Registrar Nuevo Proveedor":
-                        prov_a_usar = str(parsed_json.get("proveedor_detectado") or "PROVEEDOR NUEVO").upper().strip()
-                        if prov_a_usar not in supp_mem:
-                            supp_mem[prov_a_usar] = {
-                                "nombre": prov_a_usar,
-                                "tipo_formato": "personalizado",
-                                "instruccion_prompt": instruccion_proveedor
-                            }
-                            st.session_state["supplier_memory"] = supp_mem
-                            save_json_file(SUPPLIER_MEMORY_FILE, supp_mem)
 
                     st.session_state["factura_data"] = parsed_json
-                    st.session_state["prov_activo"] = prov_a_usar
+                    st.session_state["prov_activo"] = prov_encontrado
                     st.session_state["paginacion_detectada"] = str(parsed_json.get("paginacion", "1 de 1"))
                     
-                    st.success(f"✅ ¡Factura procesada con el perfil de **{prov_a_usar}**! Se extrajeron **{len(parsed_json.get('items', []))}** renglones.")
+                    st.success(f"🎯 **¡Proveedor Detectado Automáticamente!** Perfil aplicado: **{prov_encontrado}** ({len(parsed_json.get('items', []))} renglones extraídos).")
                 except Exception as e:
                     st.error(f"⚠️ Error al procesar: {str(e)}")
     st.markdown('</div>', unsafe_allow_html=True)
@@ -402,7 +419,6 @@ elif menu_opcion == "📁 Catálogo Maestro EAN":
 
     master_dict = st.session_state.get("master_catalog", {})
 
-    # Formulario para agregar o actualizar productos manualmente
     with st.expander("➕ Agregar o Actualizar Producto Manualmente en el Maestro", expanded=True):
         with st.form("form_agregar_maestro"):
             col_m1, col_m2 = st.columns([2, 1])
