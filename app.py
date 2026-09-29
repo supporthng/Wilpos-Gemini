@@ -94,8 +94,8 @@ if "master_catalog" not in st.session_state:
         "GATORADE UVA": "052000324822", "FOUR LOKO MARACUYA": "849806004962", "FOUR LOKO PONCHE DE FRUTAS": "849806001220",
         "FOUR LOKO GREEN": "849806001855", "FOUR LOKO PURPLE": "849806002746", "FOUR LOKO GOLD": "849806001756",
         "FOUR LOKO SANDIA": "849806001206", "FOUR LOKO WHITE": "849806005754", 
-        "ALOE PURE PLUS ORIGINAL": "8809125063011", 
         "ALOE PURE PLUS ORIGINAL 1.5 LT": "8809125063035",
+        "ALOE PURE PLUS ORIGINAL": "8809125063011", 
         "MY COCO PURE PLUS": "8809125063011",
         # Álvarez & Sánchez
         "SANTA HELENA MERLOT 75 CL": "7804300120986",
@@ -202,7 +202,9 @@ def buscar_en_catalogo_maestro(nombre_producto, presentacion=""):
 
     master_dict = st.session_state.get("master_catalog", {})
 
+    # Diccionario ordenado de sinónimos (las claves más largas/específicas van primero)
     cnd_sinonimos = {
+        "ALOE PURE PLUS ORIGINAL 1.5 LT": "8809125063035",
         "PTE. LIGHT HU 22OZ": "70601561", "PRESIDENTE LIGHT HU 22OZ": "70601561", "PTE. CJ 22OZ": "70601561",
         "PTE. HU 12OZ": "74621774", "PTE. LIGHT HU 12OZ": "74621774", "BRAHMA LIGHT HU 12OZ": "7468973200194",
         "BRAHMA LIGHT HU": "7468973200194", "BRAHMA LIGHT HU 16/650M": "7468973200200", "BRAHMA LIGHT 650ML": "7468973200200",
@@ -213,7 +215,6 @@ def buscar_en_catalogo_maestro(nombre_producto, presentacion=""):
         "FOUR LOKO GREEN": "849806001855", "FOUR LOKO PURPLE": "849806002746", "FOUR LOKO GOLD": "849806001756",
         "FOUR LOKO SANDIA": "849806001206", "FOUR LOKO WHITE": "849806005754", 
         "ALOE PURE PLUS ORIGINAL": "8809125063011", 
-        "ALOE PURE PLUS ORIGINAL 1.5 LT": "8809125063035",
         "MY COCO PURE PLUS": "8809125063011",
         # Álvarez & Sánchez
         "SANTA HELENA MERLOT 75 CL": "7804300120986",
@@ -249,7 +250,7 @@ st.sidebar.markdown("<h3 style='color: #0284c7;'>⚡ WilPOS Multi-Proveedor</h3>
 menu_opcion = st.sidebar.radio("Navegación", ["📄 Procesar Factura", "📁 Catálogo Maestro EAN", "🏢 Gestionar Proveedores"])
 
 st.sidebar.markdown("---")
-st.sidebar.markdown("<p style='font-size: 0.8rem; color: #10b981; font-weight: 600;'>🟢 Aloe 1.5L por Precio Alto Activo</p>", unsafe_allow_html=True)
+st.sidebar.markdown("<p style='font-size: 0.8rem; color: #10b981; font-weight: 600;'>🟢 Sinónimos Ordenados por Prioridad</p>", unsafe_allow_html=True)
 
 # ==========================================
 # MÓDULO 1: PROCESAR FACTURA
@@ -388,7 +389,7 @@ if menu_opcion == "📄 Procesar Factura":
                 
                 nombre_completo = limpiar_nombre_producto(raw_desc, raw_tam)
                 
-                # REGLA DE CÓDIGO PARA ALOE PURE PLUS SEGÚN PRECIO (Sin alterar el nombre)
+                # REGLA DE CÓDIGO PARA ALOE PURE PLUS SEGÚN PRECIO (Sin alterar el nombre visual)
                 p_unit_check = safe_float(item.get("precio_unitario"), 0.0)
                 if "ALOE PURE PLUS ORIGINAL" in nombre_completo:
                     if p_unit_check > 200.0:
@@ -403,7 +404,6 @@ if menu_opcion == "📄 Procesar Factura":
 
                 codigo_final = buscar_en_catalogo_maestro(nombre_completo, presentacion_limpia)
 
-                # Si se usó la clave temporal para buscar en maestro, restaurar nombre limpio original en visualización si se prefiere
                 nombre_display_excel = "ALOE PURE PLUS ORIGINAL" if "1.5 LT" in nombre_completo else nombre_completo
 
                 cant_compra = safe_float(item.get("cantidad"), 1.0)
