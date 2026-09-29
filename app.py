@@ -61,7 +61,7 @@ def save_json_file(filepath, data):
         pass
 
 # ==========================================
-# GESTIÓN DE PERFILES AISLADOS POR PROVEEDOR
+# GESTIÓN DE PERFILES Y CATÁLOGO
 # ==========================================
 if "supplier_memory" not in st.session_state:
     loaded_supps = load_json_file(SUPPLIER_MEMORY_FILE, "dict")
@@ -69,23 +69,14 @@ if "supplier_memory" not in st.session_state:
         "CND / BEES": {
             "nombre": "CND / BEES",
             "tipo_formato": "tique_doble_linea",
-            "instruccion_prompt": (
-                "Analiza este tique de CND / BEES renglón por renglón. "
-                "Extrae estrictamente: 'descripcion', 'tamano', 'cantidad', 'unidad' (PC/UN) "
-                "y el valor monetario de la columna 'impuesto_neto'."
-            )
+            "instruccion_prompt": "Analiza este tique de CND / BEES renglón por renglón. Extrae 'descripcion', 'tamano', 'cantidad', 'unidad' (PC/UN) y 'impuesto_neto'."
         },
         "ALVAREZ & SANCHEZ": {
             "nombre": "ALVAREZ & SANCHEZ",
             "tipo_formato": "factura_desglose",
-            "instruccion_prompt": (
-                "Analiza esta factura de ALVAREZ & SANCHEZ renglón por renglón. "
-                "Extrae estrictamente: 'descripcion', 'tamano' (ej. 12 PZA, 6 PZA), 'cantidad' (número de cajas), "
-                "'unidad' (CAJ/PZA), y el valor monetario exacto de la columna 'monto_neto'."
-            )
+            "instruccion_prompt": "Analiza esta factura de ALVAREZ & SANCHEZ renglón por renglón. Extrae 'descripcion', 'tamano' (ej. 12 PZA, 6 PZA), 'cantidad' (cajas), 'unidad' (CAJ/PZA) y 'monto_neto'."
         }
     }
-    
     if not loaded_supps:
         loaded_supps = default_profiles
         save_json_file(SUPPLIER_MEMORY_FILE, loaded_supps)
@@ -157,19 +148,12 @@ def limpiar_nombre_producto(descripcion_raw, tamano_raw):
     return desc
 
 def parse_empaque(tamano_txt="", unidad_txt="", descripcion_txt=""):
-    """
-    Valida y extrae estrictamente cuántas unidades (piezas) contiene cada empaque/caja
-    leyendo la combinación del tamaño, unidad y descripción.
-    """
     combined = f"{str(tamano_txt)} {str(unidad_txt)} {str(descripcion_txt)}".upper()
-    
-    # 1. Búsqueda explícita de formato numérico de piezas por caja (ej. 12 PZA, 6 PZA, 24 PZA)
     m_pza = re.search(r'\b(\d{1,2})\s*PZA\b', combined)
     if m_pza:
         val = int(m_pza.group(1))
         if val > 0: return val
 
-    # 2. Búsqueda genérica de empaque en el texto
     m_pack = re.search(r'\b(48|24|20|18|16|12|6|4)\b', combined)
     if m_pack:
         val = int(m_pack.group(1))
@@ -179,7 +163,6 @@ def parse_empaque(tamano_txt="", unidad_txt="", descripcion_txt=""):
     if "UN" in unidad_upper or "PZA" in unidad_upper and "CAJ" not in unidad_upper:
         return 1
 
-    # Reglas por defecto según categoría de productos
     if "SANTA HELENA" in combined or "SELA" in combined: return 12
     if "SANTIAGO RUIZ" in combined: return 6
     if "SCHWEPPES" in combined: return 6 if "1 LT" in combined else 24
@@ -238,7 +221,7 @@ st.sidebar.markdown("<h3 style='color: #0284c7;'>⚡ WilPOS System</h3>", unsafe
 menu_opcion = st.sidebar.radio("Navegación", ["📄 Procesar Factura", "📁 Catálogo Maestro EAN", "🏢 Gestionar Proveedores"])
 
 st.sidebar.markdown("---")
-st.sidebar.markdown("<p style='font-size: 0.8rem; color: #10b981; font-weight: 600;'>🟢 Validación de Empaque Activa</p>", unsafe_allow_html=True)
+st.sidebar.markdown("<p style='font-size: 0.8rem; color: #10b981; font-weight: 600;'>🟢 Catálogo y Perfiles Activos</p>", unsafe_allow_html=True)
 
 # ==========================================
 # MÓDULO 1: PROCESAR FACTURA
@@ -369,7 +352,6 @@ if menu_opcion == "📄 Procesar Factura":
                 cant_compra = safe_float(item.get("cantidad"), 1.0)
                 unidad = str(item.get("unidad", ""))
                 
-                # Monto neto real de la línea con descuento
                 monto_neto_fila = safe_float(
                     item.get("monto_neto") or 
                     item.get("impuesto_neto") or 
@@ -378,11 +360,8 @@ if menu_opcion == "📄 Procesar Factura":
                     0.0
                 )
 
-                # Validación estricta del empaque y cálculo del stock total
                 empaque = parse_empaque(raw_tam, unidad, raw_desc)
                 total_unidades = int(cant_compra * empaque)
-                
-                # Costo unitario real por unidad individual (Monto Neto / Stock Total)
                 costo_unitario_real = round(monto_neto_fila / total_unidades, 2) if total_unidades > 0 else 0.0
 
                 if costo_unitario_real > 0:
@@ -414,13 +393,40 @@ if menu_opcion == "📄 Procesar Factura":
             )
 
 # ==========================================
-# MÓDULO 2: CATÁLOGO MAESTRO EAN
+# MÓDULO 2: CATÁLOGO MAESTRO EAN (CON REGISTRO MANUAL)
 # ==========================================
 elif menu_opcion == "📁 Catálogo Maestro EAN":
-    st.markdown("<h2>📁 Catálogo Maestro de Productos</h2>", unsafe_allow_html=True)
-    master_data = st.session_state.get("master_catalog", {})
-    if master_data:
-        df_show = pd.DataFrame([{"Producto": k, "Código EAN Oficial": v} for k, v in master_data.items()])
+    st.markdown("<h2>📁 Gestión del Catálogo Maestro EAN</h2>", unsafe_allow_html=True)
+    st.markdown("<p style='color: #64748b;'>Administra y registra nuevos productos con sus códigos de barra o SAP oficiales.</p>", unsafe_allow_html=True)
+    st.markdown("---")
+
+    master_dict = st.session_state.get("master_catalog", {})
+
+    # Formulario para agregar o actualizar productos manualmente
+    with st.expander("➕ Agregar o Actualizar Producto Manualmente en el Maestro", expanded=True):
+        with st.form("form_agregar_maestro"):
+            col_m1, col_m2 = st.columns([2, 1])
+            with col_m1:
+                nuevo_prod_nombre = st.text_input("Nombre / Descripción del Producto (Ej: SCHWEPPES TONICA 1 LT)")
+            with col_m2:
+                nuevo_prod_codigo = st.text_input("Código EAN / SAP Oficial (Ej: 2117974)")
+            
+            btn_guardar_maestro = st.form_submit_button("💾 Guardar en Catálogo Maestro")
+            if btn_guardar_maestro:
+                clean_name = nuevo_prod_nombre.upper().strip()
+                clean_code = clean_ean_code(nuevo_prod_codigo)
+                if clean_name and clean_code != "S/C":
+                    master_dict[clean_name] = clean_code
+                    st.session_state["master_catalog"] = master_dict
+                    save_json_file(MASTER_CATALOG_FILE, master_dict)
+                    st.success(f"✅ ¡Producto **{clean_name}** guardado con éxito con el código **{clean_code}**!")
+                    st.rerun()
+                else:
+                    st.error("⚠️ Por favor ingresa un nombre válido y un código EAN/SAP correcto.")
+
+    if master_dict:
+        st.markdown(f"### 📋 Productos Registrados en el Catálogo ({len(master_dict):,} registros)")
+        df_show = pd.DataFrame([{"Producto / Descripción": k, "Código EAN/SAP Oficial": v} for k, v in master_dict.items()])
         st.dataframe(df_show, use_container_width=True, hide_index=True)
 
 # ==========================================
