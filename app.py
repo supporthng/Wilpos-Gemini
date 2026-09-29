@@ -188,8 +188,6 @@ def buscar_en_catalogo_maestro(nombre_producto, presentacion=""):
     if n_upper in manual_dict: return manual_dict[n_upper]
 
     master_dict = st.session_state.get("master_catalog", {})
-
-    # Búsqueda robusta por coincidencia limpia (ignorando espacios y símbolos)
     n_clean = re.sub(r'[^A-Z0-9]', '', combined_query)
     
     for m_key, m_code in master_dict.items():
@@ -203,99 +201,106 @@ st.sidebar.markdown("<h3 style='color: #0284c7;'>⚡ WilPOS Multi-Proveedor</h3>
 menu_opcion = st.sidebar.radio("Navegación", ["📄 Procesar Factura", "📁 Catálogo Maestro EAN", "🏢 Gestionar Proveedores"])
 
 st.sidebar.markdown("---")
-st.sidebar.markdown("<p style='font-size: 0.8rem; color: #10b981; font-weight: 600;'>🟢 Match Robusto Maestro Activo</p>", unsafe_allow_html=True)
+st.sidebar.markdown("<p style='font-size: 0.8rem; color: #10b981; font-weight: 600;'>🟢 Multi-Página Acumulativo Activo</p>", unsafe_allow_html=True)
 
 # ==========================================
 # MÓDULO 1: PROCESAR FACTURA
 # ==========================================
 if menu_opcion == "📄 Procesar Factura":
-    st.markdown("<h2>📄 Procesador Inteligente Multi-Proveedor</h2>", unsafe_allow_html=True)
-    st.markdown("<p style='color: #64748b;'>Sube tu factura. El sistema cruza automáticamente con el catálogo maestro y extrae los códigos.</p>", unsafe_allow_html=True)
+    st.markdown("<h2>📄 Procesador Inteligente Multi-Proveedor (Multi-Página)</h2>", unsafe_allow_html=True)
+    st.markdown("<p style='color: #64748b;'>Sube una o varias páginas a la vez (imágenes o PDF). El sistema acumulará automáticamente todos los ítems.</p>", unsafe_allow_html=True)
     st.markdown("---")
 
     if "factura_data" not in st.session_state: st.session_state["factura_data"] = None
     if "prov_activo" not in st.session_state: st.session_state["prov_activo"] = ""
-    if "paginacion_detectada" not in st.session_state: st.session_state["paginacion_detectada"] = ""
 
     st.markdown('<div class="card-container">', unsafe_allow_html=True)
     
     col_s1, col_s2 = st.columns([2, 1])
     with col_s1:
-        st.info("💡 Sube tu documento. El sistema reconocerá el proveedor y aplicará sus reglas dedicadas.")
+        st.info("💡 Puedes seleccionar múltiples archivos (ej. Página 1 y Página 2) al mismo tiempo para procesarlos juntos.")
     with col_s2:
         margen_utilidad = st.number_input("⚙️ Margen Utilidad (%)", min_value=0.0, max_value=500.0, value=25.0, step=1.0)
         
-    archivo_subido = st.file_uploader("📂 Sube tu factura o tique (PDF multi-página o Imagen)", type=["pdf", "png", "jpg", "jpeg"])
+    archivos_subidos = st.file_uploader("📂 Sube tus páginas (puedes seleccionar varias imágenes o PDFs)", type=["pdf", "png", "jpg", "jpeg"], accept_multiple_files=True)
     
-    if archivo_subido is not None:
-        if st.button("🚀 Detectar Proveedor y Procesar Documento"):
-            with st.spinner("🔍 Analizando documento y consultando catálogo maestro..."):
+    if archivos_subidos:
+        if st.button("🚀 Procesar Páginas y Consolidar Inventario"):
+            with st.spinner("🔍 Analizando páginas y acumulando ítems..."):
                 try:
                     if not gemini_key: raise ValueError("No hay clave de API configurada.")
                     model = genai.GenerativeModel('gemini-3.8-flash')
                     
-                    archivo_subido.seek(0)
-                    file_bytes = archivo_subido.read()
-                    f_type = getattr(archivo_subido, 'type', 'image/jpeg')
-                    image_input = {"mime_type": "application/pdf", "data": file_bytes} if "pdf" in f_type.lower() else Image.open(io.BytesIO(file_bytes))
+                    todos_los_items = []
+                    subtotal_acum = 0.0
+                    itbis_acum = 0.0
+                    descuentos_acum = 0.0
+                    total_acum = 0.0
+                    prov_encontrado = "PROVEEDOR GENERAL"
 
-                    prompt_deteccion = (
-                        "Analiza este documento comercial (factura o tique) e identifica estrictamente el nombre comercial del proveedor emisor. "
-                        "Devuelve únicamente un JSON con esta estructura: {\"proveedor_detectado\": \"NOMBRE DEL PROVEEDOR\"}"
-                    )
-                    
-                    response_det = model.generate_content([image_input, prompt_deteccion])
-                    raw_det_text = response_det.text.strip()
-                    if raw_det_text.startswith("```json"): raw_det_text = raw_det_text[7:]
-                    if raw_det_text.endswith("```"): raw_det_text = raw_det_text[:-3]
-                    
-                    det_json = json.loads(raw_det_text.strip())
-                    nombre_detectado_raw = str(det_json.get("proveedor_detectado", "PROVEEDOR GENERAL")).upper().strip()
+                    for idx_f, archivo_subido in enumerate(archivos_subidos):
+                        archivo_subido.seek(0)
+                        file_bytes = archivo_subido.read()
+                        f_type = getattr(archivo_subido, 'type', 'image/jpeg')
+                        image_input = {"mime_type": "application/pdf", "data": file_bytes} if "pdf" in f_type.lower() else Image.open(io.BytesIO(file_bytes))
 
-                    supp_mem = st.session_state["supplier_memory"]
-                    prov_encontrado = None
-                    
-                    for p_key in supp_mem.keys():
-                        if p_key in nombre_detectado_raw or nombre_detectado_raw in p_key:
-                            prov_encontrado = p_key
-                            break
-                    
-                    if not prov_encontrado:
-                        prov_encontrado = nombre_detectado_raw
-                        supp_mem[prov_encontrado] = {
-                            "nombre": prov_encontrado,
-                            "tipo_formato": "factura_desglose",
-                            "instruccion_prompt": f"Analiza esta factura de {prov_encontrado} renglón por renglón. Extrae 'codigo_barras', 'descripcion', 'tamano', 'cantidad', 'unidad' y 'precio_unitario'."
-                        }
-                        st.session_state["supplier_memory"] = supp_mem
-                        save_json_file(SUPPLIER_MEMORY_FILE, supp_mem)
+                        if idx_f == 0:
+                            prompt_deteccion = (
+                                "Analiza este documento comercial e identifica estrictamente el nombre comercial del proveedor emisor. "
+                                "Devuelve únicamente un JSON: {\"proveedor_detectado\": \"NOMBRE DEL PROVEEDOR\"}"
+                            )
+                            response_det = model.generate_content([image_input, prompt_deteccion])
+                            raw_det_text = response_det.text.strip()
+                            if raw_det_text.startswith("```json"): raw_det_text = raw_det_text[7:]
+                            if raw_det_text.endswith("```"): raw_det_text = raw_det_text[:-3]
+                            det_json = json.loads(raw_det_text.strip())
+                            prov_raw = str(det_json.get("proveedor_detectado", "PROVEEDOR GENERAL")).upper().strip()
+                            
+                            supp_mem = st.session_state["supplier_memory"]
+                            for p_key in supp_mem.keys():
+                                if p_key in prov_raw or prov_raw in p_key:
+                                    prov_encontrado = p_key
+                                    break
+                            if prov_encontrado == "PROVEEDOR GENERAL":
+                                prov_encontrado = prov_raw
 
-                    instruccion_proveedor = supp_mem[prov_encontrado].get("instruccion_prompt", "Extrae todos los ítems.")
+                        instruccion_proveedor = st.session_state["supplier_memory"].get(prov_encontrado, {}).get("instruccion_prompt", "Extrae todos los ítems.")
 
-                    prompt_unificado = (
-                        f"Estás procesando un tique o factura del proveedor: '{prov_encontrado}'. "
-                        f"Instrucción específica: {instruccion_proveedor} "
-                        "Lee rigurosamente cada renglón de la factura. Extrae el 'codigo_barras' (el código EAN/UPC numérico impreso en la columna CODIGO DE BARRAS), "
-                        "'descripcion', 'tamano', 'cantidad', 'unidad' y 'valor' (o 'importe'). "
-                        "Devuelve un JSON puro con esta estructura exacta y llaves en minúscula: "
-                        '{"paginacion": "1 de 2", "proveedor_detectado": "' + prov_encontrado + '", "subtotal": 0.0, "itbis": 0.0, "descuentos": 0.0, "total": 0.0, "items": [{"codigo_barras": "...", "descripcion": "...", "tamano": "...", "cantidad": 1.0, "unidad": "CAJA", "precio_unitario": 0.0, "monto_neto": 0.0}]}. '
-                        "Respuesta JSON pura."
-                    )
+                        prompt_unificado = (
+                            f"Estás procesando la página {idx_f+1} de la factura del proveedor: '{prov_encontrado}'. "
+                            f"Instrucción específica: {instruccion_proveedor} "
+                            "Extrae 'codigo_barras', 'descripcion', 'tamano', 'cantidad', 'unidad' y 'valor' (o 'importe'). "
+                            "Devuelve un JSON puro con esta estructura exacta y llaves en minúscula: "
+                            '{"subtotal": 0.0, "itbis": 0.0, "descuentos": 0.0, "total": 0.0, "items": [{"codigo_barras": "...", "descripcion": "...", "tamano": "...", "cantidad": 1.0, "unidad": "CAJA", "precio_unitario": 0.0, "monto_neto": 0.0}]}. '
+                            "Respuesta JSON pura."
+                        )
 
-                    archivo_subido.seek(0)
-                    response = model.generate_content([image_input, prompt_unificado])
-                    
-                    raw_text = response.text.strip()
-                    if raw_text.startswith("```json"): raw_text = raw_text[7:]
-                    if raw_text.endswith("```"): raw_text = raw_text[:-3]
-                    
-                    parsed_json = json.loads(raw_text.strip())
+                        archivo_subido.seek(0)
+                        response = model.generate_content([image_input, prompt_unificado])
+                        raw_text = response.text.strip()
+                        if raw_text.startswith("```json"): raw_text = raw_text[7:]
+                        if raw_text.endswith("```"): raw_text = raw_text[:-3]
+                        
+                        parsed_page = json.loads(raw_text.strip())
+                        todos_los_items.extend(parsed_page.get("items", []))
+                        subtotal_acum += safe_float(parsed_page.get("subtotal"))
+                        itbis_acum += safe_float(parsed_page.get("itbis"))
+                        descuentos_acum += safe_float(parsed_page.get("descuentos"))
+                        total_acum += safe_float(parsed_page.get("total"))
 
-                    st.session_state["factura_data"] = parsed_json
+                    factura_consolidada = {
+                        "proveedor_detectado": prov_encontrado,
+                        "subtotal": subtotal_acum,
+                        "itbis": itbis_acum,
+                        "descuentos": descuentos_acum,
+                        "total": total_acum,
+                        "items": todos_los_items
+                    }
+
+                    st.session_state["factura_data"] = factura_consolidada
                     st.session_state["prov_activo"] = prov_encontrado
-                    st.session_state["paginacion_detectada"] = str(parsed_json.get("paginacion", "1 de 1"))
                     
-                    st.success(f"🎯 **¡Proveedor Detectado!** Perfil aplicado: **{prov_encontrado}** ({len(parsed_json.get('items', []))} renglones extraídos).")
+                    st.success(f"🎯 **¡Proceso exitoso!** Se procesaron {len(archivos_subidos)} página(s) de **{prov_encontrado}** con un total de **{len(todos_los_items)} renglones** consolidados.")
                 except Exception as e:
                     st.error(f"⚠️ Error al procesar: {str(e)}")
     st.markdown('</div>', unsafe_allow_html=True)
@@ -304,7 +309,6 @@ if menu_opcion == "📄 Procesar Factura":
         data_resp = st.session_state["factura_data"]
         items = data_resp.get("items", [])
         prov_actual = st.session_state.get("prov_activo", "GENERAL")
-        pag_info = str(st.session_state.get("paginacion_detectada", "1 de 1"))
         
         subtotal_val = safe_float(data_resp.get("subtotal"))
         itbis_val = safe_float(data_resp.get("itbis"))
@@ -315,7 +319,7 @@ if menu_opcion == "📄 Procesar Factura":
         if subtotal_val == 0.0 and items: subtotal_val = total_importe_neto
         if total_val == 0.0 and items: total_val = subtotal_val * 1.18
 
-        st.markdown(f"### 📊 Dashboard Financiero | Proveedor: {prov_actual} (Pág. {pag_info})")
+        st.markdown(f"### 📊 Dashboard Financiero Consolidado | Proveedor: {prov_actual}")
         
         col_m1, col_m2, col_m3, col_m4 = st.columns(4)
         with col_m1: st.metric(label="Subtotal / Bruto", value=f"${subtotal_val:,.2f}")
@@ -326,7 +330,7 @@ if menu_opcion == "📄 Procesar Factura":
         st.markdown("---")
 
         if items:
-            st.markdown(f"### 📋 Detalle de Renglones Extraídos ({len(items)} ítems)")
+            st.markdown(f"### 📋 Detalle de Renglones Consolidados ({len(items)} ítems totales)")
             
             preview_rows = []
             wb = openpyxl.Workbook()
@@ -351,16 +355,13 @@ if menu_opcion == "📄 Procesar Factura":
                 m_med = re.search(r'(\d+\s*(?:ML|L|LT|G|KG|OZ|Z|CL))', str((raw_tam or "") + " " + (raw_desc or "")).upper())
                 presentacion_limpia = m_med.group(1) if m_med else (raw_tam if raw_tam else "S/P")
 
-                # 1. Intentar código extraído de factura
                 codigo_extraido = clean_ean_code(item.get("codigo_barras", ""))
                 
-                # 2. Si no viene en factura, buscar en catálogo maestro
                 if codigo_extraido == "S/C":
                     codigo_final = buscar_en_catalogo_maestro(f"{nombre_completo} {presentacion_limpia}", presentacion_limpia)
                 else:
                     codigo_final = codigo_extraido
 
-                # Auto-guardar en maestro si se halló código válido
                 if codigo_final != "S/C":
                     key_master = f"{nombre_completo} {presentacion_limpia}".strip()
                     master_dict[key_master] = codigo_final
@@ -447,9 +448,9 @@ if menu_opcion == "📄 Procesar Factura":
             excel_buffer = io.BytesIO()
             wb.save(excel_buffer)
             st.download_button(
-                label=f"📥 Descargar Excel Importable - {prov_actual} (Pág. {pag_info})",
+                label=f"📥 Descargar Excel Consolidado - {prov_actual}",
                 data=excel_buffer.getvalue(),
-                file_name=f"Inventario_Master_{prov_actual.replace(' ', '_')}_Pag_{pag_info.replace(' ', '_')}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
+                file_name=f"Inventario_Master_{prov_actual.replace(' ', '_')}_Consolidado_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
             )
 
