@@ -49,7 +49,6 @@ def load_json_file(filepath, default_type="dict"):
                 data = json.load(f)
                 if default_type == "list" and isinstance(data, list): return data
                 if default_type == "dict" and isinstance(data, dict):
-                    # Limpieza automática de duplicados o llaves vacías
                     cleaned = {str(k).upper().strip(): str(v).strip() for k, v in data.items() if k and v}
                     return cleaned
         except Exception:
@@ -181,7 +180,6 @@ def buscar_en_catalogo_maestro(nombre_producto, presentacion=""):
     p_upper = str(presentacion or "").upper().strip()
     combined_query = f"{n_upper} {p_upper}".strip()
 
-    # Cargar maestro directamente desde el archivo en disco
     master_dict = load_json_file(MASTER_CATALOG_FILE, "dict")
 
     # 1. Coincidencia exacta
@@ -369,7 +367,6 @@ if menu_opcion == "📄 Procesar Factura":
                 m_med = re.search(r'(\d+\s*(?:ML|L|LT|G|KG|OZ|Z))', str((raw_tam or "") + " " + (raw_desc or "")).upper())
                 presentacion_limpia = m_med.group(1) if m_med else (raw_tam if raw_tam else "S/P")
 
-                # Consulta directa en el archivo maestro limpio
                 codigo_final = buscar_en_catalogo_maestro(nombre_completo, presentacion_limpia)
 
                 nombre_display_excel = "ALOE PURE PLUS ORIGINAL" if "1.5 LT" in nombre_completo else nombre_completo
@@ -421,7 +418,6 @@ if menu_opcion == "📄 Procesar Factura":
                         url_busqueda = f"https://www.google.com/search?q={query_busqueda}"
                         st.markdown(f"[🌐 Buscar en la Web]({url_busqueda})", unsafe_allow_html=True)
 
-                    # NOTA: EL BOTÓN DE ABAJO AHORA SOLO ASIGNA EN LA SESIÓN ACTUAL Y NO CORROMPE EL MAESTRO AUTOMÁTICAMENTE
                     if display_codigo != "S/C":
                         if st.button("✅ Usar este código para esta factura", key=f"btn_conf_{idx}_{nombre_display_excel}"):
                             st.session_state["codigos_manuales_sesion"][nombre_display_excel] = display_codigo
@@ -455,18 +451,52 @@ if menu_opcion == "📄 Procesar Factura":
 # MÓDULO 2: CATÁLOGO MAESTRO EAN
 # ==========================================
 elif menu_opcion == "📁 Catálogo Maestro EAN":
-    st.markdown("<h2>📁 Gestión y Limpieza del Archivo Maestro EAN</h2>", unsafe_allow_html=True)
-    st.markdown("<p style='color: #64748b;'>Administra los productos oficiales. Puedes agregar nuevos o limpiar completamente el maestro si hubo duplicados.</p>", unsafe_allow_html=True)
+    st.markdown("<h2>📁 Gestión, Carga y Limpieza del Archivo Maestro EAN</h2>", unsafe_allow_html=True)
+    st.markdown("<p style='color: #64748b;'>Sube tu archivo maestro (Excel), limpia registros duplicados o agrega productos manualmente.</p>", unsafe_allow_html=True)
     st.markdown("---")
 
     master_dict = load_json_file(MASTER_CATALOG_FILE, "dict")
 
-    # BOTÓN DE LIMPIEZA TOTAL DEL MAESTRO
+    # 📤 SECCIÓN PARA CARGAR ARCHIVO MAESTRO EXTERNO
+    st.markdown("### 📤 Cargar Archivo Maestro Masivo (Excel / CSV)")
+    with st.container():
+        archivo_maestro_subido = st.file_uploader("Sube tu archivo Excel con el Catálogo Maestro", type=["xlsx", "xls", "csv"])
+        if archivo_maestro_subido is not None:
+            if st.button("📥 Procesar y Cargar al Archivo Maestro"):
+                try:
+                    if archivo_maestro_subido.name.endswith('.csv'):
+                        df_m = pd.read_csv(archivo_maestro_subido)
+                    else:
+                        df_m = pd.read_excel(archivo_maestro_subido)
+                    
+                    # Intentar detectar columnas de nombre y código de barras
+                    cols_up = [str(c).upper().strip() for c in df_m.columns]
+                    col_nombre_idx = next((i for i, c in enumerate(cols_up) if any(k in c for k in ['NOMBRE', 'DESCRIPCION', 'PRODUCTO'])), 0)
+                    col_codigo_idx = next((i for i, c in enumerate(cols_up) if any(k in c for k in ['CODIGO', 'EAN', 'BARRA', 'SAP'])), 1)
+
+                    nuevos_cargados = 0
+                    for _, row in df_m.iterrows():
+                        p_nombre = str(row.iloc[col_nombre_idx]).upper().strip()
+                        p_codigo = str(row.iloc[col_codigo_idx]).strip()
+                        clean_c = clean_ean_code(p_codigo)
+                        if p_nombre and p_nombre != "NAN" and clean_c != "S/C":
+                            master_dict[p_nombre] = clean_c
+                            nuevos_cargados += 1
+                    
+                    save_json_file(MASTER_CATALOG_FILE, master_dict)
+                    st.success(f"✅ ¡Se cargaron y fusionaron **{nuevos_cargados}** productos exitosamente al archivo maestro!")
+                    time.sleep(1)
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"⚠️️ Error al leer el archivo maestro: {str(e)}")
+
+    st.markdown("---")
+
+    # 🧹 HERRAMIENTAS DE MANTENIMIENTO
     st.markdown("### 🧹 Herramientas de Mantenimiento")
     col_l1, col_l2 = st.columns([1, 2])
     with col_l1:
         if st.button("🗑️ Resetear / Limpiar Archivo Maestro"):
-            # Vaciar el archivo guardando un diccionario limpio inicial o vacío
             base_inicial = {
                 "PTE. LIGHT HU 22OZ": "70601561", "PRESIDENTE LIGHT HU 22OZ": "70601561",
                 "PTE. HU 12OZ": "74621774", "BRAHMA LIGHT HU 12OZ": "7468973200194",
@@ -479,11 +509,11 @@ elif menu_opcion == "📁 Catálogo Maestro EAN":
             time.sleep(0.5)
             st.rerun()
     with col_l2:
-        st.info("ℹ️ Al hacer clic en limpiar, se eliminarán duplicados y se restaurarán los productos base esenciales.")
+        st.info("ℹ️️ Borra entradas corruptas y restaura los productos base esenciales.")
 
     st.markdown("---")
 
-    with st.expander("➕ Agregar Producto Oficial al Archivo Maestro", expanded=True):
+    with st.expander("➕ Agregar Producto Individual al Archivo Maestro", expanded=False):
         with st.form("form_agregar_maestro"):
             col_m1, col_m2 = st.columns([2, 1])
             with col_m1:
