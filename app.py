@@ -138,7 +138,8 @@ def clean_ean_code(code_val):
     s_val = str(code_val).strip()
     if s_val.endswith('.0'): s_val = s_val[:-2]
     s_val = re.sub(r'\D', '', s_val)
-    if 8 <= len(s_val) <= 14: return str(s_val)
+    # Excepción aplicada: Permite códigos EAN/SAP confirmados desde 7 hasta 14 dígitos
+    if 7 <= len(s_val) <= 14: return str(s_val)
     return "S/C"
 
 def limpiar_nombre_producto(descripcion_raw, tamano_raw):
@@ -234,7 +235,7 @@ st.sidebar.markdown("<h3 style='color: #0284c7;'>⚡ WilPOS System</h3>", unsafe
 menu_opcion = st.sidebar.radio("Navegación", ["📄 Procesar Factura", "📁 Catálogo Maestro EAN", "🏢 Gestionar Proveedores"])
 
 st.sidebar.markdown("---")
-st.sidebar.markdown("<p style='font-size: 0.8rem; color: #10b981; font-weight: 600;'>🟢 Memoria Independiente Activa</p>", unsafe_allow_html=True)
+st.sidebar.markdown("<p style='font-size: 0.8rem; color: #10b981; font-weight: 600;'>🟢 Validación de 7 a 14 Dígitos Activa</p>", unsafe_allow_html=True)
 
 # ==========================================
 # MÓDULO 1: PROCESAR FACTURA
