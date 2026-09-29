@@ -119,6 +119,9 @@ if "master_catalog" not in st.session_state:
 if "codigos_manuales_sesion" not in st.session_state:
     st.session_state["codigos_manuales_sesion"] = {}
 
+if "sugerencias_web_ia" not in st.session_state:
+    st.session_state["sugerencias_web_ia"] = {}
+
 def safe_float(val, default=0.0):
     try:
         if val is None: return default
@@ -249,14 +252,14 @@ st.sidebar.markdown("<h3 style='color: #0284c7;'>⚡ WilPOS Multi-Proveedor</h3>
 menu_opcion = st.sidebar.radio("Navegación", ["📄 Procesar Factura", "📁 Catálogo Maestro EAN", "🏢 Gestionar Proveedores"])
 
 st.sidebar.markdown("---")
-st.sidebar.markdown("<p style='font-size: 0.8rem; color: #10b981; font-weight: 600;'>🟢 Confirmación Activa</p>", unsafe_allow_html=True)
+st.sidebar.markdown("<p style='font-size: 0.8rem; color: #10b981; font-weight: 600;'>🟢 Búsqueda IA Automática Activa</p>", unsafe_allow_html=True)
 
 # ==========================================
 # MÓDULO 1: PROCESAR FACTURA
 # ==========================================
 if menu_opcion == "📄 Procesar Factura":
     st.markdown("<h2>📄 Procesador Inteligente Multi-Proveedor</h2>", unsafe_allow_html=True)
-    st.markdown("<p style='color: #64748b;'>Sube tu factura. Confirma o rechaza los códigos nuevos para guardarlos en el catálogo maestro.</p>", unsafe_allow_html=True)
+    st.markdown("<p style='color: #64748b;'>Sube tu factura. El sistema busca automáticamente el código EAN y te permite confirmar o rechazar.</p>", unsafe_allow_html=True)
     st.markdown("---")
 
     if "factura_data" not in st.session_state: st.session_state["factura_data"] = None
@@ -432,8 +435,28 @@ if menu_opcion == "📄 Procesar Factura":
                 display_codigo = codigo_final
                 if codigo_final == "S/C":
                     st.markdown("---")
-                    st.markdown(f"⚠️ **{nombre_display_excel} ({presentacion_limpia})** sin código.")
+                    st.markdown(f"⚠️ **{nombre_display_excel} ({presentacion_limpia})** sin código en catálogo.")
                     
+                    # Búsqueda automática con IA incorporada en el app
+                    cache_ia = st.session_state["sugerencias_web_ia"]
+                    clave_cache_prod = f"{nombre_display_excel}_{presentacion_limpia}"
+                    
+                    codigo_sugerido_ia = cache_ia.get(clave_cache_prod, None)
+                    
+                    if not codigo_sugerido_ia and gemini_key:
+                        try:
+                            model_ia = genai.GenerativeModel('gemini-3.8-flash')
+                            resp_ia = model_ia.generate_content(
+                                f"Proporciona estrictamente el código de barras EAN oficial (solo números de 7 a 14 dígitos) para el producto '{nombre_display_excel} {presentacion_limpia}'. Si no lo sabes con absoluta certeza, responde 'S/C'."
+                            )
+                            c_sug = clean_ean_code(resp_ia.text.strip())
+                            if c_sug != "S/C":
+                                codigo_sugerido_ia = c_sug
+                                cache_ia[clave_cache_prod] = codigo_sugerido_ia
+                                st.session_state["sugerencias_web_ia"] = cache_ia
+                        except Exception:
+                            pass
+
                     col_c1, col_c2, col_c3 = st.columns([2, 1, 1])
                     with col_c1:
                         sel_maestro = st.selectbox(
@@ -451,19 +474,28 @@ if menu_opcion == "📄 Procesar Factura":
                                 display_codigo = clean_m
                     with col_c3:
                         st.markdown("<br>", unsafe_allow_html=True)
-                        query_busqueda = f"EAN barcode {nombre_display_excel} {presentacion_limpia}".replace(" ", "+")
-                        url_busqueda = f"https://www.google.com/search?q={query_busqueda}"
-                        st.markdown(f"[🌐 Buscar en la Web]({url_busqueda})", unsafe_allow_html=True)
+                        if codigo_sugerido_ia:
+                            st.info(f"🤖 Sugerencia IA: **{codigo_sugerido_ia}**")
+                            if st.button("✅ Usar y Confirmar Código IA", key=f"btn_ia_{idx}_{nombre_display_excel}"):
+                                display_codigo = codigo_sugerido_ia
+                                st.session_state["codigos_manuales_sesion"][nombre_display_excel] = display_codigo
+                                master_dict[nombre_display_excel] = display_codigo
+                                save_json_file(MASTER_CATALOG_FILE, master_dict)
+                                st.success(f"¡Código {display_codigo} guardado en el Catálogo Maestro!")
+                                time.sleep(0.5)
+                                st.rerun()
+                        else:
+                            st.warning("No se encontró sugerencia automática.")
 
-                    # Workflow de Confirmar o Rechazar
-                    if display_codigo != "S/C":
+                    # Workflow de Confirmar o Rechazar manual/seleccionado
+                    if display_codigo != "S/C" and display_codigo != codigo_sugerido_ia:
                         col_conf1, col_conf2 = st.columns(2)
                         with col_conf1:
                             if st.button("✅ Confirmar y Guardar en Maestro", key=f"btn_conf_{idx}_{nombre_display_excel}"):
                                 st.session_state["codigos_manuales_sesion"][nombre_display_excel] = display_codigo
                                 master_dict[nombre_display_excel] = display_codigo
                                 save_json_file(MASTER_CATALOG_FILE, master_dict)
-                                st.success(f"¡Código {display_codigo} confirmado y guardado permanentemente en el Catálogo Maestro!")
+                                st.success(f"¡Código {display_codigo} confirmado y guardado permanentemente!")
                                 time.sleep(0.5)
                                 st.rerun()
                         with col_conf2:
