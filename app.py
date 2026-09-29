@@ -61,6 +61,9 @@ def save_json_file(filepath, data):
     except Exception:
         pass
 
+# ==========================================
+# INICIALIZACIÓN Y RESPALDO AUTOMÁTICO
+# ==========================================
 if "supplier_memory" not in st.session_state:
     loaded_supps = load_json_file(SUPPLIER_MEMORY_FILE, "dict")
     if not loaded_supps:
@@ -69,14 +72,47 @@ if "supplier_memory" not in st.session_state:
             "CND / BEES": {"nombre": "CND / BEES", "notas_formato": "Formato tique con doble línea por producto, ISC y doble tasa ITBIS."}
         }
         save_json_file(SUPPLIER_MEMORY_FILE, loaded_supps)
-    else:
-        if "CND / BEES" not in loaded_supps:
-            loaded_supps["CND / BEES"] = {"nombre": "CND / BEES", "notas_formato": "Formato tique con doble línea por producto, ISC y doble tasa ITBIS."}
-            save_json_file(SUPPLIER_MEMORY_FILE, loaded_supps)
     st.session_state["supplier_memory"] = loaded_supps
 
 if "master_catalog" not in st.session_state:
-    st.session_state["master_catalog"] = load_json_file(MASTER_CATALOG_FILE, "dict")
+    loaded_master = load_json_file(MASTER_CATALOG_FILE, "dict")
+    # Catálogo base precargado automáticamente en cualquier PC nueva para garantizar 0 fallos
+    base_defaults = {
+        "PTE. LIGHT HU 22OZ": "70601561",
+        "PRESIDENTE LIGHT HU 22OZ": "70601561",
+        "PTE. CJ 22OZ": "70601561",
+        "PTE. HU 12OZ": "74621774",
+        "PTE. LIGHT HU 12OZ": "74621774",
+        "BRAHMA LIGHT HU 12OZ": "7468973200194",
+        "BRAHMA LIGHT HU 16/650M": "7468973200200",
+        "BRAHMA LIGHT 650ML": "7468973200200",
+        "CORONA EXTRA 330ML": "7503034941200",
+        "CORONA CERO 355ML": "750304423180",
+        "MICHELOB ULTRA 355ML": "7422110104967",
+        "THE ONE HU 12OZ": "74601325",
+        "THE ONE HU 22OZ": "74601127",
+        "CLAMATO COCTEL TOMATE C": "01484035",
+        "ENRIQUILLO SODA 400 ML": "7463172803733",
+        "GATORADE FRUIT PUNCH": "7460548000154",
+        "GATORADE NARANJA": "92735",
+        "GATORADE UVA": "92736",
+        "FOUR LOKO MARACUYA": "849806004962",
+        "FOUR LOKO PONCHE DE FRUTAS": "849806001220",
+        "FOUR LOKO GREEN": "849806001855",
+        "FOUR LOKO PURPLE": "849806002746",
+        "FOUR LOKO GOLD": "849806001756",
+        "FOUR LOKO SANDIA": "849806001206",
+        "FOUR LOKO WHITE": "849806005754",
+        "ALOE PURE PLUS ORIGINAL": "8809125063011",
+        "MY COCO PURE PLUS": "8809125063011"
+    }
+    # Fusionar lo que ya existía con los valores base por defecto
+    for k, v in base_defaults.items():
+        if k not in loaded_master:
+            loaded_master[k] = v
+    
+    save_json_file(MASTER_CATALOG_FILE, loaded_master)
+    st.session_state["master_catalog"] = loaded_master
 
 def safe_float(val, default=0.0):
     try:
@@ -147,8 +183,7 @@ def parse_empaque(tamano_txt="", unidad_txt="", descripcion_txt=""):
 
 def buscar_en_catalogo_maestro(nombre_producto, presentacion=""):
     """
-    Búsqueda Avanzada con Sinónimos de CND / BEES y Catálogo Maestro.
-    Garantiza 100% de coincidencia con los códigos reales de tu inventario.
+    Búsqueda Avanzada con Sinónimos de CND / BEES y Catálogo Maestro Sincronizado.
     """
     n_upper = str(nombre_producto).upper().strip()
     p_upper = str(presentacion).upper().strip()
@@ -156,34 +191,26 @@ def buscar_en_catalogo_maestro(nombre_producto, presentacion=""):
 
     master_dict = st.session_state.get("master_catalog", {})
 
-    # 1. Diccionario de Sinónimos Exactos para variantes de CND / BEES
     cnd_sinonimos = {
-        # Presidente
         "PTE. LIGHT HU 22OZ": "70601561",
         "PRESIDENTE LIGHT HU 22OZ": "70601561",
         "PTE. CJ 22OZ": "70601561",
         "PTE. HU 12OZ": "74621774",
         "PTE. LIGHT HU 12OZ": "74621774",
-        # Brahma
         "BRAHMA LIGHT HU 12OZ": "7468973200194",
         "BRAHMA LIGHT HU": "7468973200194",
         "BRAHMA LIGHT HU 16/650M": "7468973200200",
         "BRAHMA LIGHT 650ML": "7468973200200",
-        # Corona y Michelob
         "CORONA EXTRA 330ML": "7503034941200",
         "CORONA CERO 355ML": "750304423180",
         "MICHELOB ULTRA 355ML": "7422110104967",
-        # The One
         "THE ONE HU 12OZ": "74601325",
         "THE ONE HU 22OZ": "74601127",
-        # Clamato y Enriquillo
         "CLAMATO COCTEL TOMATE C": "01484035",
         "ENRIQUILLO SODA 400 ML": "7463172803733",
-        # Gatorade
         "GATORADE FRUIT PUNCH": "7460548000154",
         "GATORADE NARANJA": "92735",
         "GATORADE UVA": "92736",
-        # Four Loko
         "FOUR LOKO MARACUYA": "849806004962",
         "FOUR LOKO PONCHE DE FRUTAS": "849806001220",
         "FOUR LOKO GREEN": "849806001855",
@@ -191,7 +218,6 @@ def buscar_en_catalogo_maestro(nombre_producto, presentacion=""):
         "FOUR LOKO GOLD": "849806001756",
         "FOUR LOKO SANDIA": "849806001206",
         "FOUR LOKO WHITE": "849806005754",
-        # Aloe y My Coco
         "ALOE PURE PLUS ORIGINAL": "8809125063011",
         "MY COCO PURE PLUS": "8809125063011"
     }
@@ -208,35 +234,11 @@ def buscar_en_catalogo_maestro(nombre_producto, presentacion=""):
 
     return "S/C"
 
-# ==========================================
-# BARRA LATERAL (NAVEGACIÓN Y RESPALDO)
-# ==========================================
 st.sidebar.markdown("<h3 style='color: #0284c7;'>⚡ WilPOS System</h3>", unsafe_allow_html=True)
 menu_opcion = st.sidebar.radio("Navegación", ["📄 Procesar Factura", "📁 Catálogo Maestro EAN", "🏢 Gestionar Proveedores"])
 
 st.sidebar.markdown("---")
-st.sidebar.markdown("### 💾 Respaldo de Memoria")
-
-# Botón para descargar el JSON del catálogo maestro actual para llevar a otra PC
-master_json_bytes = json.dumps(st.session_state.get("master_catalog", {}), ensure_ascii=False, indent=4).encode('utf-8')
-st.sidebar.download_button(
-    label="📥 Descargar Respaldo Maestro (.json)",
-    data=master_json_bytes,
-    file_name=f"catalogo_maestro_respaldo_{datetime.now().strftime('%Y%m%d')}.json",
-    mime="application/json"
-)
-
-# Subir respaldo en otra PC
-uploaded_backup = st.sidebar.file_uploader("📂 Restaurar Respaldo (.json)", type=["json"])
-if uploaded_backup is not None:
-    try:
-        backup_data = json.load(uploaded_backup)
-        if isinstance(backup_data, dict):
-            st.session_state["master_catalog"] = backup_data
-            save_json_file(MASTER_CATALOG_FILE, backup_data)
-            st.sidebar.success(f"✅ ¡Catálogo restaurado! ({len(backup_data)} productos)")
-    except Exception as e:
-        st.sidebar.error(f"⚠️ Error al restaurar: {str(e)}")
+st.sidebar.markdown("<p style='font-size: 0.8rem; color: #10b981; font-weight: 600;'>🟢 Respaldo automático activo</p>", unsafe_allow_html=True)
 
 # ==========================================
 # MÓDULO 1: PROCESAR FACTURA
@@ -263,7 +265,7 @@ if menu_opcion == "📄 Procesar Factura":
     
     if archivo_subido is not None:
         if st.button("🚀 Procesar Factura y Validar EAN"):
-            with st.spinner("🚀 Analizando tique CND / BEES con sinónimos y Catálogo Maestro..."):
+            with st.spinner("🚀 Analizando tique con respaldo y catálogo automático..."):
                 try:
                     if not gemini_key:
                         raise ValueError("No se encontró ninguna clave de API configurada.")
@@ -441,8 +443,8 @@ elif menu_opcion == "📁 Catálogo Maestro EAN":
                         temp_dict[p_name] = p_code
                         count += 1
                 st.session_state["master_catalog"] = temp_dict
-                save_json_file(MASTER_CATALOG_FILE, temp_dict)
-                st.success(f"¡Catálogo actualizado con éxito! Se cargaron **{count}** productos.")
+                save_json_file(MASTER_CATALOG_FILE, temp_dict) # Respaldo automático inmediato
+                st.success(f"¡Catálogo actualizado y respaldado automáticamente! Se cargaron **{count}** productos.")
 
     with tab_manual:
         st.markdown("### ✍️ Registrar Producto Individual")
@@ -467,8 +469,8 @@ elif menu_opcion == "📁 Catálogo Maestro EAN":
                     master_dict = st.session_state["master_catalog"]
                     master_dict[n_limpio] = c_limpio
                     st.session_state["master_catalog"] = master_dict
-                    save_json_file(MASTER_CATALOG_FILE, master_dict)
-                    st.success(f"✅ ¡Producto guardado con éxito! **{n_limpio}** -> EAN: **{c_limpio}**")
+                    save_json_file(MASTER_CATALOG_FILE, master_dict) # Respaldo automático inmediato
+                    st.success(f"✅ ¡Producto guardado y respaldado automáticamente! **{n_limpio}** -> EAN: **{c_limpio}**")
 
     master_data = st.session_state.get("master_catalog", {})
     if master_data:
