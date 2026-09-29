@@ -309,4 +309,250 @@ if menu_opcion == "📄 Procesar Factura":
                     
                     raw_text = response.text.strip()
                     if raw_text.startswith("```json"): raw_text = raw_text[7:]
-                    if raw_text.endswith("
+                    if raw_text.endswith("```"): raw_text = raw_text[:-3]
+                    
+                    parsed_json = json.loads(raw_text.strip())
+
+                    st.session_state["factura_data"] = parsed_json
+                    st.session_state["prov_activo"] = prov_encontrado
+                    st.session_state["paginacion_detectada"] = str(parsed_json.get("paginacion", "1 de 1"))
+                    
+                    st.success(f"🎯 **¡Proveedor Detectado!** Perfil aplicado: **{prov_encontrado}** ({len(parsed_json.get('items', []))} renglones).")
+                except Exception as e:
+                    st.error(f"⚠️ Error al procesar: {str(e)}")
+    st.markdown('</div>', unsafe_allow_html=True)
+
+    if st.session_state["factura_data"] is not None:
+        data_resp = st.session_state["factura_data"]
+        items = data_resp.get("items", [])
+        prov_actual = st.session_state.get("prov_activo", "GENERAL")
+        pag_info = str(st.session_state.get("paginacion_detectada", "1 de 1"))
+        
+        subtotal_val = safe_float(data_resp.get("subtotal"))
+        itbis_val = safe_float(data_resp.get("itbis"))
+        total_descuentos = safe_float(data_resp.get("descuentos"))
+        total_val = safe_float(data_resp.get("total"))
+
+        total_importe_neto = sum(safe_float(i.get("monto_neto") or i.get("impuesto_neto")) for i in items)
+        if subtotal_val == 0.0 and items: subtotal_val = total_importe_neto
+        if total_val == 0.0 and items: total_val = subtotal_val * 1.18
+
+        st.markdown(f"### 📊 Dashboard Financiero | Proveedor: {prov_actual} (Pág. {pag_info})")
+        
+        col_m1, col_m2, col_m3, col_m4 = st.columns(4)
+        with col_m1: st.metric(label="Subtotal / Bruto", value=f"${subtotal_val:,.2f}")
+        with col_m2: st.metric(label="ITBIS Total", value=f"${itbis_val:,.2f}")
+        with col_m3: st.metric(label="Descuentos", value=f"${total_descuentos:,.2f}")
+        with col_m4: st.metric(label="Total General", value=f"${total_val:,.2f}")
+            
+        st.markdown("---")
+
+        if items:
+            st.markdown(f"### 📋 Detalle de Renglones Extraídos ({len(items)} ítems)")
+            
+            preview_rows = []
+            wb = openpyxl.Workbook()
+            ws = wb.active
+            ws.title = "Inventario"
+            ws.append(['Nombre', 'Presentación', 'Código Barra', 'Categoría', 'Tipo', 'Precio Venta', 'Costo', 'Stock', 'ITBIS', 'Unidad Medida', 'Cantidad Empaque'])
+
+            master_dict = load_json_file(MASTER_CATALOG_FILE, "dict")
+            nombres_maestro_lista = list(master_dict.keys())
+
+            for idx, item in enumerate(items, start=1):
+                raw_desc = item.get("descripcion", "")
+                raw_tam = item.get("tamano", "")
+                
+                nombre_completo = limpiar_nombre_producto(raw_desc, raw_tam)
+
+                cant_compra = safe_float(item.get("cantidad"), 1.0)
+                unidad = str(item.get("unidad", ""))
+                
+                empaque = parse_empaque_proveedor(prov_actual, raw_tam, unidad, raw_desc)
+                total_unidades = int(cant_compra * empaque)
+
+                if "ALOE PURE PLUS ORIGINAL" in nombre_completo:
+                    if empaque == 1:
+                        nombre_completo = "ALOE PURE PLUS ORIGINAL 1.5 LT"
+                    else:
+                        nombre_completo = "ALOE PURE PLUS ORIGINAL"
+
+                m_med = re.search(r'(\d+\s*(?:ML|L|LT|G|KG|OZ|Z))', str((raw_tam or "") + " " + (raw_desc or "")).upper())
+                presentacion_limpia = m_med.group(1) if m_med else (raw_tam if raw_tam else "S/P")
+
+                # Consulta directa en el archivo maestro filtrando códigos de 5 dígitos
+                codigo_final = buscar_en_catalogo_maestro(nombre_completo, presentacion_limpia)
+
+                nombre_display_excel = "ALOE PURE PLUS ORIGINAL" if "1.5 LT" in nombre_completo else nombre_completo
+
+                p_unit_extraido = safe_float(item.get("precio_unitario"), 0.0)
+                monto_neto_linea = safe_float(
+                    item.get("monto_neto") or 
+                    item.get("impuesto_neto") or 
+                    item.get("valor"), 
+                    0.0
+                )
+
+                if p_unit_extraido > 0:
+                    costo_unitario_real = round(p_unit_extraido / empaque, 2) if empaque > 1 else p_unit_extraido
+                elif monto_neto_linea > 0 and total_unidades > 0:
+                    costo_unitario_real = round(monto_neto_linea / total_unidades, 2)
+                else:
+                    costo_unitario_real = 0.0
+
+                if costo_unitario_real > 0:
+                    precio_con_utilidad = costo_unitario_real * (1 + (margen_utilidad / 100.0))
+                    precio_venta = round_to_nearest_5(precio_con_utilidad * 1.18)
+                else:
+                    precio_venta = 0.0
+
+                display_codigo = codigo_final
+                if codigo_final == "S/C":
+                    st.markdown("---")
+                    st.markdown(f"⚠️ **{nombre_display_excel} ({presentacion_limpia})** sin código en el archivo maestro.")
+                    
+                    col_c1, col_c2, col_c3 = st.columns([2, 1, 1])
+                    with col_c1:
+                        sel_maestro = st.selectbox(
+                            f"Seleccionar del Catálogo Maestro",
+                            ["-- Buscar en Maestro --"] + nombres_maestro_lista,
+                            key=f"sel_maestro_{idx}_{nombre_display_excel}_{idx}"
+                        )
+                        if sel_maestro != "-- Buscar en Maestro --":
+                            display_codigo = master_dict[sel_maestro]
+                    with col_c2:
+                        codigo_manual_input = st.text_input("Ingresar código manual", key=f"manual_input_{idx}_{nombre_display_excel}_{idx}", placeholder="Ej. 052000324884")
+                        if codigo_manual_input and len(codigo_manual_input.strip()) >= 7:
+                            clean_m = clean_ean_code(codigo_manual_input)
+                            if clean_m != "S/C":
+                                display_codigo = clean_m
+                    with col_c3:
+                        st.markdown("<br>", unsafe_allow_html=True)
+                        query_busqueda = f"EAN barcode {nombre_display_excel} {presentacion_limpia}".replace(" ", "+")
+                        url_busqueda = f"https://www.google.com/search?q={query_busqueda}"
+                        st.markdown(f"[🌐 Buscar en la Web]({url_busqueda})", unsafe_allow_html=True)
+
+                    if display_codigo != "S/C":
+                        col_conf1, col_conf2 = st.columns(2)
+                        with col_conf1:
+                            if st.button("✅ Confirmar y Guardar en Maestro", key=f"btn_conf_{idx}_{nombre_display_excel}"):
+                                st.session_state["codigos_manuales_sesion"][nombre_display_excel] = display_codigo
+                                master_dict[nombre_display_excel] = display_codigo
+                                save_json_file(MASTER_CATALOG_FILE, master_dict)
+                                st.success(f"¡Código {display_codigo} guardado permanentemente en el archivo maestro!")
+                                time.sleep(0.5)
+                                st.rerun()
+                        with col_conf2:
+                            if st.button("❌ Rechazar", key=f"btn_rech_{idx}_{nombre_display_excel}"):
+                                st.warning("Código rechazado.")
+                                display_codigo = "S/C"
+
+                preview_rows.append({
+                    "No.": idx, "Producto": nombre_display_excel, "Código EAN Asignado": display_codigo,
+                    "Cant. Compra": cant_compra, "Empaque": empaque, "Stock (Unidades)": total_unidades,
+                    "Costo Unit. Real": costo_unitario_real, "Precio Venta": precio_venta
+                })
+
+                ws.append([
+                    nombre_display_excel, presentacion_limpia, str(display_codigo), prov_actual, "producto",
+                    precio_venta, costo_unitario_real, total_unidades, 0.18, "unidad", empaque
+                ])
+
+            st.dataframe(pd.DataFrame(preview_rows), use_container_width=True, hide_index=True)
+
+            excel_buffer = io.BytesIO()
+            wb.save(excel_buffer)
+            st.download_button(
+                label=f"📥 Descargar Excel Importable - {prov_actual} (Pág. {pag_info})",
+                data=excel_buffer.getvalue(),
+                file_name=f"Inventario_Master_{prov_actual.replace(' ', '_')}_Pag_{pag_info.replace(' ', '_')}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            )
+
+# ==========================================
+# MÓDULO 2: CATÁLOGO MAESTRO EAN
+# ==========================================
+elif menu_opcion == "📁 Catálogo Maestro EAN":
+    st.markdown("<h2>📁 Gestión del Archivo Maestro EAN</h2>", unsafe_allow_html=True)
+    st.markdown("<p style='color: #64748b;'>Administra y registra nuevos productos directamente en el archivo maestro del sistema.</p>", unsafe_allow_html=True)
+    st.markdown("---")
+
+    master_dict = load_json_file(MASTER_CATALOG_FILE, "dict")
+
+    with st.expander("➕ Agregar o Actualizar Producto en el Archivo Maestro", expanded=True):
+        with st.form("form_agregar_maestro"):
+            col_m1, col_m2 = st.columns([2, 1])
+            with col_m1:
+                nuevo_prod_nombre = st.text_input("Nombre / Descripción del Producto (Ej: FOUR LOKO SANDIA)")
+            with col_m2:
+                nuevo_prod_codigo = st.text_input("Código EAN / SAP Oficial (Ej: 849806001206)")
+            
+            btn_guardar_maestro = st.form_submit_button("💾 Guardar en Archivo Maestro")
+            if btn_guardar_maestro:
+                clean_name = nuevo_prod_nombre.upper().strip()
+                clean_code = clean_ean_code(nuevo_prod_codigo)
+                if clean_name and clean_code != "S/C":
+                    master_dict[clean_name] = clean_code
+                    save_json_file(MASTER_CATALOG_FILE, master_dict)
+                    st.success(f"✅ ¡Producto **{clean_name}** guardado con éxito en el archivo maestro con el código **{clean_code}**!")
+                    st.rerun()
+                else:
+                    st.error("⚠️ Por favor ingresa un nombre válido y un código EAN/SAP correcto.")
+
+    if master_dict:
+        st.markdown(f"### 📋 Productos Registrados en el Archivo Maestro ({len(master_dict):,} registros)")
+        df_show = pd.DataFrame([{"Producto / Descripción": k, "Código EAN/SAP Oficial": v} for k, v in master_dict.items()])
+        st.dataframe(df_show, use_container_width=True, hide_index=True)
+
+# ==========================================
+# MÓDULO 3: GESTIONAR PROVEEDORES
+# ==========================================
+elif menu_opcion == "🏢 Gestionar Proveedores":
+    st.markdown("<h2>🏢 Configuración de Perfiles por Proveedor</h2>", unsafe_allow_html=True)
+    st.markdown("<p style='color: #64748b;'>Cada proveedor mantiene su propia regla de extracción intacta.</p>", unsafe_allow_html=True)
+    st.markdown("---")
+
+    supps = st.session_state["supplier_memory"]
+    for p_name, p_data in list(supps.items()):
+        with st.expander(f"🏢 Proveedor: {p_name}"):
+            with st.form(f"form_prov_{p_name}"):
+                nuevo_nombre = st.text_input("Nombre del Proveedor", value=p_data.get("nombre", p_name))
+                nueva_instruccion = st.text_area("Instrucción / Prompt de Formato Exclusivo", value=p_data.get("instruccion_prompt", ""), height=120)
+                
+                col_btn1, col_btn2 = st.columns(2)
+                with col_btn1:
+                    btn_guardar = st.form_submit_button("💾 Guardar Cambios")
+                with col_btn2:
+                    btn_eliminar = st.form_submit_button("🗑️ Eliminar Perfil")
+                
+                if btn_guardar:
+                    supps[p_name]["nombre"] = nuevo_nombre
+                    supps[p_name]["instruccion_prompt"] = nueva_instruccion
+                    if nuevo_nombre != p_name:
+                        supps[nuevo_nombre] = supps.pop(p_name)
+                    st.session_state["supplier_memory"] = supps
+                    save_json_file(SUPPLIER_MEMORY_FILE, supps)
+                    st.success(f"✅ ¡Perfil de **{nuevo_nombre}** guardado con éxito!")
+                    st.rerun()
+                    
+                if btn_eliminar:
+                    if p_name in supps:
+                        supps.pop(p_name)
+                        st.session_state["supplier_memory"] = supps
+                        save_json_file(SUPPLIER_MEMORY_FILE, supps)
+                        st.warning(f"⚠️ Perfil de {p_name} eliminado.")
+                        st.rerun()
+
+    with st.expander("➕ Agregar Nuevo Proveedor Manualmente"):
+        with st.form("form_nuevo_proveedor_manual"):
+            n_prov = st.text_input("Nombre del Proveedor (Ej: CASA BRUGAL)")
+            n_inst = st.text_area("Instrucción de Formato para este Proveedor", value="Analiza la factura de este proveedor y extrae descripción, tamaño, cantidad, unidad y monto neto.")
+            btn_crear = st.form_submit_button("Crear Perfil de Proveedor")
+            if btn_crear:
+                clean_p = n_prov.upper().strip()
+                if clean_p:
+                    supps[clean_p] = {"nombre": clean_p, "tipo_formato": "personalizado", "instruccion_prompt": n_inst}
+                    st.session_state["supplier_memory"] = supps
+                    save_json_file(SUPPLIER_MEMORY_FILE, supps)
+                    st.success(f"✅ ¡Perfil creado para {clean_p}!")
+                    st.rerun()
