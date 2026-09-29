@@ -117,6 +117,9 @@ if "master_catalog" not in st.session_state:
 if "codigos_manuales_sesion" not in st.session_state:
     st.session_state["codigos_manuales_sesion"] = {}
 
+if "web_encontrado_temporal" not in st.session_state:
+    st.session_state["web_encontrado_temporal"] = {}
+
 def safe_float(val, default=0.0):
     try:
         if val is None: return default
@@ -228,14 +231,14 @@ st.sidebar.markdown("<h3 style='color: #0284c7;'>⚡ WilPOS System</h3>", unsafe
 menu_opcion = st.sidebar.radio("Navegación", ["📄 Procesar Factura", "📁 Catálogo Maestro EAN", "🏢 Gestionar Proveedores"])
 
 st.sidebar.markdown("---")
-st.sidebar.markdown("<p style='font-size: 0.8rem; color: #10b981; font-weight: 600;'>🟢 Búsqueda Web Interactiva Activa</p>", unsafe_allow_html=True)
+st.sidebar.markdown("<p style='font-size: 0.8rem; color: #10b981; font-weight: 600;'>🟢 Notificación Web Activa</p>", unsafe_allow_html=True)
 
 # ==========================================
 # MÓDULO 1: PROCESAR FACTURA
 # ==========================================
 if menu_opcion == "📄 Procesar Factura":
     st.markdown("<h2>📄 Procesador Inteligente con Detección Automática</h2>", unsafe_allow_html=True)
-    st.markdown("<p style='color: #64748b;'>Sube tu factura. El botón 'Buscar en Web' consultará el código EAN oficial exacto al instante.</p>", unsafe_allow_html=True)
+    st.markdown("<p style='color: #64748b;'>Sube tu factura. Al buscar en la web, el sistema te pedirá confirmación antes de agregarlo al maestro.</p>", unsafe_allow_html=True)
     st.markdown("---")
 
     if "factura_data" not in st.session_state: st.session_state["factura_data"] = None
@@ -359,6 +362,7 @@ if menu_opcion == "📄 Procesar Factura":
 
             master_dict = st.session_state.get("master_catalog", {})
             nombres_maestro_lista = list(master_dict.keys())
+            web_temp = st.session_state.get("web_encontrado_temporal", {})
 
             for idx, item in enumerate(items, start=1):
                 raw_desc = item.get("descripcion", "")
@@ -394,6 +398,10 @@ if menu_opcion == "📄 Procesar Factura":
                 display_codigo = codigo_final
                 if codigo_final == "S/C":
                     st.markdown("---")
+                    
+                    # Verificar si ya se encontró un código en web pendiente de confirmación para este ítem
+                    key_temp = f"{idx}_{nombre_completo}"
+                    
                     col_c1, col_c2, col_c3 = st.columns([2, 1, 1])
                     with col_c1:
                         st.markdown(f"⚠️ **{nombre_completo} ({presentacion_limpia})** sin código.")
@@ -408,27 +416,38 @@ if menu_opcion == "📄 Procesar Factura":
                             st.rerun()
                     with col_c2:
                         st.markdown("<br>", unsafe_allow_html=True)
-                        if st.button(f"🌐 Buscar en Web", key=f"web_{idx}_{nombre_completo}"):
-                            with st.spinner(f"Buscando código EAN oficial en la web..."):
-                                try:
-                                    model_web = genai.GenerativeModel('gemini-3.8-flash')
-                                    prompt_web = (
-                                        f"Busca en internet el código de barras UPC o EAN exacto de este producto: '{nombre_completo} {presentacion_limpia}'. "
-                                        "Devuelve únicamente el número de código de barras (por ejemplo, 052000324822). No agregues texto ni explicación."
-                                    )
-                                    res_web = model_web.generate_content(prompt_web)
-                                    codigo_web = clean_ean_code(res_web.text.strip())
-                                    if codigo_web != "S/C":
-                                        display_codigo = codigo_web
-                                        st.session_state["codigos_manuales_sesion"][nombre_completo] = display_codigo
-                                        master_dict[nombre_completo] = display_codigo
-                                        save_json_file(MASTER_CATALOG_FILE, master_dict)
-                                        st.success(f"¡Código oficial encontrado y asignado: {display_codigo}!")
-                                        st.rerun()
-                                    else:
-                                        st.warning("No se halló en la web automáticamente.")
-                                except Exception:
-                                    st.error("Error al consultar la web.")
+                        if key_temp not in web_temp:
+                            if st.button(f"🌐 Buscar en Web", key=f"web_btn_{idx}_{nombre_completo}"):
+                                with st.spinner(f"Buscando código EAN oficial en la web..."):
+                                    try:
+                                        model_web = genai.GenerativeModel('gemini-3.8-flash')
+                                        prompt_web = (
+                                            f"Busca en internet el código de barras UPC o EAN exacto de este producto: '{nombre_completo} {presentacion_limpia}'. "
+                                            "Devuelve únicamente el número de código de barras (por ejemplo, 052000324822). No agregues texto ni explicación."
+                                        )
+                                        res_web = model_web.generate_content(prompt_web)
+                                        codigo_web = clean_ean_code(res_web.text.strip())
+                                        if codigo_web != "S/C":
+                                            web_temp[key_temp] = codigo_web
+                                            st.session_state["web_encontrado_temporal"] = web_temp
+                                            st.rerun()
+                                        else:
+                                            st.warning("No se halló en la web automáticamente.")
+                                    except Exception:
+                                        st.error("Error al consultar la web.")
+                        else:
+                            # Notificación y confirmación del código hallado en web
+                            codigo_hallado = web_temp[key_temp]
+                            st.info(f"✨ Hallado: **{codigo_hallado}**")
+                            if st.button(f"✅ Confirmar y Agregar", key=f"conf_btn_{idx}_{nombre_completo}"):
+                                display_codigo = codigo_hallado
+                                st.session_state["codigos_manuales_sesion"][nombre_completo] = display_codigo
+                                master_dict[nombre_completo] = display_codigo
+                                save_json_file(MASTER_CATALOG_FILE, master_dict)
+                                del web_temp[key_temp]
+                                st.session_state["web_encontrado_temporal"] = web_temp
+                                st.success(f"¡Agregado al Catálogo Maestro y asignado!")
+                                st.rerun()
                     with col_c3:
                         st.markdown("<br>", unsafe_allow_html=True)
                         codigo_manual_input = st.text_input("O ingresa código manual", key=f"manual_input_{idx}_{nombre_completo}", placeholder="Ej. 052000324822")
