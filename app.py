@@ -91,7 +91,7 @@ if "master_catalog" not in st.session_state:
         "CORONA EXTRA 330ML": "7503034941200", "CORONA CERO 355ML": "750304423180", "MICHELOB ULTRA 355ML": "7422110104967",
         "THE ONE HU 12OZ": "74601325", "THE ONE HU 22OZ": "74601127", "CLAMATO COCTEL TOMATE C": "01484035",
         "ENRIQUILLO SODA 400 ML": "7463172803733", "GATORADE FRUIT PUNCH": "7460548000154", "GATORADE NARANJA": "92735",
-        "GATORADE UVA": "92736", "FOUR LOKO MARACUYA": "849806004962", "FOUR LOKO PONCHE DE FRUTAS": "849806001220",
+        "GATORADE UVA": "052000324822", "FOUR LOKO MARACUYA": "849806004962", "FOUR LOKO PONCHE DE FRUTAS": "849806001220",
         "FOUR LOKO GREEN": "849806001855", "FOUR LOKO PURPLE": "849806002746", "FOUR LOKO GOLD": "849806001756",
         "FOUR LOKO SANDIA": "849806001206", "FOUR LOKO WHITE": "849806005754", "ALOE PURE PLUS ORIGINAL": "8809125063011",
         "MY COCO PURE PLUS": "8809125063011",
@@ -190,7 +190,7 @@ def buscar_en_catalogo_maestro(nombre_producto, presentacion=""):
         "CORONA EXTRA 330ML": "7503034941200", "CORONA CERO 355ML": "750304423180", "MICHELOB ULTRA 355ML": "7422110104967",
         "THE ONE HU 12OZ": "74601325", "THE ONE HU 22OZ": "74601127", "CLAMATO COCTEL TOMATE C": "01484035",
         "ENRIQUILLO SODA 400 ML": "7463172803733", "GATORADE FRUIT PUNCH": "7460548000154", "GATORADE NARANJA": "92735",
-        "GATORADE UVA": "92736", "FOUR LOKO MARACUYA": "849806004962", "FOUR LOKO PONCHE DE FRUTAS": "849806001220",
+        "GATORADE UVA": "052000324822", "FOUR LOKO MARACUYA": "849806004962", "FOUR LOKO PONCHE DE FRUTAS": "849806001220",
         "FOUR LOKO GREEN": "849806001855", "FOUR LOKO PURPLE": "849806002746", "FOUR LOKO GOLD": "849806001756",
         "FOUR LOKO SANDIA": "849806001206", "FOUR LOKO WHITE": "849806005754", "ALOE PURE PLUS ORIGINAL": "8809125063011",
         "MY COCO PURE PLUS": "8809125063011",
@@ -228,14 +228,14 @@ st.sidebar.markdown("<h3 style='color: #0284c7;'>⚡ WilPOS System</h3>", unsafe
 menu_opcion = st.sidebar.radio("Navegación", ["📄 Procesar Factura", "📁 Catálogo Maestro EAN", "🏢 Gestionar Proveedores"])
 
 st.sidebar.markdown("---")
-st.sidebar.markdown("<p style='font-size: 0.8rem; color: #10b981; font-weight: 600;'>🟢 Búsqueda Inteligente Activa</p>", unsafe_allow_html=True)
+st.sidebar.markdown("<p style='font-size: 0.8rem; color: #10b981; font-weight: 600;'>🟢 Búsqueda Web Interactiva Activa</p>", unsafe_allow_html=True)
 
 # ==========================================
 # MÓDULO 1: PROCESAR FACTURA
 # ==========================================
 if menu_opcion == "📄 Procesar Factura":
     st.markdown("<h2>📄 Procesador Inteligente con Detección Automática</h2>", unsafe_allow_html=True)
-    st.markdown("<p style='color: #64748b;'>Sube tu factura. Al asignar un código a un ítem S/C, este desaparecerá del selector de inmediato.</p>", unsafe_allow_html=True)
+    st.markdown("<p style='color: #64748b;'>Sube tu factura. El botón 'Buscar en Web' consultará el código EAN oficial exacto al instante.</p>", unsafe_allow_html=True)
     st.markdown("---")
 
     if "factura_data" not in st.session_state: st.session_state["factura_data"] = None
@@ -391,10 +391,9 @@ if menu_opcion == "📄 Procesar Factura":
                 else:
                     precio_venta = 0.0
 
-                # Detección dinámica: Si es S/C, muestra opciones de búsqueda. Si ya tiene código, se muestra limpio.
                 display_codigo = codigo_final
                 if codigo_final == "S/C":
-                    st.markdown(f"---")
+                    st.markdown("---")
                     col_c1, col_c2, col_c3 = st.columns([2, 1, 1])
                     with col_c1:
                         st.markdown(f"⚠️ **{nombre_completo} ({presentacion_limpia})** sin código.")
@@ -410,12 +409,12 @@ if menu_opcion == "📄 Procesar Factura":
                     with col_c2:
                         st.markdown("<br>", unsafe_allow_html=True)
                         if st.button(f"🌐 Buscar en Web", key=f"web_{idx}_{nombre_completo}"):
-                            with st.spinner(f"Buscando código EAN..."):
+                            with st.spinner(f"Buscando código EAN oficial en la web..."):
                                 try:
                                     model_web = genai.GenerativeModel('gemini-3.8-flash')
                                     prompt_web = (
-                                        f"Busca en internet el código de barras EAN o código oficial de este producto: '{nombre_completo} {presentacion_limpia}'. "
-                                        "Devuelve únicamente el número de código exacto (sin texto adicional). Si no lo encuentras, devuelve 'S/C'."
+                                        f"Busca en internet el código de barras UPC o EAN exacto de este producto: '{nombre_completo} {presentacion_limpia}'. "
+                                        "Devuelve únicamente el número de código de barras (por ejemplo, 052000324822). No agregues texto ni explicación."
                                     )
                                     res_web = model_web.generate_content(prompt_web)
                                     codigo_web = clean_ean_code(res_web.text.strip())
@@ -424,15 +423,15 @@ if menu_opcion == "📄 Procesar Factura":
                                         st.session_state["codigos_manuales_sesion"][nombre_completo] = display_codigo
                                         master_dict[nombre_completo] = display_codigo
                                         save_json_file(MASTER_CATALOG_FILE, master_dict)
-                                        st.success(f"¡Código asignado: {display_codigo}!")
+                                        st.success(f"¡Código oficial encontrado y asignado: {display_codigo}!")
                                         st.rerun()
                                     else:
-                                        st.warning("No hallado en web.")
+                                        st.warning("No se halló en la web automáticamente.")
                                 except Exception:
-                                    st.error("Error en web.")
+                                    st.error("Error al consultar la web.")
                     with col_c3:
                         st.markdown("<br>", unsafe_allow_html=True)
-                        codigo_manual_input = st.text_input("O ingresa código manual", key=f"manual_input_{idx}_{nombre_completo}", placeholder="Ej. 70601561")
+                        codigo_manual_input = st.text_input("O ingresa código manual", key=f"manual_input_{idx}_{nombre_completo}", placeholder="Ej. 052000324822")
                         if codigo_manual_input and len(codigo_manual_input.strip()) >= 7:
                             clean_m = clean_ean_code(codigo_manual_input)
                             if clean_m != "S/C":
