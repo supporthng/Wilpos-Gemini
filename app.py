@@ -203,14 +203,14 @@ st.sidebar.markdown("<h3 style='color: #0284c7;'>⚡ WilPOS Multi-Proveedor</h3>
 menu_opcion = st.sidebar.radio("Navegación", ["📄 Procesar Factura", "📁 Catálogo Maestro EAN", "🏢 Gestionar Proveedores"])
 
 st.sidebar.markdown("---")
-st.sidebar.markdown("<p style='font-size: 0.8rem; color: #10b981; font-weight: 600;'>🟢 Ingreso Manual Directo Habilitado</p>", unsafe_allow_html=True)
+st.sidebar.markdown("<p style='font-size: 0.8rem; color: #10b981; font-weight: 600;'>🟢 Edición Inline en Tabla Activa</p>", unsafe_allow_html=True)
 
 # ==========================================
 # MÓDULO 1: PROCESAR FACTURA
 # ==========================================
 if menu_opcion == "📄 Procesar Factura":
     st.markdown("<h2>📄 Procesador Inteligente Multi-Proveedor (Multi-Página)</h2>", unsafe_allow_html=True)
-    st.markdown("<p style='color: #64748b;'>Sube tus páginas. Si algún código requiere corrección, podrás ingresarlo y confirmarlo de inmediato manualmente.</p>", unsafe_allow_html=True)
+    st.markdown("<p style='color: #64748b;'>Sube tus páginas. Puedes editar cualquier código EAN directamente haciendo clic en la celda de la tabla inferior.</p>", unsafe_allow_html=True)
     st.markdown("---")
 
     if "factura_data" not in st.session_state: st.session_state["factura_data"] = None
@@ -333,15 +333,11 @@ if menu_opcion == "📄 Procesar Factura":
 
         if items:
             st.markdown(f"### 📋 Detalle de Renglones Consolidados ({len(items)} ítems totales)")
-            
-            preview_rows = []
-            wb = openpyxl.Workbook()
-            ws = wb.active
-            ws.title = "Inventario"
-            ws.append(['Nombre', 'Presentación', 'Código Barra', 'Categoría', 'Tipo', 'Precio Venta', 'Costo', 'Stock', 'ITBIS', 'Unidad Medida', 'Cantidad Empaque'])
+            st.info("✏️ **Edición Directa:** Puedes hacer clic sobre cualquier celda en la columna **'Código EAN Asignado'** de la tabla para corregirlo al instante.")
 
+            raw_preview_rows = []
             master_dict = st.session_state.get("master_catalog", {})
-            nombres_maestro_lista = list(master_dict.keys())
+            manual_sesion = st.session_state.get("codigos_manuales_sesion", {})
 
             for idx, item in enumerate(items, start=1):
                 raw_desc = item.get("descripcion", "")
@@ -358,48 +354,15 @@ if menu_opcion == "📄 Procesar Factura":
                 presentacion_limpia = m_med.group(1) if m_med else (raw_tam if raw_tam else "S/P")
                 nombre_display_excel = f"{nombre_completo} {presentacion_limpia}".strip()
 
-                # Prioridad 1: Sesión manual guardada
-                manual_sesion = st.session_state.get("codigos_manuales_sesion", {})
+                # Determinar código inicial
                 if nombre_display_excel in manual_sesion:
                     codigo_final = manual_sesion[nombre_display_excel]
                 else:
-                    # Prioridad 2: Código extraído de factura o catálogo maestro
                     codigo_extraido = clean_ean_code(item.get("codigo_barras", ""))
                     if codigo_extraido == "S/C":
                         codigo_final = buscar_en_catalogo_maestro(nombre_display_excel, presentacion_limpia)
                     else:
                         codigo_final = codigo_extraido
-
-                # SECCIÓN DE CORRECCIÓN MANUAL VISIBLE PARA CADA PRODUCTO
-                st.markdown(f"**Renglón {idx}: {nombre_display_excel}** | Código Actual: `{codigo_final}`")
-                col_ed1, col_ed2 = st.columns([2, 1])
-                with col_ed1:
-                    nuevo_cod_manual = st.text_input(
-                        f"Corregir código manual para {nombre_display_excel}",
-                        value=codigo_final if codigo_final != "S/C" else "",
-                        key=f"input_manual_directo_{idx}_{nombre_display_excel}",
-                        placeholder="Ingresa o corrige el código EAN aquí..."
-                    )
-                with col_ed2:
-                    st.markdown("<br>", unsafe_allow_html=True)
-                    if st.button("💾 Guardar Código", key=f"btn_guardar_manual_{idx}_{nombre_display_excel}"):
-                        clean_m = clean_ean_code(nuevo_cod_manual)
-                        if clean_m != "S/C":
-                            st.session_state["codigos_manuales_sesion"][nombre_display_excel] = clean_m
-                            master_dict[nombre_display_excel] = clean_m
-                            st.session_state["master_catalog"] = master_dict
-                            save_json_file(MASTER_CATALOG_FILE, master_dict)
-                            st.success(f"¡Código {clean_m} guardado para {nombre_display_excel}!")
-                            time.sleep(0.3)
-                            st.rerun()
-                        else:
-                            st.error("Código inválido.")
-
-                # Usar el código actualizado si fue modificado en sesión
-                if nombre_display_excel in manual_sesion:
-                    display_codigo = manual_sesion[nombre_display_excel]
-                else:
-                    display_codigo = codigo_final
 
                 p_unit_extraido = safe_float(item.get("precio_unitario"), 0.0)
                 monto_neto_linea = safe_float(
@@ -422,19 +385,53 @@ if menu_opcion == "📄 Procesar Factura":
                 else:
                     precio_venta = 0.0
 
-                preview_rows.append({
-                    "No.": idx, "Producto": nombre_display_excel, "Código EAN Asignado": display_codigo,
-                    "Cant. Compra": cant_compra, "Empaque": empaque, "Stock (Unidades)": total_unidades,
-                    "Costo Unit. Real": costo_unitario_real, "Precio Venta": precio_venta
+                raw_preview_rows.append({
+                    "No.": idx,
+                    "Producto": nombre_display_excel,
+                    "Código EAN Asignado": str(codigo_final),
+                    "Cant. Compra": cant_compra,
+                    "Empaque": empaque,
+                    "Stock (Unidades)": total_unidades,
+                    "Costo Unit. Real": costo_unitario_real,
+                    "Precio Venta": precio_venta,
+                    "_presentacion": presentacion_limpia
                 })
 
-                ws.append([
-                    nombre_display_excel, presentacion_limpia, str(display_codigo), prov_actual, "producto",
-                    precio_venta, costo_unitario_real, total_unidades, 0.18, "unidad", empaque
-                ])
-                st.markdown("---")
+            df_to_edit = pd.DataFrame(raw_preview_rows)
+            
+            # Tabla interactiva con celdas editables inline
+            edited_df = st.data_editor(
+                df_to_edit.drop(columns=["_presentacion"]),
+                use_container_width=True,
+                hide_index=True,
+                key="grid_inventario_editable"
+            )
 
-            st.dataframe(pd.DataFrame(preview_rows), use_container_width=True, hide_index=True)
+            # Guardar automáticamente los cambios realizados en la tabla en el catálogo maestro y sesión
+            for i, row in edited_df.iterrows():
+                p_name = row["Producto"]
+                nuevo_code_editado = clean_ean_code(row["Código EAN Asignado"])
+                if nuevo_code_editado != "S/C":
+                    st.session_state["codigos_manuales_sesion"][p_name] = nuevo_code_editado
+                    master_dict[p_name] = nuevo_code_editado
+            
+            save_json_file(MASTER_CATALOG_FILE, master_dict)
+            st.session_state["master_catalog"] = master_dict
+
+            # Construir Excel con los datos editados
+            wb = openpyxl.Workbook()
+            ws = wb.active
+            ws.title = "Inventario"
+            ws.append(['Nombre', 'Presentación', 'Código Barra', 'Categoría', 'Tipo', 'Precio Venta', 'Costo', 'Stock', 'ITBIS', 'Unidad Medida', 'Cantidad Empaque'])
+
+            for idx_row, row in edited_df.iterrows():
+                p_name = row["Producto"]
+                p_code = row["Código EAN Asignado"]
+                p_presentacion = raw_preview_rows[idx_row]["_presentacion"]
+                ws.append([
+                    p_name, p_presentacion, str(p_code), prov_actual, "producto",
+                    row["Precio Venta"], row["Costo Unit. Real"], row["Stock (Unidades)"], 0.18, "unidad", row["Empaque"]
+                ])
 
             excel_buffer = io.BytesIO()
             wb.save(excel_buffer)
@@ -479,7 +476,7 @@ elif menu_opcion == "📁 Catálogo Maestro EAN":
     if master_dict:
         st.markdown(f"### 📋 Productos Registrados en el Catálogo ({len(master_dict):,} registros)")
         df_show = pd.DataFrame([{"Producto / Descripción": k, "Código EAN/SAP Oficial": v} for k, v in master_dict.items()])
-        st.dataframe(df_show, use_container_width=True, hide_index=True)
+        st.data_editor(df_show, use_container_width=True, hide_index=True, key="grid_maestro_editable")
 
 # ==========================================
 # MÓDULO 3: GESTIONAR PROVEEDORES
