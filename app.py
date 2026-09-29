@@ -94,7 +94,8 @@ if "master_catalog" not in st.session_state:
         "GATORADE UVA": "052000324822", "FOUR LOKO MARACUYA": "849806004962", "FOUR LOKO PONCHE DE FRUTAS": "849806001220",
         "FOUR LOKO GREEN": "849806001855", "FOUR LOKO PURPLE": "849806002746", "FOUR LOKO GOLD": "849806001756",
         "FOUR LOKO SANDIA": "849806001206", "FOUR LOKO WHITE": "849806005754", 
-        "ALOE PURE PLUS ORIGINAL": "8809125063011", "ALOE PURE PLUS ORIGINAL 1.5 LT": "8809125063035",
+        "ALOE PURE PLUS ORIGINAL": "8809125063011", 
+        "ALOE PURE PLUS ORIGINAL 1.5 LT": "8809125063035",
         "MY COCO PURE PLUS": "8809125063011",
         # Álvarez & Sánchez
         "SANTA HELENA MERLOT 75 CL": "7804300120986",
@@ -211,7 +212,8 @@ def buscar_en_catalogo_maestro(nombre_producto, presentacion=""):
         "GATORADE UVA": "052000324822", "FOUR LOKO MARACUYA": "849806004962", "FOUR LOKO PONCHE DE FRUTAS": "849806001220",
         "FOUR LOKO GREEN": "849806001855", "FOUR LOKO PURPLE": "849806002746", "FOUR LOKO GOLD": "849806001756",
         "FOUR LOKO SANDIA": "849806001206", "FOUR LOKO WHITE": "849806005754", 
-        "ALOE PURE PLUS ORIGINAL": "8809125063011", "ALOE PURE PLUS ORIGINAL 1.5 LT": "8809125063035",
+        "ALOE PURE PLUS ORIGINAL": "8809125063011", 
+        "ALOE PURE PLUS ORIGINAL 1.5 LT": "8809125063035",
         "MY COCO PURE PLUS": "8809125063011",
         # Álvarez & Sánchez
         "SANTA HELENA MERLOT 75 CL": "7804300120986",
@@ -247,14 +249,14 @@ st.sidebar.markdown("<h3 style='color: #0284c7;'>⚡ WilPOS Multi-Proveedor</h3>
 menu_opcion = st.sidebar.radio("Navegación", ["📄 Procesar Factura", "📁 Catálogo Maestro EAN", "🏢 Gestionar Proveedores"])
 
 st.sidebar.markdown("---")
-st.sidebar.markdown("<p style='font-size: 0.8rem; color: #10b981; font-weight: 600;'>🟢 Aloe 1.5L e Independientes Activos</p>", unsafe_allow_html=True)
+st.sidebar.markdown("<p style='font-size: 0.8rem; color: #10b981; font-weight: 600;'>🟢 Aloe 1.5L por Precio Alto Activo</p>", unsafe_allow_html=True)
 
 # ==========================================
 # MÓDULO 1: PROCESAR FACTURA
 # ==========================================
 if menu_opcion == "📄 Procesar Factura":
     st.markdown("<h2>📄 Procesador Inteligente Multi-Proveedor</h2>", unsafe_allow_html=True)
-    st.markdown("<p style='color: #64748b;'>Sube tu factura. El sistema aplica automáticamente la regla de empaque y distingue presentaciones por costo.</p>", unsafe_allow_html=True)
+    st.markdown("<p style='color: #64748b;'>Sube tu factura. El sistema asigna el código de 1.5L al de mayor precio sin alterar los nombres.</p>", unsafe_allow_html=True)
     st.markdown("---")
 
     if "factura_data" not in st.session_state: st.session_state["factura_data"] = None
@@ -386,17 +388,23 @@ if menu_opcion == "📄 Procesar Factura":
                 
                 nombre_completo = limpiar_nombre_producto(raw_desc, raw_tam)
                 
-                # REGLA DE DISTINCIÓN DE ALOE PURE PLUS POR COSTO UNITARIO
+                # REGLA DE CÓDIGO PARA ALOE PURE PLUS SEGÚN PRECIO (Sin alterar el nombre)
+                p_unit_check = safe_float(item.get("precio_unitario"), 0.0)
                 if "ALOE PURE PLUS ORIGINAL" in nombre_completo:
-                    p_unit_check = safe_float(item.get("precio_unitario"), 0.0)
                     if p_unit_check > 200.0:
+                        # El de mayor precio unitario ($259.88) es el de 1.5 LT (Código 8809125063035)
                         nombre_completo = "ALOE PURE PLUS ORIGINAL 1.5 LT"
-                        raw_tam = "1.5 LT"
+                    else:
+                        # El de menor precio es el regular de 500 ml (Código 8809125063011)
+                        nombre_completo = "ALOE PURE PLUS ORIGINAL"
 
                 m_med = re.search(r'(\d+\s*(?:ML|L|LT|G|KG|OZ|Z))', str((raw_tam or "") + " " + (raw_desc or "")).upper())
                 presentacion_limpia = m_med.group(1) if m_med else (raw_tam if raw_tam else "S/P")
 
                 codigo_final = buscar_en_catalogo_maestro(nombre_completo, presentacion_limpia)
+
+                # Si se usó la clave temporal para buscar en maestro, restaurar nombre limpio original en visualización si se prefiere
+                nombre_display_excel = "ALOE PURE PLUS ORIGINAL" if "1.5 LT" in nombre_completo else nombre_completo
 
                 cant_compra = safe_float(item.get("cantidad"), 1.0)
                 unidad = str(item.get("unidad", ""))
@@ -404,7 +412,7 @@ if menu_opcion == "📄 Procesar Factura":
                 empaque = parse_empaque_proveedor(prov_actual, raw_tam, unidad, raw_desc)
                 total_unidades = int(cant_compra * empaque)
 
-                p_unit_extraido = safe_float(item.get("precio_unitario"), 0.0)
+                p_unit_extraido = p_unit_check
                 monto_neto_linea = safe_float(
                     item.get("monto_neto") or 
                     item.get("impuesto_neto") or 
@@ -430,40 +438,40 @@ if menu_opcion == "📄 Procesar Factura":
                     st.markdown("---")
                     col_c1, col_c2 = st.columns([2, 1])
                     with col_c1:
-                        st.markdown(f"⚠️ **{nombre_completo} ({presentacion_limpia})** sin código.")
+                        st.markdown(f"⚠️ **{nombre_display_excel} ({presentacion_limpia})** sin código.")
                         sel_maestro = st.selectbox(
                             f"Seleccionar del Catálogo Maestro",
                             ["-- Buscar en Maestro --"] + nombres_maestro_lista,
-                            key=f"sel_maestro_{idx}_{nombre_completo}"
+                            key=f"sel_maestro_{idx}_{nombre_display_excel}_{idx}"
                         )
                         if sel_maestro != "-- Buscar en Maestro --":
                             codigo_seleccionado = master_dict[sel_maestro]
                             display_codigo = codigo_seleccionado
-                            st.session_state["codigos_manuales_sesion"][nombre_completo] = display_codigo
-                            master_dict[nombre_completo] = display_codigo
+                            st.session_state["codigos_manuales_sesion"][nombre_display_excel] = display_codigo
+                            master_dict[nombre_display_excel] = display_codigo
                             save_json_file(MASTER_CATALOG_FILE, master_dict)
                             st.success(f"¡Relacionado con '{sel_maestro}' y guardado en el Catálogo Maestro!")
                             st.rerun()
                     with col_c2:
                         st.markdown("<br>", unsafe_allow_html=True)
-                        codigo_manual_input = st.text_input("O ingresa código manual", key=f"manual_input_{idx}_{nombre_completo}", placeholder="Ej. 052000324822")
+                        codigo_manual_input = st.text_input("O ingresa código manual", key=f"manual_input_{idx}_{nombre_display_excel}_{idx}", placeholder="Ej. 052000324822")
                         if codigo_manual_input and len(codigo_manual_input.strip()) >= 7:
                             clean_m = clean_ean_code(codigo_manual_input)
                             if clean_m != "S/C":
                                 display_codigo = clean_m
-                                st.session_state["codigos_manuales_sesion"][nombre_completo] = display_codigo
-                                master_dict[nombre_completo] = display_codigo
+                                st.session_state["codigos_manuales_sesion"][nombre_display_excel] = display_codigo
+                                master_dict[nombre_display_excel] = display_codigo
                                 save_json_file(MASTER_CATALOG_FILE, master_dict)
                                 st.rerun()
 
                 preview_rows.append({
-                    "No.": idx, "Producto": nombre_completo, "Código EAN Asignado": display_codigo,
+                    "No.": idx, "Producto": nombre_display_excel, "Código EAN Asignado": display_codigo,
                     "Cant. Compra": cant_compra, "Empaque": empaque, "Stock (Unidades)": total_unidades,
                     "Costo Unit. Real": costo_unitario_real, "Precio Venta": precio_venta
                 })
 
                 ws.append([
-                    nombre_completo, presentacion_limpia, str(display_codigo), prov_actual, "producto",
+                    nombre_display_excel, presentacion_limpia, str(display_codigo), prov_actual, "producto",
                     precio_venta, costo_unitario_real, total_unidades, 0.18, "unidad", empaque
                 ])
 
