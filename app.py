@@ -156,6 +156,7 @@ def limpiar_nombre_producto(descripcion_raw, tamano_raw):
 def parse_empaque(tamano_txt="", unidad_txt="", descripcion_txt=""):
     combined = f"{str(tamano_txt or '')} {str(unidad_txt or '')} {str(descripcion_txt or '')}".upper()
     
+    # 1. Detección por patrones generales con barra
     m_slash = re.search(r'\b(48|24|20|18|16|12|6|4)\s*/', combined)
     if m_slash:
         val = int(m_slash.group(1))
@@ -163,6 +164,16 @@ def parse_empaque(tamano_txt="", unidad_txt="", descripcion_txt=""):
 
     if "4X6" in combined: return 6
     if "LP 4" in combined or "4X" in combined: return 24
+
+    # 2. Diccionario de respaldo por palabras clave exactas para CND / BEES
+    if "ALOE PURE PLUS" in combined or "MY COCO PURE PLUS" in combined:
+        return 20
+    if "GATORADE" in combined:
+        return 24
+    if "FOUR LOKO" in combined:
+        return 6
+    if "CLAMATO" in combined:
+        return 12
 
     unidad_upper = str(unidad_txt or "").upper().strip()
     if unidad_upper in ["PC", "UN"]:
@@ -226,14 +237,14 @@ st.sidebar.markdown("<h3 style='color: #0284c7;'>⚡ WilPOS System</h3>", unsafe
 menu_opcion = st.sidebar.radio("Navegación", ["📄 Procesar Factura", "📁 Catálogo Maestro EAN", "🏢 Gestionar Proveedores"])
 
 st.sidebar.markdown("---")
-st.sidebar.markdown("<p style='font-size: 0.8rem; color: #10b981; font-weight: 600;'>🟢 Costos y Empaques Validados</p>", unsafe_allow_html=True)
+st.sidebar.markdown("<p style='font-size: 0.8rem; color: #10b981; font-weight: 600;'>🟢 Empaques Blindados Activos</p>", unsafe_allow_html=True)
 
 # ==========================================
 # MÓDULO 1: PROCESAR FACTURA
 # ==========================================
 if menu_opcion == "📄 Procesar Factura":
     st.markdown("<h2>📄 Procesador Inteligente con Detección Automática</h2>", unsafe_allow_html=True)
-    st.markdown("<p style='color: #64748b;'>Sube tu factura o tique. El sistema calcula costos unitarios por pieza sin ITBIS aplicando el empaque.</p>", unsafe_allow_html=True)
+    st.markdown("<p style='color: #64748b;'>Sube tu factura o tique. El sistema calcula costos unitarios por pieza sin ITBIS aplicando el empaque correcto.</p>", unsafe_allow_html=True)
     st.markdown("---")
 
     if "factura_data" not in st.session_state: st.session_state["factura_data"] = None
