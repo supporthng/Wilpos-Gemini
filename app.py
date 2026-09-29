@@ -139,12 +139,12 @@ def clean_ean_code(code_val):
     return "S/C"
 
 def limpiar_nombre_producto(descripcion_raw, tamano_raw):
-    desc = str(descripcion_raw).upper().strip()
+    desc = str(descripcion_raw or "").upper().strip()
     desc = re.sub(r'\s+\d{4,6}$', '', desc)
     desc = re.sub(r'\b(PC|UN|CAJA|CAJ|BOT|PZA)\b', '', desc)
     desc = re.sub(r'\s+', ' ', desc).strip()
     
-    tam = str(tamano_raw).upper().strip()
+    tam = str(tamano_raw or "").upper().strip()
     m_medida = re.search(r'(\d+\s*(?:ML|L|LT|G|KG|OZ|Z))', tam + " " + desc)
     medida_limpia = m_medida.group(1) if m_medida else ""
     
@@ -154,22 +154,22 @@ def limpiar_nombre_producto(descripcion_raw, tamano_raw):
     return desc
 
 def parse_empaque(tamano_txt="", unidad_txt="", descripcion_txt=""):
-    combined = f"{str(tamano_txt)} {str(unidad_txt)} {str(descripcion_txt)}".upper()
+    combined = f"{str(tamano_txt or '')} {str(unidad_txt or '')} {str(descripcion_txt or '')}".upper()
     
     if "24/" in combined or " 24/" in combined: return 24
     if "12/" in combined: return 12
     if "16/" in combined: return 16
     if "6/" in combined or "4X6" in combined: return 6
 
-    unidad_upper = str(unidad_txt).upper().strip()
+    unidad_upper = str(unidad_txt or "").upper().strip()
     if unidad_upper in ["PC", "UN"]:
         return 1
 
     return 1
 
 def buscar_en_catalogo_maestro(nombre_producto, presentacion=""):
-    n_upper = str(nombre_producto).upper().strip()
-    p_upper = str(presentacion).upper().strip()
+    n_upper = str(nombre_producto or "").upper().strip()
+    p_upper = str(presentacion or "").upper().strip()
     combined_query = f"{n_upper} {p_upper}".strip()
 
     manual_dict = st.session_state.get("codigos_manuales_sesion", {})
@@ -223,14 +223,14 @@ st.sidebar.markdown("<h3 style='color: #0284c7;'>⚡ WilPOS System</h3>", unsafe
 menu_opcion = st.sidebar.radio("Navegación", ["📄 Procesar Factura", "📁 Catálogo Maestro EAN", "🏢 Gestionar Proveedores"])
 
 st.sidebar.markdown("---")
-st.sidebar.markdown("<p style='font-size: 0.8rem; color: #10b981; font-weight: 600;'>🟢 Costos Unitarios Reales Activos</p>", unsafe_allow_html=True)
+st.sidebar.markdown("<p style='font-size: 0.8rem; color: #10b981; font-weight: 600;'>🟢 Sistema WilPOS Operativo</p>", unsafe_allow_html=True)
 
 # ==========================================
 # MÓDULO 1: PROCESAR FACTURA
 # ==========================================
 if menu_opcion == "📄 Procesar Factura":
     st.markdown("<h2>📄 Procesador Inteligente con Detección Automática</h2>", unsafe_allow_html=True)
-    st.markdown("<p style='color: #64748b;'>Sube tu factura. El sistema calcula el costo unitario por botella/lata sin ITBIS aplicando el empaque.</p>", unsafe_allow_html=True)
+    st.markdown("<p style='color: #64748b;'>Sube tu factura o tique. El sistema calcula costos unitarios exactos sin ITBIS aplicando el empaque correcto.</p>", unsafe_allow_html=True)
     st.markdown("---")
 
     if "factura_data" not in st.session_state: st.session_state["factura_data"] = None
@@ -363,7 +363,7 @@ if menu_opcion == "📄 Procesar Factura":
                 raw_tam = item.get("tamano", "")
                 
                 nombre_completo = limpiar_nombre_producto(raw_desc, raw_tam)
-                m_med = re.search(r'(\d+\s*(?:ML|L|LT|G|KG|OZ|Z))', str(raw_tam + " " + raw_desc).upper())
+                m_med = re.search(r'(\d+\s*(?:ML|L|LT|G|KG|OZ|Z))', str((raw_tam or "") + " " + (raw_desc or "")).upper())
                 presentacion_limpia = m_med.group(1) if m_med else (raw_tam if raw_tam else "S/P")
 
                 codigo_final = buscar_en_catalogo_maestro(nombre_completo, presentacion_limpia)
@@ -381,7 +381,6 @@ if menu_opcion == "📄 Procesar Factura":
                     0.0
                 )
 
-                # CORRECCIÓN CLAVE: El costo unitario real por pieza se obtiene dividiendo el precio de la caja/pack entre el empaque
                 if p_unit_extraido > 0:
                     costo_unitario_real = round(p_unit_extraido / empaque, 2) if empaque > 1 else p_unit_extraido
                 elif monto_neto_linea > 0 and total_unidades > 0:
