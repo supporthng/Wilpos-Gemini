@@ -80,8 +80,8 @@ if "supplier_memory" not in st.session_state:
             "tipo_formato": "factura_desglose",
             "instruccion_prompt": (
                 "Analiza esta factura de ALVAREZ & SANCHEZ renglón por renglón. "
-                "Extrae estrictamente: 'descripcion', 'tamano', 'cantidad', 'unidad' (CAJ/PZA) "
-                "y el valor monetario exacto de la columna 'monto_neto'."
+                "Extrae estrictamente: 'descripcion', 'tamano' (ej. 12 PZA, 6 PZA), 'cantidad' (número de cajas), "
+                "'unidad' (CAJ/PZA), y el valor monetario exacto de la columna 'monto_neto'."
             )
         }
     }
@@ -138,7 +138,6 @@ def clean_ean_code(code_val):
     s_val = str(code_val).strip()
     if s_val.endswith('.0'): s_val = s_val[:-2]
     s_val = re.sub(r'\D', '', s_val)
-    # Excepción aplicada: Permite códigos EAN/SAP confirmados desde 7 hasta 14 dígitos
     if 7 <= len(s_val) <= 14: return str(s_val)
     return "S/C"
 
@@ -158,30 +157,34 @@ def limpiar_nombre_producto(descripcion_raw, tamano_raw):
     return desc
 
 def parse_empaque(tamano_txt="", unidad_txt="", descripcion_txt=""):
-    unidad_upper = str(unidad_txt).upper()
+    """
+    Valida y extrae estrictamente cuántas unidades (piezas) contiene cada empaque/caja
+    leyendo la combinación del tamaño, unidad y descripción.
+    """
     combined = f"{str(tamano_txt)} {str(unidad_txt)} {str(descripcion_txt)}".upper()
     
-    if "12 PZA" in combined or ("12" in combined and "PZA" in unidad_upper): return 12
-    if "6 PZA" in combined or ("6" in combined and "PZA" in unidad_upper): return 6
-    if "24 PZA" in combined or ("24" in combined and "PZA" in unidad_upper): return 24
-    
-    if "CAJ" in unidad_upper or "CAJA" in unidad_upper:
-        m_pack = re.search(r'\b(24|12|6|18|4)\b', combined)
-        if m_pack: return int(m_pack.group(1))
-            
-    if "ALOE" in combined: return 24
-    if "CORONA" in combined or "MICHELOB" in combined or "BRAHMA" in combined or "PTE" in combined or "THE ONE" in combined:
-        if "PC" in unidad_upper and not re.search(r'\b(6|12|16)\b', combined): return 24
-    if "CLAMATO" in combined: return 12
-    if "FOUR LOKO" in combined: return 12
-    if "GATORADE" in combined: return 24
-    if "MY COCO" in combined: return 20
-    if "ENRIQUILLO" in combined: return 24
-        
-    m_pack = re.search(r'\b(48|24|16|12|6|10|20|30|4)\s*[/xX]', combined)
-    if m_pack: return int(m_pack.group(1))
+    # 1. Búsqueda explícita de formato numérico de piezas por caja (ej. 12 PZA, 6 PZA, 24 PZA)
+    m_pza = re.search(r'\b(\d{1,2})\s*PZA\b', combined)
+    if m_pza:
+        val = int(m_pza.group(1))
+        if val > 0: return val
 
-    return 12 if "SANTA HELENA" in combined or "SELA" in combined else (6 if "SANTIAGO RUIZ" in combined else 1)
+    # 2. Búsqueda genérica de empaque en el texto
+    m_pack = re.search(r'\b(48|24|20|18|16|12|6|4)\b', combined)
+    if m_pack:
+        val = int(m_pack.group(1))
+        if val > 1: return val
+
+    unidad_upper = str(unidad_txt).upper()
+    if "UN" in unidad_upper or "PZA" in unidad_upper and "CAJ" not in unidad_upper:
+        return 1
+
+    # Reglas por defecto según categoría de productos
+    if "SANTA HELENA" in combined or "SELA" in combined: return 12
+    if "SANTIAGO RUIZ" in combined: return 6
+    if "SCHWEPPES" in combined: return 6 if "1 LT" in combined else 24
+
+    return 1
 
 def buscar_en_catalogo_maestro(nombre_producto, presentacion=""):
     n_upper = str(nombre_producto).upper().strip()
@@ -235,7 +238,7 @@ st.sidebar.markdown("<h3 style='color: #0284c7;'>⚡ WilPOS System</h3>", unsafe
 menu_opcion = st.sidebar.radio("Navegación", ["📄 Procesar Factura", "📁 Catálogo Maestro EAN", "🏢 Gestionar Proveedores"])
 
 st.sidebar.markdown("---")
-st.sidebar.markdown("<p style='font-size: 0.8rem; color: #10b981; font-weight: 600;'>🟢 Validación de 7 a 14 Dígitos Activa</p>", unsafe_allow_html=True)
+st.sidebar.markdown("<p style='font-size: 0.8rem; color: #10b981; font-weight: 600;'>🟢 Validación de Empaque Activa</p>", unsafe_allow_html=True)
 
 # ==========================================
 # MÓDULO 1: PROCESAR FACTURA
@@ -275,7 +278,7 @@ if menu_opcion == "📄 Procesar Factura":
                     supp_mem = st.session_state["supplier_memory"]
                     
                     if prov_seleccionado == "➕ Registrar Nuevo Proveedor":
-                        instruccion_proveedor = "Analiza el documento, identifica el nombre comercial del proveedor y extrae todos sus renglones con descripción, cantidad, unidad y monto neto."
+                        instruccion_proveedor = "Analiza el documento, identifica el nombre comercial del proveedor y extrae todos sus renglones con descripción, tamaño, cantidad, unidad y monto neto."
                         prov_nombre_objetivo = "NUEVO PROVEEDOR"
                     else:
                         instruccion_proveedor = supp_mem[prov_seleccionado].get("instruccion_prompt", "Extrae todos los ítems.")
@@ -365,10 +368,21 @@ if menu_opcion == "📄 Procesar Factura":
 
                 cant_compra = safe_float(item.get("cantidad"), 1.0)
                 unidad = str(item.get("unidad", ""))
-                monto_neto_fila = safe_float(item.get("monto_neto") or item.get("impuesto_neto"), 0.0)
+                
+                # Monto neto real de la línea con descuento
+                monto_neto_fila = safe_float(
+                    item.get("monto_neto") or 
+                    item.get("impuesto_neto") or 
+                    item.get("valor") or 
+                    item.get("precio"), 
+                    0.0
+                )
 
+                # Validación estricta del empaque y cálculo del stock total
                 empaque = parse_empaque(raw_tam, unidad, raw_desc)
                 total_unidades = int(cant_compra * empaque)
+                
+                # Costo unitario real por unidad individual (Monto Neto / Stock Total)
                 costo_unitario_real = round(monto_neto_fila / total_unidades, 2) if total_unidades > 0 else 0.0
 
                 if costo_unitario_real > 0:
