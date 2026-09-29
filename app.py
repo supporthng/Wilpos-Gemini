@@ -231,14 +231,14 @@ st.sidebar.markdown("<h3 style='color: #0284c7;'>⚡ WilPOS System</h3>", unsafe
 menu_opcion = st.sidebar.radio("Navegación", ["📄 Procesar Factura", "📁 Catálogo Maestro EAN", "🏢 Gestionar Proveedores"])
 
 st.sidebar.markdown("---")
-st.sidebar.markdown("<p style='font-size: 0.8rem; color: #10b981; font-weight: 600;'>🟢 Relación Maestra Activa</p>", unsafe_allow_html=True)
+st.sidebar.markdown("<p style='font-size: 0.8rem; color: #10b981; font-weight: 600;'>🟢 Costos Corregidos Activos</p>", unsafe_allow_html=True)
 
 # ==========================================
 # MÓDULO 1: PROCESAR FACTURA
 # ==========================================
 if menu_opcion == "📄 Procesar Factura":
     st.markdown("<h2>📄 Procesador Inteligente con Detección Automática</h2>", unsafe_allow_html=True)
-    st.markdown("<p style='color: #64748b;'>Sube tu factura. Al seleccionar un producto del maestro, se relacionará automáticamente para futuras consultas.</p>", unsafe_allow_html=True)
+    st.markdown("<p style='color: #64748b;'>Sube tu factura. Los costos unitarios ahora se calculan correctamente dividiendo el monto neto total de la línea entre las unidades totales.</p>", unsafe_allow_html=True)
     st.markdown("---")
 
     if "factura_data" not in st.session_state: st.session_state["factura_data"] = None
@@ -377,7 +377,8 @@ if menu_opcion == "📄 Procesar Factura":
                 cant_compra = safe_float(item.get("cantidad"), 1.0)
                 unidad = str(item.get("unidad", ""))
                 
-                monto_neto_fila = safe_float(
+                # CORRECCIÓN DE COSTO: Tomar el monto neto total de la línea (Imp. Neto)
+                monto_neto_linea = safe_float(
                     item.get("monto_neto") or 
                     item.get("impuesto_neto") or 
                     item.get("valor") or 
@@ -387,7 +388,9 @@ if menu_opcion == "📄 Procesar Factura":
 
                 empaque = parse_empaque(raw_tam, unidad, raw_desc)
                 total_unidades = int(cant_compra * empaque)
-                costo_unitario_real = round(monto_neto_fila / total_unidades, 2) if total_unidades > 0 else 0.0
+                
+                # El costo unitario real se obtiene dividiendo el monto total de la línea entre las unidades totales físicas
+                costo_unitario_real = round(monto_neto_linea / total_unidades, 2) if total_unidades > 0 else 0.0
 
                 if costo_unitario_real > 0:
                     precio_con_utilidad = costo_unitario_real * (1 + (margen_utilidad / 100.0))
@@ -409,7 +412,6 @@ if menu_opcion == "📄 Procesar Factura":
                             ["-- Buscar en Maestro --"] + nombres_maestro_lista,
                             key=f"sel_maestro_{idx}_{nombre_completo}"
                         )
-                        # Al seleccionar del maestro, se relaciona con el nombre extraído y se guarda en el catálogo permanente
                         if sel_maestro != "-- Buscar en Maestro --":
                             codigo_seleccionado = master_dict[sel_maestro]
                             display_codigo = codigo_seleccionado
