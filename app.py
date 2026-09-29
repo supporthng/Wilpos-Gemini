@@ -87,7 +87,7 @@ if "master_catalog" not in st.session_state:
     base_defaults = {
         "PTE. LIGHT HU 22OZ": "70601561", "PRESIDENTE LIGHT HU 22OZ": "70601561", "PTE. CJ 22OZ": "70601561",
         "PTE. HU 12OZ": "74621774", "PTE. LIGHT HU 12OZ": "74621774", "BRAHMA LIGHT HU 12OZ": "7468973200194",
-        "BRAHMA LIGHT HU": "7468973200194", "BRAHMA LIGHT HU 16/650M": "7468973200200", "BRAHMA LIGHT 650ML": "7468973200200",
+        "BRAHMA LIGHT HU 16/650M": "7468973200200", "BRAHMA LIGHT 650ML": "7468973200200",
         "CORONA EXTRA 330ML": "7503034941200", "CORONA CERO 355ML": "750304423180", "MICHELOB ULTRA 355ML": "7422110104967",
         "THE ONE HU 12OZ": "74601325", "THE ONE HU 22OZ": "74601127", "CLAMATO COCTEL TOMATE C": "01484035",
         "ENRIQUILLO SODA 400 ML": "7463172803733", "GATORADE FRUIT PUNCH": "7460548000154", "GATORADE NARANJA": "92735",
@@ -249,14 +249,14 @@ st.sidebar.markdown("<h3 style='color: #0284c7;'>⚡ WilPOS Multi-Proveedor</h3>
 menu_opcion = st.sidebar.radio("Navegación", ["📄 Procesar Factura", "📁 Catálogo Maestro EAN", "🏢 Gestionar Proveedores"])
 
 st.sidebar.markdown("---")
-st.sidebar.markdown("<p style='font-size: 0.8rem; color: #10b981; font-weight: 600;'>🟢 Buscador Maestro Restaurado</p>", unsafe_allow_html=True)
+st.sidebar.markdown("<p style='font-size: 0.8rem; color: #10b981; font-weight: 600;'>🟢 Confirmación Activa</p>", unsafe_allow_html=True)
 
 # ==========================================
 # MÓDULO 1: PROCESAR FACTURA
 # ==========================================
 if menu_opcion == "📄 Procesar Factura":
     st.markdown("<h2>📄 Procesador Inteligente Multi-Proveedor</h2>", unsafe_allow_html=True)
-    st.markdown("<p style='color: #64748b;'>Sube tu factura. El sistema procesa los ítems y te permite asignar códigos faltantes fácilmente.</p>", unsafe_allow_html=True)
+    st.markdown("<p style='color: #64748b;'>Sube tu factura. Confirma o rechaza los códigos nuevos para guardarlos en el catálogo maestro.</p>", unsafe_allow_html=True)
     st.markdown("---")
 
     if "factura_data" not in st.session_state: st.session_state["factura_data"] = None
@@ -432,40 +432,44 @@ if menu_opcion == "📄 Procesar Factura":
                 display_codigo = codigo_final
                 if codigo_final == "S/C":
                     st.markdown("---")
+                    st.markdown(f"⚠️ **{nombre_display_excel} ({presentacion_limpia})** sin código.")
+                    
                     col_c1, col_c2, col_c3 = st.columns([2, 1, 1])
                     with col_c1:
-                        st.markdown(f"⚠️ **{nombre_display_excel} ({presentacion_limpia})** sin código.")
                         sel_maestro = st.selectbox(
                             f"Seleccionar del Catálogo Maestro",
                             ["-- Buscar en Maestro --"] + nombres_maestro_lista,
                             key=f"sel_maestro_{idx}_{nombre_display_excel}_{idx}"
                         )
                         if sel_maestro != "-- Buscar en Maestro --":
-                            codigo_seleccionado = master_dict[sel_maestro]
-                            display_codigo = codigo_seleccionado
-                            st.session_state["codigos_manuales_sesion"][nombre_display_excel] = display_codigo
-                            master_dict[nombre_display_excel] = display_codigo
-                            save_json_file(MASTER_CATALOG_FILE, master_dict)
-                            st.success(f"¡Relacionado con '{sel_maestro}' y guardado!")
-                            st.rerun()
+                            display_codigo = master_dict[sel_maestro]
                     with col_c2:
-                        st.markdown("<br>", unsafe_allow_html=True)
                         codigo_manual_input = st.text_input("Ingresar código manual", key=f"manual_input_{idx}_{nombre_display_excel}_{idx}", placeholder="Ej. 052000324822")
                         if codigo_manual_input and len(codigo_manual_input.strip()) >= 7:
                             clean_m = clean_ean_code(codigo_manual_input)
                             if clean_m != "S/C":
                                 display_codigo = clean_m
+                    with col_c3:
+                        st.markdown("<br>", unsafe_allow_html=True)
+                        query_busqueda = f"EAN barcode {nombre_display_excel} {presentacion_limpia}".replace(" ", "+")
+                        url_busqueda = f"https://www.google.com/search?q={query_busqueda}"
+                        st.markdown(f"[🌐 Buscar en la Web]({url_busqueda})", unsafe_allow_html=True)
+
+                    # Workflow de Confirmar o Rechazar
+                    if display_codigo != "S/C":
+                        col_conf1, col_conf2 = st.columns(2)
+                        with col_conf1:
+                            if st.button("✅ Confirmar y Guardar en Maestro", key=f"btn_conf_{idx}_{nombre_display_excel}"):
                                 st.session_state["codigos_manuales_sesion"][nombre_display_excel] = display_codigo
                                 master_dict[nombre_display_excel] = display_codigo
                                 save_json_file(MASTER_CATALOG_FILE, master_dict)
+                                st.success(f"¡Código {display_codigo} confirmado y guardado permanentemente en el Catálogo Maestro!")
+                                time.sleep(0.5)
                                 st.rerun()
-                    with col_c3:
-                        st.markdown("<br>", unsafe_allow_html=True)
-                        if st.button("🌐 Buscar en Web", key=f"btn_web_{idx}_{nombre_display_excel}"):
-                            st.info((
-                                f"Búsqueda sugerida para copiar: 'EAN barcode {nombre_display_excel} {presentacion_limpia}'. "
-                                "Copia el código y pégalo en el recuadro de al lado para registrarlo permanentemente."
-                            ))
+                        with col_conf2:
+                            if st.button("❌ Rechazar", key=f"btn_rech_{idx}_{nombre_display_excel}"):
+                                st.warning("Código rechazado.")
+                                display_codigo = "S/C"
 
                 preview_rows.append({
                     "No.": idx, "Producto": nombre_display_excel, "Código EAN Asignado": display_codigo,
