@@ -69,12 +69,12 @@ if "supplier_memory" not in st.session_state:
         "CND / BEES": {
             "nombre": "CND / BEES",
             "tipo_formato": "tique_doble_linea",
-            "instruccion_prompt": "Analiza este tique de CND / BEES donde cada ítem tiene dos líneas: la línea 1 con código, unidad (PC) y descripción, y la línea 2 con cantidad, precio unitario (P.Unit) e impuesto neto. Extrae 'descripcion', 'tamano', 'cantidad', 'unidad' y 'precio_unitario'."
+            "instruccion_prompt": "Analiza este tique de CND / BEES donde cada ítem tiene dos líneas: la línea 1 con código, unidad (PC o UN) y descripción, y la línea 2 con cantidad, precio unitario (P.Unit) e impuesto neto. Extrae 'descripcion', 'tamano', 'cantidad', 'unidad' y 'precio_unitario'."
         },
         "ALVAREZ & SANCHEZ": {
             "nombre": "ALVAREZ & SANCHEZ",
             "tipo_formato": "factura_desglose",
-            "instruccion_prompt": "Analiza esta factura de ALVAREZ & SANCHEZ renglón por renglón. Extrae 'descripcion', 'tamano' (ej. 12 PZA, 6 PZA), 'cantidad', 'unidad' y 'monto_neto'."
+            "instruccion_prompt": "Analiza esta factura de ALVAREZ & SANCHEZ renglón por renglón. Extrae 'descripcion', 'tamano', 'cantidad', 'unidad' y 'monto_neto'."
         }
     }
     if not loaded_supps:
@@ -154,6 +154,12 @@ def limpiar_nombre_producto(descripcion_raw, tamano_raw):
     return desc
 
 def parse_empaque(tamano_txt="", unidad_txt="", descripcion_txt=""):
+    unidad_upper = str(unidad_txt or "").upper().strip()
+    
+    # REGLA ABSOLUTA: Si el tique indica explícitamente que es unidad suelta ("UN"), el empaque es 1 sin excepción
+    if unidad_upper == "UN":
+        return 1
+
     combined = f"{str(tamano_txt or '')} {str(unidad_txt or '')} {str(descripcion_txt or '')}".upper()
     
     # 1. Detección por patrones generales con barra
@@ -165,7 +171,7 @@ def parse_empaque(tamano_txt="", unidad_txt="", descripcion_txt=""):
     if "4X6" in combined: return 6
     if "LP 4" in combined or "4X" in combined: return 24
 
-    # 2. Diccionario de respaldo por palabras clave exactas para CND / BEES
+    # 2. Diccionario de respaldo por palabras clave (solo para cajas / packs PC)
     if "ALOE PURE PLUS" in combined or "MY COCO PURE PLUS" in combined:
         return 20
     if "GATORADE" in combined:
@@ -174,10 +180,6 @@ def parse_empaque(tamano_txt="", unidad_txt="", descripcion_txt=""):
         return 6
     if "CLAMATO" in combined:
         return 12
-
-    unidad_upper = str(unidad_txt or "").upper().strip()
-    if unidad_upper in ["PC", "UN"]:
-        return 1
 
     return 1
 
@@ -237,7 +239,7 @@ st.sidebar.markdown("<h3 style='color: #0284c7;'>⚡ WilPOS System</h3>", unsafe
 menu_opcion = st.sidebar.radio("Navegación", ["📄 Procesar Factura", "📁 Catálogo Maestro EAN", "🏢 Gestionar Proveedores"])
 
 st.sidebar.markdown("---")
-st.sidebar.markdown("<p style='font-size: 0.8rem; color: #10b981; font-weight: 600;'>🟢 Empaques Blindados Activos</p>", unsafe_allow_html=True)
+st.sidebar.markdown("<p style='font-size: 0.8rem; color: #10b981; font-weight: 600;'>🟢 Sistema WilPOS 100% Calibrado</p>", unsafe_allow_html=True)
 
 # ==========================================
 # MÓDULO 1: PROCESAR FACTURA
@@ -309,10 +311,10 @@ if menu_opcion == "📄 Procesar Factura":
                     prompt_unificado = (
                         f"Estás procesando un tique o factura del proveedor: '{prov_encontrado}'. "
                         f"Instrucción específica: {instruccion_proveedor} "
-                        "IMPORTANTE (Estructura de tique CND/BEES): Cada producto tiene una línea de texto arriba (con el nombre y formato ej. 24/591) y una línea abajo con la cantidad, el precio unitario exacto (P.Unit) y el importe neto. "
-                        "Extrae 'precio_unitario' exactamente como aparece en la columna P.Unit del tique. "
+                        "IMPORTANTE (Estructura de tique CND/BEES): Cada producto tiene una línea de texto arriba (con el nombre y formato ej. 24/591) y una línea abajo con la cantidad, la unidad (PC o UN), el precio unitario exacto (P.Unit) y el importe neto. "
+                        "Extrae 'precio_unitario' exactamente como aparece en la columna P.Unit del tique y la 'unidad' (PC o UN). "
                         "Devuelve un JSON puro con esta estructura exacta y llaves en minúscula: "
-                        '{"paginacion": "1 de 1", "proveedor_detectado": "' + prov_encontrado + '", "subtotal": 0.0, "itbis": 0.0, "descuentos": 0.0, "total": 0.0, "items": [{"descripcion": "...", "tamano": "...", "cantidad": 1.0, "unidad": "...", "precio_unitario": 0.0, "monto_neto": 0.0}]}. '
+                        '{"paginacion": "1 de 1", "proveedor_detectado": "' + prov_encontrado + '", "subtotal": 0.0, "itbis": 0.0, "descuentos": 0.0, "total": 0.0, "items": [{"descripcion": "...", "tamano": "...", "cantidad": 1.0, "unidad": "PC", "precio_unitario": 0.0, "monto_neto": 0.0}]}. '
                         "Respuesta JSON pura."
                     )
 
