@@ -48,15 +48,19 @@ def load_json_file(filepath, default_type="dict"):
             with open(filepath, "r", encoding="utf-8") as f:
                 data = json.load(f)
                 if default_type == "list" and isinstance(data, list): return data
-                if default_type == "dict" and isinstance(data, dict): return data
+                if default_type == "dict" and isinstance(data, dict):
+                    # Limpieza automática de duplicados o llaves vacías
+                    cleaned = {str(k).upper().strip(): str(v).strip() for k, v in data.items() if k and v}
+                    return cleaned
         except Exception:
             pass
     return [] if default_type == "list" else {}
 
 def save_json_file(filepath, data):
     try:
+        cleaned = {str(k).upper().strip(): str(v).strip() for k, v in data.items() if k and v}
         with open(filepath, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, indent=4)
+            json.dump(cleaned, f, ensure_ascii=False, indent=4)
     except Exception:
         pass
 
@@ -84,23 +88,23 @@ if "supplier_memory" not in st.session_state:
 
 if "master_catalog" not in st.session_state:
     loaded_master = load_json_file(MASTER_CATALOG_FILE, "dict")
-    base_defaults = {
-        "PTE. LIGHT HU 22OZ": "70601561", "PRESIDENTE LIGHT HU 22OZ": "70601561", "PTE. CJ 22OZ": "70601561",
-        "PTE. HU 12OZ": "74621774", "PTE. LIGHT HU 12OZ": "74621774", "BRAHMA LIGHT HU 12OZ": "7468973200194",
-        "BRAHMA LIGHT HU 16/650M": "7468973200200", "BRAHMA LIGHT 650ML": "7468973200200",
-        "CORONA EXTRA 330ML": "7503034941200", "CORONA CERO 355ML": "750304423180", "MICHELOB ULTRA 355ML": "7422110104967",
-        "THE ONE HU 12OZ": "74601325", "THE ONE HU 22OZ": "74601127", 
-        "CLAMATO COCTEL TOMATE C": "01484035", "ENRIQUILLO SODA 400 ML": "7463172803733", 
-        "GATORADE FRUIT PUNCH": "7460548000154", "GATORADE NARANJA": "052000324884", "GATORADE UVA": "052000324822", 
-        "FOUR LOKO MARACUYA": "849806004962", "FOUR LOKO PONCHE DE FRUTAS": "849806001220",
-        "FOUR LOKO GREEN": "849806001855", "FOUR LOKO PURPLE": "849806002746", "FOUR LOKO GOLD": "849806001756",
-        "FOUR LOKO SANDIA": "849806001206", "FOUR LOKO WHITE": "849806005754", 
-        "ALOE PURE PLUS ORIGINAL 1.5 LT": "8809125063035", "MY COCO PURE PLUS": "8809125063011",
-        "SANTA HELENA MERLOT 75 CL": "7804300120986", "SCHWEPPES TONICA 1 LT": "2117974"
-    }
-    for k, v in base_defaults.items():
-        if k not in loaded_master: loaded_master[k] = v
-    save_json_file(MASTER_CATALOG_FILE, loaded_master)
+    if not loaded_master:
+        base_defaults = {
+            "PTE. LIGHT HU 22OZ": "70601561", "PRESIDENTE LIGHT HU 22OZ": "70601561", "PTE. CJ 22OZ": "70601561",
+            "PTE. HU 12OZ": "74621774", "PTE. LIGHT HU 12OZ": "74621774", "BRAHMA LIGHT HU 12OZ": "7468973200194",
+            "BRAHMA LIGHT HU 16/650M": "7468973200200", "BRAHMA LIGHT 650ML": "7468973200200",
+            "CORONA EXTRA 330ML": "7503034941200", "CORONA CERO 355ML": "750304423180", "MICHELOB ULTRA 355ML": "7422110104967",
+            "THE ONE HU 12OZ": "74601325", "THE ONE HU 22OZ": "74601127", 
+            "CLAMATO COCTEL TOMATE C": "01484035", "ENRIQUILLO SODA 400 ML": "7463172803733", 
+            "GATORADE FRUIT PUNCH": "7460548000154", "GATORADE NARANJA": "052000324884", "GATORADE UVA": "052000324822", 
+            "FOUR LOKO MARACUYA": "849806004962", "FOUR LOKO PONCHE DE FRUTAS": "849806001220",
+            "FOUR LOKO GREEN": "849806001855", "FOUR LOKO PURPLE": "849806002746", "FOUR LOKO GOLD": "849806001756",
+            "FOUR LOKO SANDIA": "849806001206", "FOUR LOKO WHITE": "849806005754", 
+            "ALOE PURE PLUS ORIGINAL 1.5 LT": "8809125063035", "MY COCO PURE PLUS": "8809125063011",
+            "SANTA HELENA MERLOT 75 CL": "7804300120986", "SCHWEPPES TONICA 1 LT": "2117974"
+        }
+        loaded_master = base_defaults
+        save_json_file(MASTER_CATALOG_FILE, loaded_master)
     st.session_state["master_catalog"] = loaded_master
 
 if "codigos_manuales_sesion" not in st.session_state:
@@ -121,7 +125,6 @@ def clean_ean_code(code_val):
     s_val = str(code_val).strip()
     if s_val.endswith('.0'): s_val = s_val[:-2]
     s_val = re.sub(r'\D', '', s_val)
-    # Exigir un código EAN / SAP válido (7 a 14 dígitos). Rechazar números de tique de 5 dígitos.
     if 7 <= len(s_val) <= 14: 
         return str(s_val)
     return "S/C"
@@ -178,33 +181,29 @@ def buscar_en_catalogo_maestro(nombre_producto, presentacion=""):
     p_upper = str(presentacion or "").upper().strip()
     combined_query = f"{n_upper} {p_upper}".strip()
 
-    # 1. Cargar archivo maestro desde disco fresco
+    # Cargar maestro directamente desde el archivo en disco
     master_dict = load_json_file(MASTER_CATALOG_FILE, "dict")
-    st.session_state["master_catalog"] = master_dict
 
-    # 2. Coincidencia exacta con el nombre completo o query combinada
+    # 1. Coincidencia exacta
     if combined_query in master_dict:
         return clean_ean_code(master_dict[combined_query])
     if n_upper in master_dict:
         return clean_ean_code(master_dict[n_upper])
 
-    # 3. Coincidencia por palabra clave exacta en las llaves del maestro
+    # 2. Coincidencia por palabra clave exacta en las llaves del maestro
     for m_name, m_code in master_dict.items():
         m_clean = str(m_name).upper().strip()
-        # Si la llave del maestro está contenida en el nombre del tique o viceversa
         if m_clean in n_upper or n_upper in m_clean:
             code_clean = clean_ean_code(m_code)
             if code_clean != "S/C":
                 return code_clean
 
-    # 4. Coincidencia por palabras clave individuales (Token Match)
+    # 3. Coincidencia por palabras clave individuales (Token Match)
     tokens_query = set(re.findall(r'\b[A-Z0-9]+\b', n_upper))
-    # Ignorar palabras muy cortas de ruido
     tokens_query = {t for t in tokens_query if len(t) > 2 or t in ["HU", "CJ"]}
 
     for m_name, m_code in master_dict.items():
         tokens_master = set(re.findall(r'\b[A-Z0-9]+\b', str(m_name).upper()))
-        # Si comparten todas las palabras clave principales (ej. "FOUR", "LOKO", "SANDIA")
         if tokens_query and tokens_query.issubset(tokens_master):
             code_clean = clean_ean_code(m_code)
             if code_clean != "S/C":
@@ -216,14 +215,14 @@ st.sidebar.markdown("<h3 style='color: #0284c7;'>⚡ WilPOS Multi-Proveedor</h3>
 menu_opcion = st.sidebar.radio("Navegación", ["📄 Procesar Factura", "📁 Catálogo Maestro EAN", "🏢 Gestionar Proveedores"])
 
 st.sidebar.markdown("---")
-st.sidebar.markdown("<p style='font-size: 0.8rem; color: #10b981; font-weight: 600;'>🟢 Maestro Directo Activo</p>", unsafe_allow_html=True)
+st.sidebar.markdown("<p style='font-size: 0.8rem; color: #10b981; font-weight: 600;'>🟢 Maestro Protegido Activo</p>", unsafe_allow_html=True)
 
 # ==========================================
 # MÓDULO 1: PROCESAR FACTURA
 # ==========================================
 if menu_opcion == "📄 Procesar Factura":
     st.markdown("<h2>📄 Procesador con Consulta Directa al Maestro</h2>", unsafe_allow_html=True)
-    st.markdown("<p style='color: #64748b;'>Sube tu factura. Los códigos del tique se ignoran y se busca directamente en el archivo maestro.</p>", unsafe_allow_html=True)
+    st.markdown("<p style='color: #64748b;'>Sube tu factura. Los códigos del tique se ignoran y se busca directamente en el archivo maestro limpio.</p>", unsafe_allow_html=True)
     st.markdown("---")
 
     if "factura_data" not in st.session_state: st.session_state["factura_data"] = None
@@ -234,7 +233,7 @@ if menu_opcion == "📄 Procesar Factura":
     
     col_s1, col_s2 = st.columns([2, 1])
     with col_s1:
-        st.info("💡 Sube tu documento. Se consultará directamente el archivo maestro.")
+        st.info("💡 Sube tu documento. Se consultará directamente el archivo maestro sin alteraciones automáticas.")
     with col_s2:
         margen_utilidad = st.number_input("⚙️ Margen Utilidad (%)", min_value=0.0, max_value=500.0, value=25.0, step=1.0)
         
@@ -370,7 +369,7 @@ if menu_opcion == "📄 Procesar Factura":
                 m_med = re.search(r'(\d+\s*(?:ML|L|LT|G|KG|OZ|Z))', str((raw_tam or "") + " " + (raw_desc or "")).upper())
                 presentacion_limpia = m_med.group(1) if m_med else (raw_tam if raw_tam else "S/P")
 
-                # Consulta directa en el archivo maestro
+                # Consulta directa en el archivo maestro limpio
                 codigo_final = buscar_en_catalogo_maestro(nombre_completo, presentacion_limpia)
 
                 nombre_display_excel = "ALOE PURE PLUS ORIGINAL" if "1.5 LT" in nombre_completo else nombre_completo
@@ -422,20 +421,13 @@ if menu_opcion == "📄 Procesar Factura":
                         url_busqueda = f"https://www.google.com/search?q={query_busqueda}"
                         st.markdown(f"[🌐 Buscar en la Web]({url_busqueda})", unsafe_allow_html=True)
 
+                    # NOTA: EL BOTÓN DE ABAJO AHORA SOLO ASIGNA EN LA SESIÓN ACTUAL Y NO CORROMPE EL MAESTRO AUTOMÁTICAMENTE
                     if display_codigo != "S/C":
-                        col_conf1, col_conf2 = st.columns(2)
-                        with col_conf1:
-                            if st.button("✅ Confirmar y Guardar en Maestro", key=f"btn_conf_{idx}_{nombre_display_excel}"):
-                                st.session_state["codigos_manuales_sesion"][nombre_display_excel] = display_codigo
-                                master_dict[nombre_display_excel] = display_codigo
-                                save_json_file(MASTER_CATALOG_FILE, master_dict)
-                                st.success(f"¡Código {display_codigo} guardado permanentemente en el archivo maestro!")
-                                time.sleep(0.5)
-                                st.rerun()
-                        with col_conf2:
-                            if st.button("❌ Rechazar", key=f"btn_rech_{idx}_{nombre_display_excel}"):
-                                st.warning("Código rechazado.")
-                                display_codigo = "S/C"
+                        if st.button("✅ Usar este código para esta factura", key=f"btn_conf_{idx}_{nombre_display_excel}"):
+                            st.session_state["codigos_manuales_sesion"][nombre_display_excel] = display_codigo
+                            st.success(f"¡Código {display_codigo} aplicado a esta factura!")
+                            time.sleep(0.5)
+                            st.rerun()
 
                 preview_rows.append({
                     "No.": idx, "Producto": nombre_display_excel, "Código EAN Asignado": display_codigo,
@@ -463,17 +455,39 @@ if menu_opcion == "📄 Procesar Factura":
 # MÓDULO 2: CATÁLOGO MAESTRO EAN
 # ==========================================
 elif menu_opcion == "📁 Catálogo Maestro EAN":
-    st.markdown("<h2>📁 Gestión del Archivo Maestro EAN</h2>", unsafe_allow_html=True)
-    st.markdown("<p style='color: #64748b;'>Administra y registra nuevos productos directamente en el archivo maestro del sistema.</p>", unsafe_allow_html=True)
+    st.markdown("<h2>📁 Gestión y Limpieza del Archivo Maestro EAN</h2>", unsafe_allow_html=True)
+    st.markdown("<p style='color: #64748b;'>Administra los productos oficiales. Puedes agregar nuevos o limpiar completamente el maestro si hubo duplicados.</p>", unsafe_allow_html=True)
     st.markdown("---")
 
     master_dict = load_json_file(MASTER_CATALOG_FILE, "dict")
 
-    with st.expander("➕ Agregar o Actualizar Producto en el Archivo Maestro", expanded=True):
+    # BOTÓN DE LIMPIEZA TOTAL DEL MAESTRO
+    st.markdown("### 🧹 Herramientas de Mantenimiento")
+    col_l1, col_l2 = st.columns([1, 2])
+    with col_l1:
+        if st.button("🗑️ Resetear / Limpiar Archivo Maestro"):
+            # Vaciar el archivo guardando un diccionario limpio inicial o vacío
+            base_inicial = {
+                "PTE. LIGHT HU 22OZ": "70601561", "PRESIDENTE LIGHT HU 22OZ": "70601561",
+                "PTE. HU 12OZ": "74621774", "BRAHMA LIGHT HU 12OZ": "7468973200194",
+                "CORONA EXTRA 330ML": "7503034941200", "MICHELOB ULTRA 355ML": "7422110104967",
+                "FOUR LOKO MARACUYA": "849806004962", "FOUR LOKO PONCHE DE FRUTAS": "849806001220",
+                "FOUR LOKO SANDIA": "849806001206", "CLAMATO COCTEL TOMATE C": "01484035"
+            }
+            save_json_file(MASTER_CATALOG_FILE, base_inicial)
+            st.success("¡Archivo maestro restablecido y limpiado correctamente!")
+            time.sleep(0.5)
+            st.rerun()
+    with col_l2:
+        st.info("ℹ️ Al hacer clic en limpiar, se eliminarán duplicados y se restaurarán los productos base esenciales.")
+
+    st.markdown("---")
+
+    with st.expander("➕ Agregar Producto Oficial al Archivo Maestro", expanded=True):
         with st.form("form_agregar_maestro"):
             col_m1, col_m2 = st.columns([2, 1])
             with col_m1:
-                nuevo_prod_nombre = st.text_input("Nombre / Descripción del Producto (Ej: FOUR LOKO MARACUYA)")
+                nuevo_prod_nombre = st.text_input("Nombre / Descripción Oficial (Ej: FOUR LOKO MARACUYA)")
             with col_m2:
                 nuevo_prod_codigo = st.text_input("Código EAN / SAP Oficial (Ej: 849806004962)")
             
@@ -490,7 +504,7 @@ elif menu_opcion == "📁 Catálogo Maestro EAN":
                     st.error("⚠️ Por favor ingresa un nombre válido y un código EAN/SAP correcto.")
 
     if master_dict:
-        st.markdown(f"### 📋 Productos Registrados en el Archivo Maestro ({len(master_dict):,} registros)")
+        st.markdown(f"### 📋 Productos Registrados en el Archivo Maestro ({len(master_dict):,} registros limpios)")
         df_show = pd.DataFrame([{"Producto / Descripción": k, "Código EAN/SAP Oficial": v} for k, v in master_dict.items()])
         st.dataframe(df_show, use_container_width=True, hide_index=True)
 
@@ -530,7 +544,7 @@ elif menu_opcion == "🏢 Gestionar Proveedores":
                         supps.pop(p_name)
                         st.session_state["supplier_memory"] = supps
                         save_json_file(SUPPLIER_MEMORY_FILE, supps)
-                        st.warning(f"⚠️️ Perfil de {p_name} eliminado.")
+                        st.warning(f"⚠️ Perfil de {p_name} eliminado.")
                         st.rerun()
 
     with st.expander("➕ Agregar Nuevo Proveedor Manualmente"):
