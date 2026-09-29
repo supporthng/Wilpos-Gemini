@@ -196,12 +196,10 @@ def buscar_en_catalogo_maestro(nombre_producto, presentacion=""):
         "MY COCO PURE PLUS": "8809125063011"
     }
 
-    # Revisar coincidencias directas en el diccionario de sinónimos CND
     for key, code in cnd_sinonimos.items():
         if key in n_upper or key in combined_query:
             return clean_ean_code(code)
 
-    # 2. Búsqueda exacta en el Catálogo Maestro cargado
     if master_dict:
         if combined_query in master_dict:
             return clean_ean_code(master_dict[combined_query])
@@ -210,8 +208,35 @@ def buscar_en_catalogo_maestro(nombre_producto, presentacion=""):
 
     return "S/C"
 
+# ==========================================
+# BARRA LATERAL (NAVEGACIÓN Y RESPALDO)
+# ==========================================
 st.sidebar.markdown("<h3 style='color: #0284c7;'>⚡ WilPOS System</h3>", unsafe_allow_html=True)
 menu_opcion = st.sidebar.radio("Navegación", ["📄 Procesar Factura", "📁 Catálogo Maestro EAN", "🏢 Gestionar Proveedores"])
+
+st.sidebar.markdown("---")
+st.sidebar.markdown("### 💾 Respaldo de Memoria")
+
+# Botón para descargar el JSON del catálogo maestro actual para llevar a otra PC
+master_json_bytes = json.dumps(st.session_state.get("master_catalog", {}), ensure_ascii=False, indent=4).encode('utf-8')
+st.sidebar.download_button(
+    label="📥 Descargar Respaldo Maestro (.json)",
+    data=master_json_bytes,
+    file_name=f"catalogo_maestro_respaldo_{datetime.now().strftime('%Y%m%d')}.json",
+    mime="application/json"
+)
+
+# Subir respaldo en otra PC
+uploaded_backup = st.sidebar.file_uploader("📂 Restaurar Respaldo (.json)", type=["json"])
+if uploaded_backup is not None:
+    try:
+        backup_data = json.load(uploaded_backup)
+        if isinstance(backup_data, dict):
+            st.session_state["master_catalog"] = backup_data
+            save_json_file(MASTER_CATALOG_FILE, backup_data)
+            st.sidebar.success(f"✅ ¡Catálogo restaurado! ({len(backup_data)} productos)")
+    except Exception as e:
+        st.sidebar.error(f"⚠️ Error al restaurar: {str(e)}")
 
 # ==========================================
 # MÓDULO 1: PROCESAR FACTURA
@@ -344,7 +369,6 @@ if menu_opcion == "📄 Procesar Factura":
                 m_med = re.search(r'(\d+\s*(?:ML|L|LT|G|KG|OZ|Z))', str(raw_tam + " " + raw_desc).upper())
                 presentacion_limpia = m_med.group(1) if m_med else (raw_tam if raw_tam else "S/P")
 
-                # Búsqueda maestra validando sinónimos CND y catálogo
                 codigo_final = buscar_en_catalogo_maestro(nombre_completo, presentacion_limpia)
 
                 cant_compra = safe_float(item.get("cantidad"), 1.0)
