@@ -231,14 +231,14 @@ st.sidebar.markdown("<h3 style='color: #0284c7;'>⚡ WilPOS System</h3>", unsafe
 menu_opcion = st.sidebar.radio("Navegación", ["📄 Procesar Factura", "📁 Catálogo Maestro EAN", "🏢 Gestionar Proveedores"])
 
 st.sidebar.markdown("---")
-st.sidebar.markdown("<p style='font-size: 0.8rem; color: #10b981; font-weight: 600;'>🟢 Validación Web Activa</p>", unsafe_allow_html=True)
+st.sidebar.markdown("<p style='font-size: 0.8rem; color: #10b981; font-weight: 600;'>🟢 Relación Maestra Activa</p>", unsafe_allow_html=True)
 
 # ==========================================
 # MÓDULO 1: PROCESAR FACTURA
 # ==========================================
 if menu_opcion == "📄 Procesar Factura":
     st.markdown("<h2>📄 Procesador Inteligente con Detección Automática</h2>", unsafe_allow_html=True)
-    st.markdown("<p style='color: #64748b;'>Sube tu factura. Puedes confirmar el código hallado o rechazarlo para reintentar la búsqueda web.</p>", unsafe_allow_html=True)
+    st.markdown("<p style='color: #64748b;'>Sube tu factura. Al seleccionar un producto del maestro, se relacionará automáticamente para futuras consultas.</p>", unsafe_allow_html=True)
     st.markdown("---")
 
     if "factura_data" not in st.session_state: st.session_state["factura_data"] = None
@@ -409,9 +409,14 @@ if menu_opcion == "📄 Procesar Factura":
                             ["-- Buscar en Maestro --"] + nombres_maestro_lista,
                             key=f"sel_maestro_{idx}_{nombre_completo}"
                         )
+                        # Al seleccionar del maestro, se relaciona con el nombre extraído y se guarda en el catálogo permanente
                         if sel_maestro != "-- Buscar en Maestro --":
-                            display_codigo = master_dict[sel_maestro]
+                            codigo_seleccionado = master_dict[sel_maestro]
+                            display_codigo = codigo_seleccionado
                             st.session_state["codigos_manuales_sesion"][nombre_completo] = display_codigo
+                            master_dict[nombre_completo] = display_codigo
+                            save_json_file(MASTER_CATALOG_FILE, master_dict)
+                            st.success(f"¡Relacionado con '{sel_maestro}' y guardado en el Catálogo Maestro!")
                             st.rerun()
                     with col_c2:
                         st.markdown("<br>", unsafe_allow_html=True)
