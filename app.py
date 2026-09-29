@@ -74,7 +74,7 @@ if "supplier_memory" not in st.session_state:
         "ALVAREZ & SANCHEZ": {
             "nombre": "ALVAREZ & SANCHEZ",
             "tipo_formato": "factura_desglose",
-            "instruccion_prompt": "Analiza esta factura de ALVAREZ & SANCHEZ renglón por renglón. Extrae 'descripcion', 'tamano' (ej. 12 PZA, 6 PZA), 'cantidad' (cajas), 'unidad' y 'monto_neto'."
+            "instruccion_prompt": "Analiza esta factura de ALVAREZ & SANCHEZ renglón por renglón. Extrae 'descripcion', 'tamano' (ej. 12 PZA, 6 PZA), 'cantidad', 'unidad' y 'monto_neto'."
         }
     }
     if not loaded_supps:
@@ -156,10 +156,14 @@ def limpiar_nombre_producto(descripcion_raw, tamano_raw):
 def parse_empaque(tamano_txt="", unidad_txt="", descripcion_txt=""):
     combined = f"{str(tamano_txt or '')} {str(unidad_txt or '')} {str(descripcion_txt or '')}".upper()
     
-    if "24/" in combined or " 24/" in combined: return 24
-    if "12/" in combined: return 12
-    if "16/" in combined: return 16
-    if "6/" in combined or "4X6" in combined: return 6
+    # REGLA ESTRICTA CND / BEES: Buscar cualquier patrón numérico seguido de barra (ej. 24/12OZ, 24/591, 16/650M, 6/473)
+    m_slash = re.search(r'\b(48|24|20|18|16|12|6|4)\s*/', combined)
+    if m_slash:
+        val = int(m_slash.group(1))
+        if val > 1: return val
+
+    if "4X6" in combined: return 6
+    if "LP 4" in combined or "4X" in combined: return 24
 
     unidad_upper = str(unidad_txt or "").upper().strip()
     if unidad_upper in ["PC", "UN"]:
@@ -223,14 +227,14 @@ st.sidebar.markdown("<h3 style='color: #0284c7;'>⚡ WilPOS System</h3>", unsafe
 menu_opcion = st.sidebar.radio("Navegación", ["📄 Procesar Factura", "📁 Catálogo Maestro EAN", "🏢 Gestionar Proveedores"])
 
 st.sidebar.markdown("---")
-st.sidebar.markdown("<p style='font-size: 0.8rem; color: #10b981; font-weight: 600;'>🟢 Sistema WilPOS Operativo</p>", unsafe_allow_html=True)
+st.sidebar.markdown("<p style='font-size: 0.8rem; color: #10b981; font-weight: 600;'>🟢 Regla de Empaques por Barra Activa</p>", unsafe_allow_html=True)
 
 # ==========================================
 # MÓDULO 1: PROCESAR FACTURA
 # ==========================================
 if menu_opcion == "📄 Procesar Factura":
     st.markdown("<h2>📄 Procesador Inteligente con Detección Automática</h2>", unsafe_allow_html=True)
-    st.markdown("<p style='color: #64748b;'>Sube tu factura o tique. El sistema calcula costos unitarios exactos sin ITBIS aplicando el empaque correcto.</p>", unsafe_allow_html=True)
+    st.markdown("<p style='color: #64748b;'>Sube tu factura o tique. El sistema aplica la regla de empaque exacta basada en el formato del proveedor.</p>", unsafe_allow_html=True)
     st.markdown("---")
 
     if "factura_data" not in st.session_state: st.session_state["factura_data"] = None
