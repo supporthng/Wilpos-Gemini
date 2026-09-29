@@ -97,6 +97,7 @@ if "master_catalog" not in st.session_state:
         "ALOE PURE PLUS ORIGINAL 1.5 LT": "8809125063035",
         "ALOE PURE PLUS ORIGINAL": "8809125063011", 
         "MY COCO PURE PLUS": "8809125063011",
+        "FOUR LOKO PONCHE DE FRU": "849806001220",
         # Álvarez & Sánchez
         "SANTA HELENA MERLOT 75 CL": "7804300120986",
         "SANTA HELENA RESERVADO RED BLEND 75 CL": "7804300150082",
@@ -134,7 +135,8 @@ def clean_ean_code(code_val):
     s_val = str(code_val).strip()
     if s_val.endswith('.0'): s_val = s_val[:-2]
     s_val = re.sub(r'\D', '', s_val)
-    if 7 <= len(s_val) <= 14: return str(s_val)
+    # Aceptar códigos EAN estándar (7 a 14 dígitos) o códigos internos válidos
+    if 5 <= len(s_val) <= 14: return str(s_val)
     return "S/C"
 
 def limpiar_nombre_producto(descripcion_raw, tamano_raw):
@@ -211,6 +213,7 @@ def buscar_en_catalogo_maestro(nombre_producto, presentacion=""):
         "THE ONE HU 12OZ": "74601325", "THE ONE HU 22OZ": "74601127", "CLAMATO COCTEL TOMATE C": "01484035",
         "ENRIQUILLO SODA 400 ML": "7463172803733", "GATORADE FRUIT PUNCH": "7460548000154", "GATORADE NARANJA": "052000324884",
         "GATORADE UVA": "052000324822", "FOUR LOKO MARACUYA": "849806004962", "FOUR LOKO PONCHE DE FRUTAS": "849806001220",
+        "FOUR LOKO PONCHE DE FRU": "849806001220",
         "FOUR LOKO GREEN": "849806001855", "FOUR LOKO PURPLE": "849806002746", "FOUR LOKO GOLD": "849806001756",
         "FOUR LOKO SANDIA": "849806001206", "FOUR LOKO WHITE": "849806005754", 
         "ALOE PURE PLUS ORIGINAL": "8809125063011", 
@@ -230,10 +233,12 @@ def buscar_en_catalogo_maestro(nombre_producto, presentacion=""):
         "SOLAN DE CABRAS AGUA MINERAL NAT 1.5 LT": "8436538810767"
     }
 
+    # 1. Búsqueda exacta en sinónimos
     for key, code in cnd_sinonimos.items():
-        if key in n_upper or key in combined_query:
+        if key == n_upper or key in n_upper or n_upper in key:
             return clean_ean_code(code)
 
+    # 2. Búsqueda en catálogo maestro
     if master_dict:
         if combined_query in master_dict:
             return clean_ean_code(master_dict[combined_query])
@@ -249,14 +254,14 @@ st.sidebar.markdown("<h3 style='color: #0284c7;'>⚡ WilPOS Multi-Proveedor</h3>
 menu_opcion = st.sidebar.radio("Navegación", ["📄 Procesar Factura", "📁 Catálogo Maestro EAN", "🏢 Gestionar Proveedores"])
 
 st.sidebar.markdown("---")
-st.sidebar.markdown("<p style='font-size: 0.8rem; color: #10b981; font-weight: 600;'>🟢 Sistema Blindado Activo</p>", unsafe_allow_html=True)
+st.sidebar.markdown("<p style='font-size: 0.8rem; color: #10b981; font-weight: 600;'>🟢 Mapeo Inteligente Activo</p>", unsafe_allow_html=True)
 
 # ==========================================
 # MÓDULO 1: PROCESAR FACTURA
 # ==========================================
 if menu_opcion == "📄 Procesar Factura":
     st.markdown("<h2>📄 Procesador Inteligente Multi-Proveedor</h2>", unsafe_allow_html=True)
-    st.markdown("<p style='color: #64748b;'>Sube tu factura. Gestiona códigos nuevos con búsqueda web y confirma para guardar en el maestro.</p>", unsafe_allow_html=True)
+    st.markdown("<p style='color: #64748b;'>Sube tu factura. El sistema asignará automáticamente los códigos EAN oficiales mediante coincidencia inteligente.</p>", unsafe_allow_html=True)
     st.markdown("---")
 
     if "factura_data" not in st.session_state: st.session_state["factura_data"] = None
@@ -444,7 +449,7 @@ if menu_opcion == "📄 Procesar Factura":
                             display_codigo = master_dict[sel_maestro]
                     with col_c2:
                         codigo_manual_input = st.text_input("Ingresar código manual", key=f"manual_input_{idx}_{nombre_display_excel}_{idx}", placeholder="Ej. 052000324884")
-                        if codigo_manual_input and len(codigo_manual_input.strip()) >= 7:
+                        if codigo_manual_input and len(codigo_manual_input.strip()) >= 5:
                             clean_m = clean_ean_code(codigo_manual_input)
                             if clean_m != "S/C":
                                 display_codigo = clean_m
