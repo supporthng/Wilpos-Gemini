@@ -69,12 +69,12 @@ if "supplier_memory" not in st.session_state:
         "CND / BEES": {
             "nombre": "CND / BEES",
             "tipo_formato": "tique_doble_linea",
-            "instruccion_prompt": "Analiza este tique de CND / BEES renglón por renglón. Extrae 'descripcion' (nombre completo del producto con su formato ej. 24/591, 24/12OZ), 'tamano', 'cantidad', 'unidad' (PC/UN) y 'impuesto_neto'."
+            "instruccion_prompt": "Analiza este tique de CND / BEES donde cada ítem tiene dos líneas: la línea 1 con código, unidad (PC) y descripción, y la línea 2 con cantidad, precio unitario (P.Unit) e impuesto neto. Extrae 'descripcion', 'tamano', 'cantidad', 'unidad' y 'precio_unitario'."
         },
         "ALVAREZ & SANCHEZ": {
             "nombre": "ALVAREZ & SANCHEZ",
             "tipo_formato": "factura_desglose",
-            "instruccion_prompt": "Analiza esta factura de ALVAREZ & SANCHEZ renglón por renglón. Extrae 'descripcion', 'tamano' (ej. 12 PZA, 6 PZA), 'cantidad' (cajas), 'unidad' (CAJ/PZA) y 'monto_neto'."
+            "instruccion_prompt": "Analiza esta factura de ALVAREZ & SANCHEZ renglón por renglón. Extrae 'descripcion', 'tamano', 'cantidad', 'unidad' y 'monto_neto'."
         }
     }
     if not loaded_supps:
@@ -154,41 +154,17 @@ def limpiar_nombre_producto(descripcion_raw, tamano_raw):
     return desc
 
 def parse_empaque(tamano_txt="", unidad_txt="", descripcion_txt=""):
-    unidad_upper = str(unidad_txt).upper().strip()
     combined = f"{str(tamano_txt)} {str(unidad_txt)} {str(descripcion_txt)}".upper()
+    
+    # Detección de packs en CND / BEES
+    if "24/" in combined or " 24/" in combined: return 24
+    if "12/" in combined: return 12
+    if "16/" in combined: return 16
+    if "6/" in combined or "4X6" in combined: return 6
 
-    # 1. Buscar patrones exactos de empaque del tipo "24/", "/24", "24/12", etc.
-    m_slash = re.search(r'\b(48|24|20|18|16|12|6|4)\s*/', combined)
-    if m_slash:
-        val = int(m_slash.group(1))
-        if val > 1: return val
-
-    m_slash_inv = re.search(r'/\s*(48|24|20|18|16|12|6|4)\b', combined)
-    if m_slash_inv:
-        val = int(m_slash_inv.group(1))
-        if val > 1: return val
-
-    # 2. Si el tique indica explícitamente "PC" o "UN" pero NO trae un pack en el texto, validar si es unidad suelta (1) o si el texto describe un pack de unidades
-    m_pza = re.search(r'\b(\d{1,2})\s*PZA\b', combined)
-    if m_pza:
-        val = int(m_pza.group(1))
-        if val > 0: return val
-
-    # Detección específica para packs en CND / BEES (ej. GATORADE 24/591, PTE HU 24/12OZ)
-    if "GATORADE" in combined or "PTE." in combined or "PRESIDENTE" in combined or "BRAHMA" in combined or "THE ONE" in combined:
-        if "24/" in combined or "24 " in combined: return 24
-        if "12/" in combined or "12 " in combined: return 12
-        if "16/" in combined or "16 " in combined: return 16
-
+    unidad_upper = str(unidad_txt).upper().strip()
     if unidad_upper in ["PC", "UN"]:
-        # Si es PC pero el texto dice claramente que es un pack (ej. 24/12OZ), respetar el empaque de 24
-        if "24" in combined: return 24
-        if "12" in combined: return 12
         return 1
-
-    if "SANTA HELENA" in combined or "SELA" in combined: return 12
-    if "SANTIAGO RUIZ" in combined: return 6
-    if "SCHWEPPES" in combined: return 6 if "1 LT" in combined else 24
 
     return 1
 
@@ -248,14 +224,14 @@ st.sidebar.markdown("<h3 style='color: #0284c7;'>⚡ WilPOS System</h3>", unsafe
 menu_opcion = st.sidebar.radio("Navegación", ["📄 Procesar Factura", "📁 Catálogo Maestro EAN", "🏢 Gestionar Proveedores"])
 
 st.sidebar.markdown("---")
-st.sidebar.markdown("<p style='font-size: 0.8rem; color: #10b981; font-weight: 600;'>🟢 Análisis de Empaques Activo</p>", unsafe_allow_html=True)
+st.sidebar.markdown("<p style='font-size: 0.8rem; color: #10b981; font-weight: 600;'>🟢 Análisis de Doble Línea Activo</p>", unsafe_allow_html=True)
 
 # ==========================================
 # MÓDULO 1: PROCESAR FACTURA
 # ==========================================
 if menu_opcion == "📄 Procesar Factura":
     st.markdown("<h2>📄 Procesador Inteligente con Detección Automática</h2>", unsafe_allow_html=True)
-    st.markdown("<p style='color: #64748b;'>Sube tu factura. El sistema analiza con precisión quirúrgica el empaque, las cantidades y los costos unitarios.</p>", unsafe_allow_html=True)
+    st.markdown("<p style='color: #64748b;'>Sube tu factura. El motor lee directamente el precio unitario del tique.</p>", unsafe_allow_html=True)
     st.markdown("---")
 
     if "factura_data" not in st.session_state: st.session_state["factura_data"] = None
@@ -310,7 +286,7 @@ if menu_opcion == "📄 Procesar Factura":
                         supp_mem[prov_encontrado] = {
                             "nombre": prov_encontrado,
                             "tipo_formato": "factura_desglose",
-                            "instruccion_prompt": f"Analiza esta factura de {prov_encontrado} renglón por renglón. Extrae 'descripcion', 'tamano', 'cantidad', 'unidad' y 'monto_neto'."
+                            "instruccion_prompt": f"Analiza esta factura de {prov_encontrado} renglón por renglón. Extrae 'descripcion', 'tamano', 'cantidad', 'unidad' y 'precio_unitario'."
                         }
                         st.session_state["supplier_memory"] = supp_mem
                         save_json_file(SUPPLIER_MEMORY_FILE, supp_mem)
@@ -318,10 +294,12 @@ if menu_opcion == "📄 Procesar Factura":
                     instruccion_proveedor = supp_mem[prov_encontrado].get("instruccion_prompt", "Extrae todos los ítems.")
 
                     prompt_unificado = (
-                        f"Estás procesando una factura del proveedor detectado: '{prov_encontrado}'. "
-                        f"Instrucción de formato específica: {instruccion_proveedor} "
+                        f"Estás procesando un tique o factura del proveedor: '{prov_encontrado}'. "
+                        f"Instrucción específica: {instruccion_proveedor} "
+                        "IMPORTANTE (Estructura de tique CND/BEES): Cada producto tiene una línea de texto arriba (con el nombre y formato ej. 24/591) y una línea abajo con la cantidad, el precio unitario exacto (P.Unit) y el importe neto. "
+                        "Extrae 'precio_unitario' exactamente como aparece en la columna P.Unit del tique. "
                         "Devuelve un JSON puro con esta estructura exacta y llaves en minúscula: "
-                        '{"paginacion": "1 de 1", "proveedor_detectado": "' + prov_encontrado + '", "subtotal": 0.0, "itbis": 0.0, "descuentos": 0.0, "total": 0.0, "items": [{"descripcion": "...", "tamano": "...", "cantidad": 1.0, "unidad": "...", "monto_neto": 0.0}]}. '
+                        '{"paginacion": "1 de 1", "proveedor_detectado": "' + prov_encontrado + '", "subtotal": 0.0, "itbis": 0.0, "descuentos": 0.0, "total": 0.0, "items": [{"descripcion": "...", "tamano": "...", "cantidad": 1.0, "unidad": "...", "precio_unitario": 0.0, "monto_neto": 0.0}]}. '
                         "Respuesta JSON pura."
                     )
 
@@ -393,19 +371,24 @@ if menu_opcion == "📄 Procesar Factura":
 
                 cant_compra = safe_float(item.get("cantidad"), 1.0)
                 unidad = str(item.get("unidad", ""))
-                
+                empaque = parse_empaque(raw_tam, unidad, raw_desc)
+                total_unidades = int(cant_compra * empaque)
+
+                # Tomar de forma prioritaria el precio unitario extraído directamente del tique (P.Unit)
+                p_unit_extraido = safe_float(item.get("precio_unitario"), 0.0)
                 monto_neto_linea = safe_float(
                     item.get("monto_neto") or 
                     item.get("impuesto_neto") or 
-                    item.get("valor") or 
-                    item.get("precio"), 
+                    item.get("valor"), 
                     0.0
                 )
 
-                empaque = parse_empaque(raw_tam, unidad, raw_desc)
-                total_unidades = int(cant_compra * empaque)
-                
-                costo_unitario_real = round(monto_neto_linea / total_unidades, 2) if total_unidades > 0 else 0.0
+                if p_unit_extraido > 0:
+                    costo_unitario_real = p_unit_extraido
+                elif monto_neto_linea > 0 and total_unidades > 0:
+                    costo_unitario_real = round(monto_neto_linea / total_unidades, 2)
+                else:
+                    costo_unitario_real = 0.0
 
                 if costo_unitario_real > 0:
                     precio_con_utilidad = costo_unitario_real * (1 + (margen_utilidad / 100.0))
