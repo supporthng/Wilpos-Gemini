@@ -14,7 +14,7 @@ import pandas as pd
 # CONFIGURACIÓN DE LA PÁGINA Y ESTILOS
 # ==========================================
 st.set_page_config(
-    page_title="WilPOS - Sistema Multi-Proveedor Blindado", 
+    page_title="WilPOS - Sistema Multi-Proveedor Independiente", 
     page_icon="⚡", 
     layout="wide"
 )
@@ -69,17 +69,34 @@ if "supplier_memory" not in st.session_state:
         "CND / BEES": {
             "nombre": "CND / BEES",
             "tipo_formato": "tique_doble_linea_blindado",
-            "instruccion_prompt": "Analiza este tique de CND / BEES donde cada ítem tiene dos líneas: la línea 1 con código, unidad (PC o UN) y descripción, y la línea 2 con cantidad, precio unitario (P.Unit) e impuesto neto. Extrae 'descripcion', 'tamano', 'cantidad', 'unidad' y 'precio_unitario'."
+            "instruccion_prompt": (
+                "Analiza este tique de CND / BEES donde cada ítem tiene estrictamente dos líneas: "
+                "la línea 1 con código interno, unidad (PC o UN) y descripción, y la línea 2 con cantidad, precio unitario (P.Unit) e impuesto neto. "
+                "Extrae con precisión 'codigo_barras' (código interno o EAN), 'descripcion', 'tamano', 'cantidad', 'unidad' y 'precio_unitario'. "
+                "Devuelve un JSON puro con esta estructura exacta y llaves en minúscula: "
+                '{"subtotal": 0.0, "itbis": 0.0, "descuentos": 0.0, "total": 0.0, "items": [{"codigo_barras": "...", "descripcion": "...", "tamano": "...", "cantidad": 1.0, "unidad": "PC", "precio_unitario": 0.0, "monto_neto": 0.0}]}.'
+            )
         },
         "ALVAREZ & SANCHEZ": {
             "nombre": "ALVAREZ & SANCHEZ",
             "tipo_formato": "factura_codigo_barras_impreso",
-            "instruccion_prompt": "Analiza esta factura de ALVAREZ & SANCHEZ renglón por renglón. Extrae estrictamente la columna 'CODIGO' (código interno/SAP), la columna 'CODIGO DE BARRAS' (el código EAN impreso), la 'DESCRIPCION', el 'TAMAÑO', la cantidad y el 'VALOR'."
+            "instruccion_prompt": (
+                "Analiza esta factura tabular de ALVAREZ & SANCHEZ renglón por renglón. "
+                "Extrae estrictamente la columna 'CODIGO' (código interno/SAP), la columna 'CODIGO DE BARRAS' (el código EAN impreso), "
+                "la 'DESCRIPCION', el 'TAMAÑO', la cantidad y el 'VALOR' (monto neto). "
+                "Devuelve un JSON puro con esta estructura exacta y llaves en minúscula: "
+                '{"subtotal": 0.0, "itbis": 0.0, "descuentos": 0.0, "total": 0.0, "items": [{"codigo_barras": "...", "descripcion": "...", "tamano": "...", "cantidad": 1.0, "unidad": "CAJA", "precio_unitario": 0.0, "monto_neto": 0.0}]}.'
+            )
         },
         "GONZALEZ CUESTA & SUCS": {
             "nombre": "GONZALEZ CUESTA & SUCS",
             "tipo_formato": "factura_sap_desglose",
-            "instruccion_prompt": "Analiza esta factura de GONZALEZ CUESTA & SUCS renglón por renglón. Extrae el código SAP, descripción, cantidad, unidad (UMV) y monto neto."
+            "instruccion_prompt": (
+                "Analiza esta factura de GONZALEZ CUESTA & SUCS renglón por renglón. "
+                "Extrae el código SAP, descripción, tamaño, cantidad, unidad (UMV) y monto neto. "
+                "Devuelve un JSON puro con esta estructura exacta y llaves en minúscula: "
+                '{"subtotal": 0.0, "itbis": 0.0, "descuentos": 0.0, "total": 0.0, "items": [{"codigo_barras": "...", "descripcion": "...", "tamano": "...", "cantidad": 1.0, "unidad": "CAJA", "precio_unitario": 0.0, "monto_neto": 0.0}]}.'
+            )
         }
     }
     for k, v in default_profiles.items():
@@ -203,14 +220,14 @@ st.sidebar.markdown("<h3 style='color: #0284c7;'>⚡ WilPOS Multi-Proveedor</h3>
 menu_opcion = st.sidebar.radio("Navegación", ["📄 Procesar Factura", "📁 Catálogo Maestro EAN", "🏢 Gestionar Proveedores"])
 
 st.sidebar.markdown("---")
-st.sidebar.markdown("<p style='font-size: 0.8rem; color: #10b981; font-weight: 600;'>🟢 Edición Inline en Tabla Activa</p>", unsafe_allow_html=True)
+st.sidebar.markdown("<p style='font-size: 0.8rem; color: #10b981; font-weight: 600;'>🟢 Motores Independientes Activos</p>", unsafe_allow_html=True)
 
 # ==========================================
 # MÓDULO 1: PROCESAR FACTURA
 # ==========================================
 if menu_opcion == "📄 Procesar Factura":
-    st.markdown("<h2>📄 Procesador Inteligente Multi-Proveedor (Multi-Página)</h2>", unsafe_allow_html=True)
-    st.markdown("<p style='color: #64748b;'>Sube tus páginas. Puedes editar cualquier código EAN directamente haciendo clic en la celda de la tabla inferior.</p>", unsafe_allow_html=True)
+    st.markdown("<h2>📄 Procesador Inteligente con Motores Independientes</h2>", unsafe_allow_html=True)
+    st.markdown("<p style='color: #64748b;'>Sube tus páginas. El sistema detectará el proveedor y aplicará su lógica y prompt de extracción específico y aislado.</p>", unsafe_allow_html=True)
     st.markdown("---")
 
     if "factura_data" not in st.session_state: st.session_state["factura_data"] = None
@@ -227,8 +244,8 @@ if menu_opcion == "📄 Procesar Factura":
     archivos_subidos = st.file_uploader("📂 Sube tus páginas (imágenes o PDFs)", type=["pdf", "png", "jpg", "jpeg"], accept_multiple_files=True)
     
     if archivos_subidos:
-        if st.button("🚀 Procesar Páginas y Consolidar Inventario"):
-            with st.spinner("🔍 Analizando páginas y acumulando ítems..."):
+        if st.button("🚀 Procesar con Motor Específico del Proveedor"):
+            with st.spinner("🔍 Detectando proveedor y ejecutando motor dedicado..."):
                 try:
                     if not gemini_key: raise ValueError("No hay clave de API configurada.")
                     model = genai.GenerativeModel('gemini-3.8-flash')
@@ -248,7 +265,7 @@ if menu_opcion == "📄 Procesar Factura":
 
                         if idx_f == 0:
                             prompt_deteccion = (
-                                "Analiza este documento comercial e identifica estrictamente el nombre comercial del proveedor emisor. "
+                                "Analiza este documento comercial e identifica estrictamente el nombre comercial del proveedor emisor (ej: CND / BEES, ALVAREZ & SANCHEZ, GONZALEZ CUESTA & SUCS). "
                                 "Devuelve únicamente un JSON: {\"proveedor_detectado\": \"NOMBRE DEL PROVEEDOR\"}"
                             )
                             response_det = model.generate_content([image_input, prompt_deteccion])
@@ -266,19 +283,20 @@ if menu_opcion == "📄 Procesar Factura":
                             if prov_encontrado == "PROVEEDOR GENERAL":
                                 prov_encontrado = prov_raw
 
-                        instruccion_proveedor = st.session_state["supplier_memory"].get(prov_encontrado, {}).get("instruccion_prompt", "Extrae todos los ítems.")
+                        # INSTRUCCIÓN EXCLUSIVA DEL PROVEEDOR (AISLADA)
+                        instruccion_proveedor = st.session_state["supplier_memory"].get(prov_encontrado, {}).get(
+                            "instruccion_prompt", 
+                            "Extrae 'codigo_barras', 'descripcion', 'tamano', 'cantidad', 'unidad' y 'monto_neto'."
+                        )
 
-                        prompt_unificado = (
-                            f"Estás procesando la página {idx_f+1} de la factura del proveedor: '{prov_encontrado}'. "
-                            f"Instrucción específica: {instruccion_proveedor} "
-                            "Extrae 'codigo_barras', 'descripcion', 'tamano', 'cantidad', 'unidad' y 'valor' (o 'importe'). "
-                            "Devuelve un JSON puro con esta estructura exacta y llaves en minúscula: "
-                            '{"subtotal": 0.0, "itbis": 0.0, "descuentos": 0.0, "total": 0.0, "items": [{"codigo_barras": "...", "descripcion": "...", "tamano": "...", "cantidad": 1.0, "unidad": "CAJA", "precio_unitario": 0.0, "monto_neto": 0.0}]}. '
-                            "Respuesta JSON pura."
+                        prompt_aislado = (
+                            f"Estás procesando la página {idx_f+1} de la factura del proveedor dedicado: '{prov_encontrado}'. "
+                            f"REGLA DE EXTRACCIÓN DEDICADA: {instruccion_proveedor} "
+                            "Respuesta estrictamente en JSON puro sin texto adicional."
                         )
 
                         archivo_subido.seek(0)
-                        response = model.generate_content([image_input, prompt_unificado])
+                        response = model.generate_content([image_input, prompt_aislado])
                         raw_text = response.text.strip()
                         if raw_text.startswith("```json"): raw_text = raw_text[7:]
                         if raw_text.endswith("```"): raw_text = raw_text[:-3]
@@ -302,7 +320,7 @@ if menu_opcion == "📄 Procesar Factura":
                     st.session_state["factura_data"] = factura_consolidada
                     st.session_state["prov_activo"] = prov_encontrado
                     
-                    st.success(f"🎯 **¡Proceso exitoso!** Se procesaron {len(archivos_subidos)} página(s) de **{prov_encontrado}** con un total de **{len(todos_los_items)} renglones** consolidados.")
+                    st.success(f"🎯 **¡Proceso exitoso con motor dedicado!** Proveedor detectado: **{prov_encontrado}** ({len(todos_los_items)} ítems consolidados).")
                 except Exception as e:
                     st.error(f"⚠️ Error al procesar: {str(e)}")
     st.markdown('</div>', unsafe_allow_html=True)
@@ -317,7 +335,7 @@ if menu_opcion == "📄 Procesar Factura":
         total_descuentos = safe_float(data_resp.get("descuentos"))
         total_val = safe_float(data_resp.get("total"))
 
-        total_importe_neto = sum(safe_float(i.get("monto_neto") or i.get("importe")) for i in items)
+        total_importe_neto = sum(safe_float(i.get("monto_neto") or i.get("importe") or i.get("valor")) for i in items)
         if subtotal_val == 0.0 and items: subtotal_val = total_importe_neto
         if total_val == 0.0 and items: total_val = subtotal_val * 1.18
 
@@ -333,7 +351,7 @@ if menu_opcion == "📄 Procesar Factura":
 
         if items:
             st.markdown(f"### 📋 Detalle de Renglones Consolidados ({len(items)} ítems totales)")
-            st.info("✏️ **Edición Directa:** Puedes hacer clic sobre cualquier celda en la columna **'Código EAN Asignado'** de la tabla para corregirlo al instante.")
+            st.info("✏️ **Edición Directa:** Puedes hacer clic sobre cualquier celda en la columna **'Código EAN Asignado'** para corregirlo al instante.")
 
             raw_preview_rows = []
             master_dict = st.session_state.get("master_catalog", {})
@@ -354,7 +372,6 @@ if menu_opcion == "📄 Procesar Factura":
                 presentacion_limpia = m_med.group(1) if m_med else (raw_tam if raw_tam else "S/P")
                 nombre_display_excel = f"{nombre_completo} {presentacion_limpia}".strip()
 
-                # Determinar código inicial
                 if nombre_display_excel in manual_sesion:
                     codigo_final = manual_sesion[nombre_display_excel]
                 else:
@@ -399,7 +416,6 @@ if menu_opcion == "📄 Procesar Factura":
 
             df_to_edit = pd.DataFrame(raw_preview_rows)
             
-            # Tabla interactiva con celdas editables inline
             edited_df = st.data_editor(
                 df_to_edit.drop(columns=["_presentacion"]),
                 use_container_width=True,
@@ -407,7 +423,6 @@ if menu_opcion == "📄 Procesar Factura":
                 key="grid_inventario_editable"
             )
 
-            # Guardar automáticamente los cambios realizados en la tabla en el catálogo maestro y sesión
             for i, row in edited_df.iterrows():
                 p_name = row["Producto"]
                 nuevo_code_editado = clean_ean_code(row["Código EAN Asignado"])
@@ -418,7 +433,6 @@ if menu_opcion == "📄 Procesar Factura":
             save_json_file(MASTER_CATALOG_FILE, master_dict)
             st.session_state["master_catalog"] = master_dict
 
-            # Construir Excel con los datos editados
             wb = openpyxl.Workbook()
             ws = wb.active
             ws.title = "Inventario"
@@ -482,8 +496,8 @@ elif menu_opcion == "📁 Catálogo Maestro EAN":
 # MÓDULO 3: GESTIONAR PROVEEDORES
 # ==========================================
 elif menu_opcion == "🏢 Gestionar Proveedores":
-    st.markdown("<h2>🏢 Configuración de Perfiles por Proveedor</h2>", unsafe_allow_html=True)
-    st.markdown("<p style='color: #64748b;'>Cada proveedor mantiene su propia regla de extracción intacta y respaldada.</p>", unsafe_allow_html=True)
+    st.markdown("<h2>🏢 Configuración de Perfiles por Proveedor (Aislados)</h2>", unsafe_allow_html=True)
+    st.markdown("<p style='color: #64748b;'>Cada proveedor mantiene su propia regla de extracción intacta sin interferir con otros.</p>", unsafe_allow_html=True)
     st.markdown("---")
 
     supps = st.session_state["supplier_memory"]
@@ -491,11 +505,11 @@ elif menu_opcion == "🏢 Gestionar Proveedores":
         with st.expander(f"🏢 Proveedor: {p_name}"):
             with st.form(f"form_prov_{p_name}"):
                 nuevo_nombre = st.text_input("Nombre del Proveedor", value=p_data.get("nombre", p_name))
-                nueva_instruccion = st.text_area("Instrucción / Prompt de Formato Exclusivo", value=p_data.get("instruccion_prompt", ""), height=120)
+                nueva_instruccion = st.text_area("Instrucción / Prompt de Formato Exclusivo", value=p_data.get("instruccion_prompt", ""), height=140)
                 
                 col_btn1, col_btn2 = st.columns(2)
                 with col_btn1:
-                    btn_guardar = st.form_submit_button("💾 Guardar Cambios")
+                    btn_guardar = st.form_submit_button("💾 Guardar Cambios del Motor")
                 with col_btn2:
                     btn_eliminar = st.form_submit_button("🗑️ Eliminar Perfil")
                 
@@ -506,7 +520,7 @@ elif menu_opcion == "🏢 Gestionar Proveedores":
                         supps[nuevo_nombre] = supps.pop(p_name)
                     st.session_state["supplier_memory"] = supps
                     save_json_file(SUPPLIER_MEMORY_FILE, supps)
-                    st.success(f"✅ ¡Perfil de **{nuevo_nombre}** guardado con éxito!")
+                    st.success(f"✅ ¡Motor dedicado para **{nuevo_nombre}** actualizado con éxito!")
                     st.rerun()
                     
                 if btn_eliminar:
@@ -520,13 +534,13 @@ elif menu_opcion == "🏢 Gestionar Proveedores":
     with st.expander("➕ Agregar Nuevo Proveedor Manualmente"):
         with st.form("form_nuevo_proveedor_manual"):
             n_prov = st.text_input("Nombre del Proveedor (Ej: CASA BRUGAL)")
-            n_inst = st.text_area("Instrucción de Formato para este Proveedor", value="Analiza la factura de este proveedor y extrae descripción, tamaño, cantidad, unidad y monto neto.")
-            btn_crear = st.form_submit_button("Crear Perfil de Proveedor")
+            n_inst = st.text_area("Instrucción de Formato Exclusivo para este Proveedor", value="Analiza este documento y extrae 'codigo_barras', 'descripcion', 'tamano', 'cantidad', 'unidad' y 'monto_neto'.")
+            btn_crear = st.form_submit_button("Crear Perfil Independiente")
             if btn_crear:
                 clean_p = n_prov.upper().strip()
                 if clean_p:
                     supps[clean_p] = {"nombre": clean_p, "tipo_formato": "personalizado", "instruccion_prompt": n_inst}
                     st.session_state["supplier_memory"] = supps
                     save_json_file(SUPPLIER_MEMORY_FILE, supps)
-                    st.success(f"✅ ¡Perfil creado para {clean_p}!")
+                    st.success(f"✅ ¡Perfil independiente creado para {clean_p}!")
                     st.rerun()
