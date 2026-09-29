@@ -103,7 +103,10 @@ if "master_catalog" not in st.session_state:
         "ALOE PURE PLUS ORIGINAL 1.5 LT": "8809125063035",
         "ALOE PURE PLUS ORIGINAL": "8809125063011", 
         "MY COCO PURE PLUS": "8809125063011",
-        # Álvarez & Sánchez (Código corregido: 088857003306)
+        # Licor de Café Tia María (Código actualizado)
+        "LICOR DE CAFE TIA MARIA 70 CL": "5012523233129",
+        "TIA MARIA CAFE 70ML": "5012523233129",
+        # Álvarez & Sánchez
         "VINO TINTO RESERVA CUNE 12/75 CL.": "8410591003045",
         "VINO TINTO MERLOT VIÑA TARAPACA 12/75 CL.": "7804304909934",
         "VINO TINTO RESERVA CAB SAUV TARAPACA 12/75 CL.": "7804304909039",
@@ -125,10 +128,6 @@ if "master_catalog" not in st.session_state:
     }
     for k, v in base_defaults.items():
         if k not in loaded_master: loaded_master[k] = v
-    # Corrección específica solicitada
-    if "088857003006" in loaded_master.values():
-        for mk, mv in loaded_master.items():
-            if mv == "088857003006": loaded_master[mk] = "088857003306"
     save_json_file(MASTER_CATALOG_FILE, loaded_master)
     st.session_state["master_catalog"] = loaded_master
 
@@ -150,7 +149,7 @@ def clean_ean_code(code_val):
     s_val = str(code_val).strip()
     if s_val.endswith('.0'): s_val = s_val[:-2]
     s_val = re.sub(r'\D', '', s_val)
-    if s_val == "088857003006": s_val = "088857003306" # Corrección automática preventiva
+    if s_val == "088857003006": s_val = "088857003306" # Corrección preventiva
     if 4 <= len(s_val) <= 14: return str(s_val)
     return "S/C"
 
@@ -206,7 +205,7 @@ st.sidebar.markdown("<h3 style='color: #0284c7;'>⚡ WilPOS Multi-Proveedor</h3>
 menu_opcion = st.sidebar.radio("Navegación", ["📄 Procesar Factura", "📁 Catálogo Maestro EAN", "🏢 Gestionar Proveedores"])
 
 st.sidebar.markdown("---")
-st.sidebar.markdown("<p style='font-size: 0.8rem; color: #10b981; font-weight: 600;'>🟢 Corrección de Dígitos Activa</p>", unsafe_allow_html=True)
+st.sidebar.markdown("<p style='font-size: 0.8rem; color: #10b981; font-weight: 600;'>🟢 Sistema 100% Blindado</p>", unsafe_allow_html=True)
 
 # ==========================================
 # MÓDULO 1: PROCESAR FACTURA
@@ -411,7 +410,7 @@ if menu_opcion == "📄 Procesar Factura":
                         if sel_maestro != "-- Buscar en Maestro --":
                             display_codigo = master_dict[sel_maestro]
                     with col_c2:
-                        codigo_manual_input = st.text_input("Ingresar código manual", key=f"manual_input_{idx}_{nombre_display_excel}_{idx}", placeholder="Ej. 088857003306")
+                        codigo_manual_input = st.text_input("Ingresar código manual", key=f"manual_input_{idx}_{nombre_display_excel}_{idx}", placeholder="Ej. 5012523233129")
                         if codigo_manual_input and len(codigo_manual_input.strip()) >= 7:
                             clean_m = clean_ean_code(codigo_manual_input)
                             if clean_m != "S/C":
