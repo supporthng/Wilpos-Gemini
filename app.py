@@ -177,7 +177,6 @@ def buscar_en_catalogo_maestro(nombre_producto, presentacion=""):
     p_upper = str(presentacion).upper().strip()
     combined_query = f"{n_upper} {p_upper}".strip()
 
-    # Verificar si se asignó manualmente en esta sesión
     manual_dict = st.session_state.get("codigos_manuales_sesion", {})
     if combined_query in manual_dict: return manual_dict[combined_query]
     if n_upper in manual_dict: return manual_dict[n_upper]
@@ -229,14 +228,14 @@ st.sidebar.markdown("<h3 style='color: #0284c7;'>⚡ WilPOS System</h3>", unsafe
 menu_opcion = st.sidebar.radio("Navegación", ["📄 Procesar Factura", "📁 Catálogo Maestro EAN", "🏢 Gestionar Proveedores"])
 
 st.sidebar.markdown("---")
-st.sidebar.markdown("<p style='font-size: 0.8rem; color: #10b981; font-weight: 600;'>🟢 Búsqueda Manual e Internet Activa</p>", unsafe_allow_html=True)
+st.sidebar.markdown("<p style='font-size: 0.8rem; color: #10b981; font-weight: 600;'>🟢 Búsqueda Inteligente Activa</p>", unsafe_allow_html=True)
 
 # ==========================================
 # MÓDULO 1: PROCESAR FACTURA
 # ==========================================
 if menu_opcion == "📄 Procesar Factura":
     st.markdown("<h2>📄 Procesador Inteligente con Detección Automática</h2>", unsafe_allow_html=True)
-    st.markdown("<p style='color: #64748b;'>Sube tu factura. Los ítems sin código (S/C) podrán buscarse en el maestro o en internet al instante.</p>", unsafe_allow_html=True)
+    st.markdown("<p style='color: #64748b;'>Sube tu factura. Al asignar un código a un ítem S/C, este desaparecerá del selector de inmediato.</p>", unsafe_allow_html=True)
     st.markdown("---")
 
     if "factura_data" not in st.session_state: st.session_state["factura_data"] = None
@@ -351,7 +350,6 @@ if menu_opcion == "📄 Procesar Factura":
 
         if items:
             st.markdown(f"### 📋 Detalle de Renglones Extraídos ({len(items)} ítems)")
-            st.markdown("<p style='font-size: 0.85rem; color: #64748b;'>Si algún producto aparece como <b>S/C</b>, puedes asignarle su código maestro o buscarlo en internet directamente desde la tabla.</p>", unsafe_allow_html=True)
             
             preview_rows = []
             wb = openpyxl.Workbook()
@@ -393,27 +391,31 @@ if menu_opcion == "📄 Procesar Factura":
                 else:
                     precio_venta = 0.0
 
-                # Interfaz interactiva si el código es S/C
+                # Detección dinámica: Si es S/C, muestra opciones de búsqueda. Si ya tiene código, se muestra limpio.
                 display_codigo = codigo_final
                 if codigo_final == "S/C":
-                    col_c1, col_c2 = st.columns([2, 1])
+                    st.markdown(f"---")
+                    col_c1, col_c2, col_c3 = st.columns([2, 1, 1])
                     with col_c1:
+                        st.markdown(f"⚠️ **{nombre_completo} ({presentacion_limpia})** sin código.")
                         sel_maestro = st.selectbox(
-                            f"🔍 Asignar Código Maestro para: {nombre_completo}",
-                            ["-- Seleccionar del Maestro --"] + nombres_maestro_lista,
-                            key=f"sel_ maestro_{idx}_{nombre_completo}"
+                            f"Seleccionar del Catálogo Maestro",
+                            ["-- Buscar en Maestro --"] + nombres_maestro_lista,
+                            key=f"sel_maestro_{idx}_{nombre_completo}"
                         )
-                        if sel_maestro != "-- Seleccionar del Maestro --":
+                        if sel_maestro != "-- Buscar en Maestro --":
                             display_codigo = master_dict[sel_maestro]
                             st.session_state["codigos_manuales_sesion"][nombre_completo] = display_codigo
+                            st.rerun()
                     with col_c2:
+                        st.markdown("<br>", unsafe_allow_html=True)
                         if st.button(f"🌐 Buscar en Web", key=f"web_{idx}_{nombre_completo}"):
-                            with st.spinner(f"Buscando código EAN para {nombre_completo}..."):
+                            with st.spinner(f"Buscando código EAN..."):
                                 try:
                                     model_web = genai.GenerativeModel('gemini-3.8-flash')
                                     prompt_web = (
                                         f"Busca en internet el código de barras EAN o código oficial de este producto: '{nombre_completo} {presentacion_limpia}'. "
-                                        "Devuelve únicamente el número de código de barras exacto (sin texto adicional). Si no lo encuentras, devuelve 'S/C'."
+                                        "Devuelve únicamente el número de código exacto (sin texto adicional). Si no lo encuentras, devuelve 'S/C'."
                                     )
                                     res_web = model_web.generate_content(prompt_web)
                                     codigo_web = clean_ean_code(res_web.text.strip())
@@ -422,12 +424,23 @@ if menu_opcion == "📄 Procesar Factura":
                                         st.session_state["codigos_manuales_sesion"][nombre_completo] = display_codigo
                                         master_dict[nombre_completo] = display_codigo
                                         save_json_file(MASTER_CATALOG_FILE, master_dict)
-                                        st.success(f"¡Encontrado y guardado! Código: {display_codigo}")
+                                        st.success(f"¡Código asignado: {display_codigo}!")
                                         st.rerun()
                                     else:
-                                        st.warning("No se pudo hallar en la web. Puedes ingresarlo en el Catálogo Maestro.")
+                                        st.warning("No hallado en web.")
                                 except Exception:
-                                    st.error("Error al consultar la web.")
+                                    st.error("Error en web.")
+                    with col_c3:
+                        st.markdown("<br>", unsafe_allow_html=True)
+                        codigo_manual_input = st.text_input("O ingresa código manual", key=f"manual_input_{idx}_{nombre_completo}", placeholder="Ej. 70601561")
+                        if codigo_manual_input and len(codigo_manual_input.strip()) >= 7:
+                            clean_m = clean_ean_code(codigo_manual_input)
+                            if clean_m != "S/C":
+                                display_codigo = clean_m
+                                st.session_state["codigos_manuales_sesion"][nombre_completo] = display_codigo
+                                master_dict[nombre_completo] = display_codigo
+                                save_json_file(MASTER_CATALOG_FILE, master_dict)
+                                st.rerun()
 
                 preview_rows.append({
                     "No.": idx, "Producto": nombre_completo, "Código EAN Asignado": display_codigo,
