@@ -4,6 +4,7 @@ import os
 import time
 from datetime import datetime
 import re
+import difflib
 import google.generativeai as genai
 from PIL import Image
 import streamlit as st
@@ -69,7 +70,7 @@ if "supplier_memory" not in st.session_state:
         "CND / BEES": {
             "nombre": "CND / BEES",
             "tipo_formato": "tique_doble_linea_blindado",
-            "instruccion_prompt": "Analiza este tique de CND / BEES donde cada ítem tiene dos líneas: la línea 1 con código, unidad (PC o UN) y descripción, y la línea 2 con cantidad, precio unitario (P.Unit) e impuesto neto. Extrae 'descripcion', 'tamano', 'cantidad', 'unidad' y 'precio_unitario'."
+            "instruccion_prompt": "Analiza este tique de CND / BEES donde cada ítem tiene dos líneas: la línea 1 con código interno, unidad (PC o UN) y descripción, y la línea 2 con cantidad, precio unitario (P.Unit) e impuesto neto. Extrae 'descripcion', 'tamano', 'cantidad', 'unidad' y 'precio_unitario'."
         },
         "ALVAREZ & SANCHEZ": {
             "nombre": "ALVAREZ & SANCHEZ",
@@ -136,8 +137,14 @@ def clean_ean_code(code_val):
     s_val = str(code_val).strip()
     if s_val.endswith('.0'): s_val = s_val[:-2]
     s_val = re.sub(r'\D', '', s_val)
-    if len(s_val) == 5 and s_val.startswith("9"): return "S/C"
-    if 7 <= len(s_val) <= 14: return str(s_val)
+    
+    # REGLA ESTRICTA: Descartar por completo códigos de 5 dígitos (códigos internos de tique)
+    if len(s_val) <= 6:
+        return "S/C"
+        
+    if 7 <= len(s_val) <= 14: 
+        return str(s_val)
+        
     return "S/C"
 
 def limpiar_nombre_producto(descripcion_raw, tamano_raw):
@@ -186,7 +193,7 @@ def parse_empaque_proveedor(proveedor_nombre, tamano_txt="", unidad_txt="", desc
 
 def buscar_en_catalogo_maestro(nombre_producto, presentacion=""):
     """
-    CONSULTA DIRECTA Y EXHAUSTIVA EN EL ARCHIVO MAESTRO CON COINCIDENCIA POR PALABRAS CLAVE (TOKEN OVERLAP)
+    CONSULTA MAESTRA DIRECTA CON COINCIDENCIA EXACTA, PARCIAL Y DIFUSA (FUZZY MATCHING)
     """
     n_upper = str(nombre_producto or "").upper().strip()
     p_upper = str(presentacion or "").upper().strip()
@@ -207,32 +214,24 @@ def buscar_en_catalogo_maestro(nombre_producto, presentacion=""):
     if n_upper in master_dict:
         return clean_ean_code(master_dict[n_upper])
 
-    # 3. Búsqueda por subcadena / inclusión
+    # 3. Coincidencia por subcadena
     for m_name, m_code in master_dict.items():
         m_clean = str(m_name).upper().strip()
         if m_clean in n_upper or n_upper in m_clean or m_clean in combined_query or combined_query in m_clean:
             return clean_ean_code(m_code)
 
-    # 4. Búsqueda inteligente por intersección de palabras clave (Token Overlap)
-    tokens_query = set(re.findall(r'\b[A-Z0-9]+\b', combined_query))
-    # Ignorar palabras muy cortas o genéricas de ruido
-    tokens_query = {t for t in tokens_query if len(t) > 2 or t in ["HU", "CJ"]}
-    
-    mejor_coincidencia = None
-    max_matches = 0
+    # 4. Búsqueda por Similitud Difusa (Fuzzy Matching con tolerancia alta)
+    keys_maestro = list(master_dict.keys())
+    coincidencias_cercanas = difflib.get_close_matches(n_upper, keys_maestro, n=1, cutoff=0.50)
+    if not coincidencias_cercanas:
+        coincidencias_cercanas = difflib.get_close_matches(combined_query, keys_maestro, n=1, cutoff=0.45)
 
-    for m_name, m_code in master_dict.items():
-        tokens_master = set(re.findall(r'\b[A-Z0-9]+\b', str(m_name).upper()))
-        comunes = tokens_query.intersection(tokens_master)
-        score = len(comunes)
-        
-        # Si comparten al menos 2 palabras clave clave (ej. "FOUR" + "LOKO" o "CLAMATO")
-        if score >= 2 and score > max_matches:
-            max_matches = score
-            mejor_coincidencia = m_code
-
-    if mejor_coincidencia and clean_ean_code(mejor_coincidencia) != "S/C":
-        return clean_ean_code(mejor_coincidencia)
+    if coincidencias_cercanas:
+        mejor_key = coincidencias_cercanas[0]
+        codigo_encontrado = master_dict[mejor_key]
+        clean_c = clean_ean_code(codigo_encontrado)
+        if clean_c != "S/C":
+            return clean_c
 
     return "S/C"
 
@@ -240,14 +239,14 @@ st.sidebar.markdown("<h3 style='color: #0284c7;'>⚡ WilPOS Multi-Proveedor</h3>
 menu_opcion = st.sidebar.radio("Navegación", ["📄 Procesar Factura", "📁 Catálogo Maestro EAN", "🏢 Gestionar Proveedores"])
 
 st.sidebar.markdown("---")
-st.sidebar.markdown("<p style='font-size: 0.8rem; color: #10b981; font-weight: 600;'>🟢 Búsqueda Inteligente Tokenizada</p>", unsafe_allow_html=True)
+st.sidebar.markdown("<p style='font-size: 0.8rem; color: #10b981; font-weight: 600;'>🟢 Consulta Maestra Prioritaria Activa</p>", unsafe_allow_html=True)
 
 # ==========================================
 # MÓDULO 1: PROCESAR FACTURA
 # ==========================================
 if menu_opcion == "📄 Procesar Factura":
-    st.markdown("<h2>📄 Procesador con Búsqueda Inteligente en Archivo Maestro</h2>", unsafe_allow_html=True)
-    st.markdown("<p style='color: #64748b;'>Sube tu factura. El sistema buscará en el archivo maestro incluso si hay variaciones en el nombre.</p>", unsafe_allow_html=True)
+    st.markdown("<h2>📄 Procesador con Consulta Prioritaria al Archivo Maestro</h2>", unsafe_allow_html=True)
+    st.markdown("<p style='color: #64748b;'>Sube tu factura. Los códigos internos del tique son ignorados y se consulta directamente el archivo maestro.</p>", unsafe_allow_html=True)
     st.markdown("---")
 
     if "factura_data" not in st.session_state: st.session_state["factura_data"] = None
@@ -258,7 +257,7 @@ if menu_opcion == "📄 Procesar Factura":
     
     col_s1, col_s2 = st.columns([2, 1])
     with col_s1:
-        st.info("💡 Sube tu documento. Se aplicará la coincidencia tokenizada contra el archivo maestro.")
+        st.info("💡 Sube tu documento. Se aplicará la consulta directa al archivo maestro.")
     with col_s2:
         margen_utilidad = st.number_input("⚙️ Margen Utilidad (%)", min_value=0.0, max_value=500.0, value=25.0, step=1.0)
         
@@ -394,7 +393,7 @@ if menu_opcion == "📄 Procesar Factura":
                 m_med = re.search(r'(\d+\s*(?:ML|L|LT|G|KG|OZ|Z))', str((raw_tam or "") + " " + (raw_desc or "")).upper())
                 presentacion_limpia = m_med.group(1) if m_med else (raw_tam if raw_tam else "S/P")
 
-                # Consulta inteligente tokenizada en el archivo maestro
+                # Consulta directa en el archivo maestro
                 codigo_final = buscar_en_catalogo_maestro(nombre_completo, presentacion_limpia)
 
                 nombre_display_excel = "ALOE PURE PLUS ORIGINAL" if "1.5 LT" in nombre_completo else nombre_completo
@@ -497,9 +496,9 @@ elif menu_opcion == "📁 Catálogo Maestro EAN":
         with st.form("form_agregar_maestro"):
             col_m1, col_m2 = st.columns([2, 1])
             with col_m1:
-                nuevo_prod_nombre = st.text_input("Nombre / Descripción del Producto (Ej: FOUR LOKO SANDIA)")
+                nuevo_prod_nombre = st.text_input("Nombre / Descripción del Producto (Ej: FOUR LOKO MARACUYA)")
             with col_m2:
-                nuevo_prod_codigo = st.text_input("Código EAN / SAP Oficial (Ej: 849806001206)")
+                nuevo_prod_codigo = st.text_input("Código EAN / SAP Oficial (Ej: 849806004962)")
             
             btn_guardar_maestro = st.form_submit_button("💾 Guardar en Archivo Maestro")
             if btn_guardar_maestro:
@@ -521,7 +520,7 @@ elif menu_opcion == "📁 Catálogo Maestro EAN":
 # ==========================================
 # MÓDULO 3: GESTIONAR PROVEEDORES
 # ==========================================
-elif menu_opcion == "🏢 Gestionar Proveedores":
+elif menu_opcion == "📁 Gestionar Proveedores" or menu_opcion == "🏢 Gestionar Proveedores":
     st.markdown("<h2>🏢 Configuración de Perfiles por Proveedor</h2>", unsafe_allow_html=True)
     st.markdown("<p style='color: #64748b;'>Cada proveedor mantiene su propia regla de extracción intacta.</p>", unsafe_allow_html=True)
     st.markdown("---")
