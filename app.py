@@ -103,7 +103,7 @@ if "master_catalog" not in st.session_state:
         "ALOE PURE PLUS ORIGINAL 1.5 LT": "8809125063035",
         "ALOE PURE PLUS ORIGINAL": "8809125063011", 
         "MY COCO PURE PLUS": "8809125063011",
-        # Álvarez & Sánchez
+        # Álvarez & Sánchez (Código corregido: 088857003306)
         "VINO TINTO RESERVA CUNE 12/75 CL.": "8410591003045",
         "VINO TINTO MERLOT VIÑA TARAPACA 12/75 CL.": "7804304909934",
         "VINO TINTO RESERVA CAB SAUV TARAPACA 12/75 CL.": "7804304909039",
@@ -125,6 +125,10 @@ if "master_catalog" not in st.session_state:
     }
     for k, v in base_defaults.items():
         if k not in loaded_master: loaded_master[k] = v
+    # Corrección específica solicitada
+    if "088857003006" in loaded_master.values():
+        for mk, mv in loaded_master.items():
+            if mv == "088857003006": loaded_master[mk] = "088857003306"
     save_json_file(MASTER_CATALOG_FILE, loaded_master)
     st.session_state["master_catalog"] = loaded_master
 
@@ -146,6 +150,7 @@ def clean_ean_code(code_val):
     s_val = str(code_val).strip()
     if s_val.endswith('.0'): s_val = s_val[:-2]
     s_val = re.sub(r'\D', '', s_val)
+    if s_val == "088857003006": s_val = "088857003306" # Corrección automática preventiva
     if 4 <= len(s_val) <= 14: return str(s_val)
     return "S/C"
 
@@ -201,7 +206,7 @@ st.sidebar.markdown("<h3 style='color: #0284c7;'>⚡ WilPOS Multi-Proveedor</h3>
 menu_opcion = st.sidebar.radio("Navegación", ["📄 Procesar Factura", "📁 Catálogo Maestro EAN", "🏢 Gestionar Proveedores"])
 
 st.sidebar.markdown("---")
-st.sidebar.markdown("<p style='font-size: 0.8rem; color: #10b981; font-weight: 600;'>🟢 Multi-Página Acumulativo Activo</p>", unsafe_allow_html=True)
+st.sidebar.markdown("<p style='font-size: 0.8rem; color: #10b981; font-weight: 600;'>🟢 Corrección de Dígitos Activa</p>", unsafe_allow_html=True)
 
 # ==========================================
 # MÓDULO 1: PROCESAR FACTURA
@@ -218,11 +223,11 @@ if menu_opcion == "📄 Procesar Factura":
     
     col_s1, col_s2 = st.columns([2, 1])
     with col_s1:
-        st.info("💡 Puedes seleccionar múltiples archivos (ej. Página 1 y Página 2) al mismo tiempo para procesarlos juntos.")
+        st.info("💡 Sube tus archivos de factura (puedes seleccionar varias páginas simultáneamente).")
     with col_s2:
         margen_utilidad = st.number_input("⚙️ Margen Utilidad (%)", min_value=0.0, max_value=500.0, value=25.0, step=1.0)
         
-    archivos_subidos = st.file_uploader("📂 Sube tus páginas (puedes seleccionar varias imágenes o PDFs)", type=["pdf", "png", "jpg", "jpeg"], accept_multiple_files=True)
+    archivos_subidos = st.file_uploader("📂 Sube tus páginas (imágenes o PDFs)", type=["pdf", "png", "jpg", "jpeg"], accept_multiple_files=True)
     
     if archivos_subidos:
         if st.button("🚀 Procesar Páginas y Consolidar Inventario"):
@@ -406,7 +411,7 @@ if menu_opcion == "📄 Procesar Factura":
                         if sel_maestro != "-- Buscar en Maestro --":
                             display_codigo = master_dict[sel_maestro]
                     with col_c2:
-                        codigo_manual_input = st.text_input("Ingresar código manual", key=f"manual_input_{idx}_{nombre_display_excel}_{idx}", placeholder="Ej. 8410591003045")
+                        codigo_manual_input = st.text_input("Ingresar código manual", key=f"manual_input_{idx}_{nombre_display_excel}_{idx}", placeholder="Ej. 088857003306")
                         if codigo_manual_input and len(codigo_manual_input.strip()) >= 7:
                             clean_m = clean_ean_code(codigo_manual_input)
                             if clean_m != "S/C":
