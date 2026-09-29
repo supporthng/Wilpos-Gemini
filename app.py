@@ -156,19 +156,22 @@ def limpiar_nombre_producto(descripcion_raw, tamano_raw):
 def parse_empaque(tamano_txt="", unidad_txt="", descripcion_txt=""):
     unidad_upper = str(unidad_txt or "").upper().strip()
     
-    # REGLA ABSOLUTA: Si el tique indica explícitamente que es unidad suelta ("UN"), el empaque es 1 sin excepción
+    # REGLA ABSOLUTA: Si el tique indica explícitamente que es unidad suelta ("UN"), el empaque es 1
     if unidad_upper == "UN":
         return 1
 
     combined = f"{str(tamano_txt or '')} {str(unidad_txt or '')} {str(descripcion_txt or '')}".upper()
     
+    # Excepción Corona Cero / 4x6 (significa 4 paquetes de 6 = 24 unidades totales)
+    if "4X6" in combined:
+        return 24
+
     # 1. Detección por patrones generales con barra
     m_slash = re.search(r'\b(48|24|20|18|16|12|6|4)\s*/', combined)
     if m_slash:
         val = int(m_slash.group(1))
         if val > 1: return val
 
-    if "4X6" in combined: return 6
     if "LP 4" in combined or "4X" in combined: return 24
 
     # 2. Diccionario de respaldo por palabras clave (solo para cajas / packs PC)
@@ -180,6 +183,8 @@ def parse_empaque(tamano_txt="", unidad_txt="", descripcion_txt=""):
         return 6
     if "CLAMATO" in combined:
         return 12
+    if "ENRIQUILLO" in combined:
+        return 24
 
     return 1
 
@@ -239,7 +244,7 @@ st.sidebar.markdown("<h3 style='color: #0284c7;'>⚡ WilPOS System</h3>", unsafe
 menu_opcion = st.sidebar.radio("Navegación", ["📄 Procesar Factura", "📁 Catálogo Maestro EAN", "🏢 Gestionar Proveedores"])
 
 st.sidebar.markdown("---")
-st.sidebar.markdown("<p style='font-size: 0.8rem; color: #10b981; font-weight: 600;'>🟢 Sistema WilPOS 100% Calibrado</p>", unsafe_allow_html=True)
+st.sidebar.markdown("<p style='font-size: 0.8rem; color: #10b981; font-weight: 600;'>🟢 Corona Cero y Enriquillo Calibrados</p>", unsafe_allow_html=True)
 
 # ==========================================
 # MÓDULO 1: PROCESAR FACTURA
