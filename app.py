@@ -76,7 +76,7 @@ if "supplier_memory" not in st.session_state:
         "PRICESMART": {
             "nombre": "PRICESMART",
             "tipo_formato": "factura_tique_unidades",
-            "instruccion_prompt": "Analiza este comprobante de PRICESMART renglón por renglón. Extrae 'descripcion', 'tamano' (ej. 12OZ), 'cantidad', 'unidad' (ej. EA, 1UN), 'precio_unitario' y 'monto_neto'."
+            "instruccion_prompt": "Analiza este comprobante de PRICESMART renglón por renglón. Extrae 'descripcion', 'tamano' (ej. 32OZ), 'cantidad', 'unidad' (ej. EA, 1UN), 'precio_unitario' y 'monto_neto'."
         },
         "CENTRO DE DISTRIBUCION CRISTIAN": {
             "nombre": "CENTRO DE DISTRIBUCION CRISTIAN",
@@ -119,7 +119,8 @@ if "master_catalog" not in st.session_state:
             "OLD PARR 12 AÑOS 750ML": "7804300120986",
             "JOHNNIE WALKER BLUE LABEL 750ML": "5000267022108",
             "TEQUILA DON JULIO REPOSADO 750ML": "7501035602409",
-            "CANADA DRY GINGER ALE 12OZ": "078114031201"
+            "CANADA DRY GINGER ALE 12OZ": "078114031201",
+            "JUGO MANZANA 32OZ": "1011017752620"
         }
         loaded_master = base_defaults
         save_json_file(MASTER_CATALOG_FILE, loaded_master)
@@ -173,6 +174,7 @@ def limpiar_nombre_y_extraer_presentacion(proveedor_activo, descripcion_raw, tam
     
     combined_raw = f"{t_norm} {t_tam}"
     
+    # Extraer presentación limpia (ej. 32OZ, 12OZ, etc.) eliminando duplicados
     m_med = re.search(r'(\d+\s*(?:ML|L|LT|G|KG|OZ|CL))', combined_raw)
     presentacion = m_med.group(1).replace(" ", "") if m_med else ("750ML" if "OLD PARR" in t_norm else "UN")
     if "75CL" in presentacion:
@@ -183,7 +185,9 @@ def limpiar_nombre_y_extraer_presentacion(proveedor_activo, descripcion_raw, tam
     elif "OLD PARR" in t_norm:
         desc_limpia = f"OLD PARR 12 AÑOS {presentacion}"
     else:
+        # Remover artefactos repetidos, números de packs y medidas del texto del nombre
         desc_limpia = re.sub(r'\b(CAJA\s*\d*|CJ\s*\d*\s*BOT|\d+\s*X\s*\d+\s*(?:ML|CL|L)|\d+\s+1UN|1UN|EA|750\s*ML|75\s*CL|750ML|75CL|\d+OZ)\b', '', t_norm)
+        desc_limpia = re.sub(r'\b\d+\s+\d+\b', '', desc_limpia) # Limpia números repetidos como "12 1"
         desc_limpia = re.sub(r'\s+', ' ', desc_limpia).strip()
         if presentacion != "UN" and presentacion not in desc_limpia:
             desc_limpia = f"{desc_limpia} {presentacion}".strip()
@@ -195,6 +199,7 @@ def parse_empaque_proveedor(proveedor_nombre, unidad_txt="", tamano_txt="", desc
     prov_up = normalizar_texto(proveedor_nombre)
     
     if "PRICESMART" in prov_up:
+        # Detectar empaques de packs (ej. "12" al inicio o antes de la medida)
         m_pack = re.search(r'\b(12|24|6|48)\b', combined)
         if m_pack:
             val = int(m_pack.group(1))
@@ -251,14 +256,14 @@ st.sidebar.markdown("<h3 style='color: #0284c7;'>⚡ WilPOS Multi-Proveedor</h3>
 menu_opcion = st.sidebar.radio("Navegación", ["📄 Procesar Factura", "📁 Catálogo Maestro EAN", "🏢 Gestionar Proveedores"])
 
 st.sidebar.markdown("---")
-st.sidebar.markdown("<p style='font-size: 0.8rem; color: #10b981; font-weight: 600;'>🟢 Extracción de Presentaciones en OZ Activa</p>", unsafe_allow_html=True)
+st.sidebar.markdown("<p style='font-size: 0.8rem; color: #10b981; font-weight: 600;'>🟢 Limpieza Avanzada de Ruidos Activa</p>", unsafe_allow_html=True)
 
 # ==========================================
 # MÓDULO 1: PROCESAR FACTURA
 # ==========================================
 if menu_opcion == "📄 Procesar Factura":
-    st.markdown("<h2>📄 Procesador con Reconocimiento de Formatos en Onzas (OZ)</h2>", unsafe_allow_html=True)
-    st.markdown("<p style='color: #64748b;'>Sube tu factura o tique. El sistema extrae correctamente tamaños como 12OZ y empareja con el catálogo.</p>", unsafe_allow_html=True)
+    st.markdown("<h2>📄 Procesador con Limpieza Robusta de Renglones Densos</h2>", unsafe_allow_html=True)
+    st.markdown("<p style='color: #64748b;'>Sube tu factura o tique. El sistema elimina duplicados de medidas y calcula los costos de manera impecable.</p>", unsafe_allow_html=True)
     st.markdown("---")
 
     if "factura_data" not in st.session_state: st.session_state["factura_data"] = None
@@ -276,8 +281,8 @@ if menu_opcion == "📄 Procesar Factura":
     archivo_subido = st.file_uploader("📂 Sube tu factura o tique (PDF multi-página o Imagen)", type=["pdf", "png", "jpg", "jpeg"])
     
     if archivo_subido is not None:
-        if st.button("🚀 Detectar Proveedor y Procesar con Precisión"):
-            with st.spinner("🔍 Analizando documento con soporte para onzas (OZ)..."):
+        if st.button("🚀 Detectar Proveedor y Procesar con Limpieza Avanzada"):
+            with st.spinner("🔍 Analizando documento y normalizando renglones..."):
                 try:
                     if not gemini_key: raise ValueError("No hay clave de API configurada.")
                     model = genai.GenerativeModel('gemini-3.8-flash')
@@ -326,9 +331,9 @@ if menu_opcion == "📄 Procesar Factura":
                     prompt_unificado = (
                         f"Estás procesando un tique o factura del proveedor: '{prov_encontrado}'. "
                         f"Instrucción específica de su perfil: {instruccion_proveedor} "
-                        "Extrae 'descripcion', 'tamano' (ej. 12OZ), 'cantidad', 'unidad', 'precio_unitario', 'descuento_porcentaje' y 'monto_neto'. "
+                        "Extrae 'descripcion', 'tamano' (ej. 32OZ), 'cantidad', 'unidad', 'precio_unitario', 'descuento_porcentaje' y 'monto_neto'. "
                         "Devuelve un JSON puro con esta estructura exacta y llaves en minúscula: "
-                        '{"paginacion": "1 de 1", "proveedor_detectado": "' + prov_encontrado + '", "subtotal": 0.0, "itbis": 0.0, "descuentos": 0.0, "total": 0.0, "items": [{"descripcion": "...", "tamano": "12OZ", "cantidad": 1.0, "unidad": "EA", "precio_unitario": 4.58, "descuento_porcentaje": 0.0, "monto_neto": 4.58}]}. '
+                        '{"paginacion": "1 de 1", "proveedor_detectado": "' + prov_encontrado + '", "subtotal": 0.0, "itbis": 0.0, "descuentos": 0.0, "total": 0.0, "items": [{"descripcion": "...", "tamano": "32OZ", "cantidad": 1.0, "unidad": "EA", "precio_unitario": 0.0, "descuento_porcentaje": 0.0, "monto_neto": 0.0}]}. '
                         "Respuesta JSON pura."
                     )
 
@@ -436,7 +441,7 @@ if menu_opcion == "📄 Procesar Factura":
                         if sel_maestro != "-- Buscar en Maestro --":
                             display_codigo = master_dict[sel_maestro]
                     with col_c2:
-                        codigo_manual_input = st.text_input("Ingresar código manual", key=f"manual_input_{idx}_{nombre_limpio}_{idx}", placeholder="Ej. 078114031201...")
+                        codigo_manual_input = st.text_input("Ingresar código manual", key=f"manual_input_{idx}_{nombre_limpio}_{idx}", placeholder="Ej. 1011017752620...")
                         if codigo_manual_input and len(codigo_manual_input.strip()) >= 7:
                             clean_m = clean_ean_code(codigo_manual_input)
                             if clean_m != "S/C":
@@ -533,7 +538,8 @@ elif menu_opcion == "📁 Catálogo Maestro EAN":
                 "ANTIOQUEÑO TAPA AZUL 750 ML": "7702131234574",
                 "ANTIOQUEÑO TAPA VERDE 750 ML": "7702131234581",
                 "OLD PARR 12 AÑOS 750ML": "7804300120986",
-                "CANADA DRY GINGER ALE 12OZ": "078114031201"
+                "CANADA DRY GINGER ALE 12OZ": "078114031201",
+                "JUGO MANZANA 32OZ": "1011017752620"
             }
             save_json_file(MASTER_CATALOG_FILE, base_inicial)
             st.success("¡Archivo maestro restablecido y limpiado correctamente!")
@@ -548,9 +554,9 @@ elif menu_opcion == "📁 Catálogo Maestro EAN":
         with st.form("form_agregar_maestro"):
             col_m1, col_m2 = st.columns([2, 1])
             with col_m1:
-                nuevo_prod_nombre = st.text_input("Nombre / Descripción Oficial (Ej: CANADA DRY GINGER ALE 12OZ)")
+                nuevo_prod_nombre = st.text_input("Nombre / Descripción Oficial (Ej: JUGO MANZANA 32OZ)")
             with col_m2:
-                nuevo_prod_codigo = st.text_input("Código EAN / SAP Oficial (Ej: 078114031201)")
+                nuevo_prod_codigo = st.text_input("Código EAN / SAP Oficial (Ej: 1011017752620)")
             
             btn_guardar_maestro = st.form_submit_button("💾 Guardar en Archivo Maestro")
             if btn_guardar_maestro:
@@ -612,7 +618,7 @@ elif menu_opcion == "🏢 Gestionar Proveedores":
 
     with st.expander("➕ Crear Nuevo Perfil de Proveedor Independiente"):
         with st.form("form_nuevo_proveedor_manual"):
-            n_prov = st.text_input("Nombre del Proveedor (Ej: CASA BRUGAL)")
+            n_prov = st.text_input("Nombre del Nuevo Proveedor (Ej: CASA BRUGAL)")
             n_inst = st.text_area("Instrucción de Formato para este Proveedor", value="Analiza la factura de este proveedor renglón por renglón. Extrae 'descripcion', 'tamano', 'cantidad', 'unidad', 'precio_unitario', 'descuento_porcentaje' y 'monto_neto'.")
             btn_crear = st.form_submit_button("Crear Nuevo Perfil")
             if btn_crear:
