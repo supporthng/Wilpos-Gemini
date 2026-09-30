@@ -111,9 +111,9 @@ if "master_catalog" not in st.session_state:
             "ANTIOQUEÑO TAPA ROJA 750 ML": "7702131234567",
             "ANTIOQUEÑO TAPA AZUL 750 ML": "7702131234574",
             "ANTIOQUEÑO TAPA VERDE 750 ML": "7702131234581",
-            "WHISKY OLD PARR 12 AÑOS 75 CL": "7804300120986",
-            "JOHNNIE WALKER BLUE LABEL 75 CL": "5000267022108",
-            "TEQUILA DON JULIO REPOSADO 75 CL": "7501035602409"
+            "OLD PARR 12 AÑOS 750ML": "7804300120986",
+            "JOHNNIE WALKER BLUE LABEL 750ML": "5000267022108",
+            "TEQUILA DON JULIO REPOSADO 750ML": "7501035602409"
         }
         loaded_master = base_defaults
         save_json_file(MASTER_CATALOG_FILE, loaded_master)
@@ -154,19 +154,25 @@ def limpiar_nombre_y_extraer_presentacion(descripcion_raw, tamano_raw=""):
     t_norm = normalizar_texto(descripcion_raw)
     t_tam = normalizar_texto(tamano_raw)
     
-    # Reemplazos y expansions directas basadas en tus reglas
+    # Conversiones y expansiones exactas solicitadas
     t_norm = re.sub(r'\bJW\b', 'JOHNNIE WALKER', t_norm)
     t_norm = re.sub(r'\bDJ\b', 'DON JULIO', t_norm)
-    if "OLD PARR" in t_norm and "12" not in t_norm:
-        t_norm = t_norm.replace("OLD PARR", "WHISKY OLD PARR 12 AÑOS")
+    
+    if "OLD PARR" in t_norm:
+        t_norm = "OLD PARR 12 AÑOS"
     
     combined_raw = f"{t_norm} {t_tam}"
     
-    # Extraer presentación
-    m_med = re.search(r'(\d+\s*(?:ML|L|LT|G|KG|OZ|CL))', combined_raw)
-    presentacion = m_med.group(1) if m_med else "75 CL"
-    
-    # Clasificación de tapas y variantes de Antioqueño
+    # Extraer presentación estándar a 750ML para Old Parr y licores similares
+    if "OLD PARR" in t_norm:
+        presentacion = "750ML"
+    else:
+        m_med = re.search(r'(\d+\s*(?:ML|L|LT|G|KG|OZ|CL))', combined_raw)
+        presentacion = m_med.group(1).replace(" ", "") if m_med else "750ML"
+        if "75CL" in presentacion:
+            presentacion = "750ML"
+
+    # Clasificación de variantes de Antioqueño
     if "ANTIOQ" in combined_raw:
         if "TAPA ROJA" in combined_raw or "29% TAPA ROJA" in combined_raw:
             desc_limpia = f"ANTIOQUEÑO TAPA ROJA {presentacion}"
@@ -176,8 +182,10 @@ def limpiar_nombre_y_extraer_presentacion(descripcion_raw, tamano_raw=""):
             desc_limpia = f"ANTIOQUEÑO TAPA AZUL {presentacion}"
         else:
             desc_limpia = f"ANTIOQUEÑO TAPA ROJA {presentacion}"
+    elif "OLD PARR" in t_norm:
+        desc_limpia = f"OLD PARR 12 AÑOS {presentacion}"
     else:
-        desc_limpia = re.sub(r'\b(CAJA\s*\d*|CJ\s*\d*\s*BOT|\d+\s*X\s*\d+\s*(?:ML|CL|L)|750\s*ML|75\s*CL|29%|24%|TV|SIN\s*AZUCAR)\b', '', t_norm)
+        desc_limpia = re.sub(r'\b(CAJA\s*\d*|CJ\s*\d*\s*BOT|\d+\s*X\s*\d+\s*(?:ML|CL|L|CL)|750\s*ML|75\s*CL|750ML|75CL|29%|24%|TV|SIN\s*AZUCAR)\b', '', t_norm)
         desc_limpia = re.sub(r'\s+', ' ', desc_limpia).strip()
         if presentacion not in desc_limpia:
             desc_limpia = f"{desc_limpia} {presentacion}".strip()
@@ -223,7 +231,7 @@ def buscar_en_catalogo_maestro(nombre_producto, presentacion=""):
     if n_norm in master_norm:
         return clean_ean_code(master_norm[n_norm])
 
-    # 2. Búsqueda estricta por similitud alta de tokens principales (evita códigos repetidos erróneos)
+    # 2. Búsqueda estricta por similitud alta de tokens principales
     tokens_query = set(re.findall(r'\b[A-Z0-9]+\b', combined_query))
     tokens_query = {t for t in tokens_query if len(t) > 1 and t not in {"ML", "CL", "L", "OZ", "CON", "SIN"}}
 
@@ -238,7 +246,6 @@ def buscar_en_catalogo_maestro(nombre_producto, presentacion=""):
         comunes = tokens_query.intersection(tokens_master)
         score = len(comunes)
         
-        # Exigimos alta concordancia estricta para evitar falsos positivos
         if score > max_coincidentes and score >= 3:
             max_coincidentes = score
             mejor_codigo = clean_ean_code(m_code)
@@ -249,14 +256,14 @@ st.sidebar.markdown("<h3 style='color: #0284c7;'>⚡ WilPOS Multi-Proveedor</h3>
 menu_opcion = st.sidebar.radio("Navegación", ["📄 Procesar Factura", "📁 Catálogo Maestro EAN", "🏢 Gestionar Proveedores"])
 
 st.sidebar.markdown("---")
-st.sidebar.markdown("<p style='font-size: 0.8rem; color: #10b981; font-weight: 600;'>🟢 Expansión JW, DJ y Old Parr Activa</p>", unsafe_allow_html=True)
+st.sidebar.markdown("<p style='font-size: 0.8rem; color: #10b981; font-weight: 600;'>🟢 Old Parr 12 Años 750ML Activo</p>", unsafe_allow_html=True)
 
 # ==========================================
 # MÓDULO 1: PROCESAR FACTURA
 # ==========================================
 if menu_opcion == "📄 Procesar Factura":
-    st.markdown("<h2>📄 Procesador con Expansión Inteligente de Marcas</h2>", unsafe_allow_html=True)
-    st.markdown("<p style='color: #64748b;'>Sube tu factura. El sistema traduce automáticamente JW, DJ y Old Parr a sus nombres oficiales.</p>", unsafe_allow_html=True)
+    st.markdown("<h2>📄 Procesador con Normalización de Old Parr</h2>", unsafe_allow_html=True)
+    st.markdown("<p style='color: #64748b;'>Sube tu factura. El sistema convierte Old Parr 75 CL a Old Parr 12 Años 750ML automáticamente.</p>", unsafe_allow_html=True)
     st.markdown("---")
 
     if "factura_data" not in st.session_state: st.session_state["factura_data"] = None
@@ -274,8 +281,8 @@ if menu_opcion == "📄 Procesar Factura":
     archivo_subido = st.file_uploader("📂 Sube tu factura o tique (PDF multi-página o Imagen)", type=["pdf", "png", "jpg", "jpeg"])
     
     if archivo_subido is not None:
-        if st.button("🚀 Detectar Proveedor y Procesar con Nombres Oficiales"):
-            with st.spinner("🔍 Analizando documento con normalización de marcas..."):
+        if st.button("🚀 Detectar Proveedor y Procesar Factura"):
+            with st.spinner("🔍 Analizando documento con normalización de licores..."):
                 try:
                     if not gemini_key: raise ValueError("No hay clave de API configurada.")
                     model = genai.GenerativeModel('gemini-3.8-flash')
@@ -324,7 +331,7 @@ if menu_opcion == "📄 Procesar Factura":
                     prompt_unificado = (
                         f"Estás procesando un tique o factura del proveedor: '{prov_encontrado}'. "
                         f"Instrucción específica de su perfil: {instruccion_proveedor} "
-                        "Extrae 'descripcion', 'tamano' (ej. 75 CL), 'cantidad', 'unidad', 'precio_unitario', 'descuento_porcentaje' y 'monto_neto'. "
+                        "Extrae 'descripcion', 'tamano', 'cantidad', 'unidad', 'precio_unitario', 'descuento_porcentaje' y 'monto_neto'. "
                         "Devuelve un JSON puro con esta estructura exacta y llaves en minúscula: "
                         '{"paginacion": "1 de 1", "proveedor_detectado": "' + prov_encontrado + '", "subtotal": 0.0, "itbis": 0.0, "descuentos": 0.0, "total": 0.0, "items": [{"descripcion": "...", "tamano": "75 CL", "cantidad": 1.0, "unidad": "CAJA", "precio_unitario": 15600.0, "descuento_porcentaje": 0.0, "monto_neto": 14040.0}]}. '
                         "Respuesta JSON pura."
@@ -396,7 +403,6 @@ if menu_opcion == "📄 Procesar Factura":
                 empaque = parse_empaque_proveedor(prov_actual, unidad, raw_tam, raw_desc)
                 total_unidades = int(cant_compra * empaque)
 
-                # Búsqueda estricta segura
                 codigo_final = buscar_en_catalogo_maestro(nombre_limpio, presentacion_limpia)
 
                 if nombre_limpio in st.session_state["codigos_manuales_sesion"]:
@@ -531,7 +537,7 @@ elif menu_opcion == "📁 Catálogo Maestro EAN":
                 "ANTIOQUEÑO TAPA ROJA 750 ML": "7702131234567",
                 "ANTIOQUEÑO TAPA AZUL 750 ML": "7702131234574",
                 "ANTIOQUEÑO TAPA VERDE 750 ML": "7702131234581",
-                "WHISKY OLD PARR 12 AÑOS 75 CL": "7804300120986"
+                "OLD PARR 12 AÑOS 750ML": "7804300120986"
             }
             save_json_file(MASTER_CATALOG_FILE, base_inicial)
             st.success("¡Archivo maestro restablecido y limpiado correctamente!")
@@ -546,7 +552,7 @@ elif menu_opcion == "📁 Catálogo Maestro EAN":
         with st.form("form_agregar_maestro"):
             col_m1, col_m2 = st.columns([2, 1])
             with col_m1:
-                nuevo_prod_nombre = st.text_input("Nombre / Descripción Oficial (Ej: WHISKY OLD PARR 12 AÑOS 75 CL)")
+                nuevo_prod_nombre = st.text_input("Nombre / Descripción Oficial (Ej: OLD PARR 12 AÑOS 750ML)")
             with col_m2:
                 nuevo_prod_codigo = st.text_input("Código EAN / SAP Oficial (Ej: 7804300120986)")
             
