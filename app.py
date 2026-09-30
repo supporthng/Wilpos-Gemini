@@ -92,18 +92,9 @@ if "master_catalog" not in st.session_state:
     loaded_master = load_json_file(MASTER_CATALOG_FILE, "dict")
     if not loaded_master:
         base_defaults = {
-            "PTE. LIGHT HU 22OZ": "70601561", "PRESIDENTE LIGHT HU 22OZ": "70601561", "PTE. CJ 22OZ": "70601561",
-            "PTE. HU 12OZ": "74621774", "PTE. LIGHT HU 12OZ": "74621774", "BRAHMA LIGHT HU 12OZ": "7468973200194",
-            "BRAHMA LIGHT HU 16/650M": "7468973200200", "BRAHMA LIGHT 650ML": "7468973200200",
-            "CORONA EXTRA 330ML": "7503034941200", "CORONA CERO 355ML": "750304423180", "MICHELOB ULTRA 355ML": "7422110104967",
-            "THE ONE HU 12OZ": "74601325", "THE ONE HU 22OZ": "74601127", 
-            "CLAMATO COCTEL TOMATE C": "01484035", "ENRIQUILLO SODA 400 ML": "7463172803733", 
-            "GATORADE FRUIT PUNCH": "7460548000154", "GATORADE NARANJA": "052000324884", "GATORADE UVA": "052000324822", 
-            "FOUR LOKO MARACUYA": "849806004962", "FOUR LOKO PONCHE DE FRUTAS": "849806001220",
-            "FOUR LOKO GREEN": "849806001855", "FOUR LOKO PURPLE": "849806002746", "FOUR LOKO GOLD": "849806001756",
-            "FOUR LOKO SANDIA": "849806001206", "FOUR LOKO WHITE": "849806005754", 
-            "ALOE PURE PLUS ORIGINAL 1.5 LT": "8809125063035", "MY COCO PURE PLUS": "8809125063011",
-            "SANTA HELENA MERLOT 75 CL": "7804300120986", "SCHWEPPES TONICA 1 LT": "2117974"
+            "PTE. LIGHT HU 22OZ": "70601561", "PRESIDENTE LIGHT HU 22OZ": "70601561",
+            "FIREBALL APPLE WHISKY 50ML": "088004031416", "FIREBALL APPLE 50 ML": "088004031416",
+            "CLAMATO COCTEL TOMATE C": "01484035", "GATORADE FRUIT PUNCH": "7460548000154"
         }
         loaded_master = base_defaults
         save_json_file(MASTER_CATALOG_FILE, loaded_master)
@@ -154,20 +145,11 @@ def parse_empaque_proveedor(proveedor_nombre, tamano_txt="", unidad_txt="", desc
         if unidad_upper == "UN": return 1
 
         combined = f"{str(tamano_txt or '')} {str(unidad_txt or '')} {str(descripcion_txt or '')}".upper()
-        
         if "4X6" in combined: return 24
         m_slash = re.search(r'\b(48|24|20|18|16|12|6|4)\s*/', combined)
         if m_slash:
             val = int(m_slash.group(1))
             if val > 1: return val
-
-        if "LP 4" in combined or "4X" in combined: return 24
-        if "ALOE PURE PLUS" in combined or "MY COCO PURE PLUS" in combined: return 20
-        if "GATORADE" in combined: return 24
-        if "FOUR LOKO" in combined: return 6
-        if "CLAMATO" in combined: return 12
-        if "ENRIQUILLO" in combined: return 24
-
         return 1
 
     combined_gen = f"{str(tamano_txt or '')} {str(unidad_txt or '')} {str(descripcion_txt or '')}".upper()
@@ -176,33 +158,49 @@ def parse_empaque_proveedor(proveedor_nombre, tamano_txt="", unidad_txt="", desc
     return 1
 
 def buscar_en_catalogo_maestro(nombre_producto, presentacion=""):
+    """
+    BUSCADOR MAESTRO INTELIGENTE CON COINCIDENCIA POR TOKENS CLAVE PONDERADOS
+    """
     n_upper = str(nombre_producto or "").upper().strip()
     p_upper = str(presentacion or "").upper().strip()
     combined_query = f"{n_upper} {p_upper}".strip()
 
     master_dict = load_json_file(MASTER_CATALOG_FILE, "dict")
 
+    # 1. Coincidencia exacta
     if combined_query in master_dict:
         return clean_ean_code(master_dict[combined_query])
     if n_upper in master_dict:
         return clean_ean_code(master_dict[n_upper])
 
+    # 2. Coincidencia por subcadena directa
     for m_name, m_code in master_dict.items():
         m_clean = str(m_name).upper().strip()
-        if m_clean in n_upper or n_upper in m_clean:
+        if m_clean in n_upper or n_upper in m_clean or m_clean in combined_query or combined_query in m_clean:
             code_clean = clean_ean_code(m_code)
             if code_clean != "S/C":
                 return code_clean
 
-    tokens_query = set(re.findall(r'\b[A-Z0-9]+\b', n_upper))
-    tokens_query = {t for t in tokens_query if len(t) > 2 or t in ["HU", "CJ"]}
+    # 3. Coincidencia inteligente por tokens clave (Token Overlap con alta precisión)
+    # Extraer palabras alfanuméricas ignorando artículos o conectores menores de 2 letras
+    tokens_query = set(re.findall(r'\b[A-Z0-9]+\b', combined_query))
+    tokens_query = {t for t in tokens_query if len(t) > 1}
+
+    mejor_codigo = "S/C"
+    max_coincidentes = 0
 
     for m_name, m_code in master_dict.items():
         tokens_master = set(re.findall(r'\b[A-Z0-9]+\b', str(m_name).upper()))
-        if tokens_query and tokens_query.issubset(tokens_master):
-            code_clean = clean_ean_code(m_code)
-            if code_clean != "S/C":
-                return code_clean
+        comunes = tokens_query.intersection(tokens_master)
+        score = len(comunes)
+        
+        # Si comparten marcas clave y la medida (ej. FIREBALL + APPLE + 50 + ML)
+        if score > max_coincidentes and score >= 2:
+            max_coincidentes = score
+            mejor_codigo = clean_ean_code(m_code)
+
+    if mejor_codigo != "S/C":
+        return mejor_codigo
 
     return "S/C"
 
@@ -210,14 +208,14 @@ st.sidebar.markdown("<h3 style='color: #0284c7;'>⚡ WilPOS Multi-Proveedor</h3>
 menu_opcion = st.sidebar.radio("Navegación", ["📄 Procesar Factura", "📁 Catálogo Maestro EAN", "🏢 Gestionar Proveedores"])
 
 st.sidebar.markdown("---")
-st.sidebar.markdown("<p style='font-size: 0.8rem; color: #10b981; font-weight: 600;'>🟢 Maestro Blindado Activo</p>", unsafe_allow_html=True)
+st.sidebar.markdown("<p style='font-size: 0.8rem; color: #10b981; font-weight: 600;'>🟢 Buscador Tokenizado Activo</p>", unsafe_allow_html=True)
 
 # ==========================================
 # MÓDULO 1: PROCESAR FACTURA
 # ==========================================
 if menu_opcion == "📄 Procesar Factura":
-    st.markdown("<h2>📄 Procesador con Consulta Directa al Maestro</h2>", unsafe_allow_html=True)
-    st.markdown("<p style='color: #64748b;'>Sube tu factura. Los códigos del tique se ignoran y se busca directamente en el archivo maestro.</p>", unsafe_allow_html=True)
+    st.markdown("<h2>📄 Procesador con Búsqueda Inteligente</h2>", unsafe_allow_html=True)
+    st.markdown("<p style='color: #64748b;'>Sube tu factura. El sistema emparejará los productos de forma inteligente contra tu archivo maestro.</p>", unsafe_allow_html=True)
     st.markdown("---")
 
     if "factura_data" not in st.session_state: st.session_state["factura_data"] = None
@@ -228,7 +226,7 @@ if menu_opcion == "📄 Procesar Factura":
     
     col_s1, col_s2 = st.columns([2, 1])
     with col_s1:
-        st.info("💡 Sube tu documento. Se consultará directamente el archivo maestro.")
+        st.info("💡 Sube tu documento. Se aplicará el emparejamiento inteligente de tokens.")
     with col_s2:
         margen_utilidad = st.number_input("⚙️ Margen Utilidad (%)", min_value=0.0, max_value=500.0, value=25.0, step=1.0)
         
@@ -358,18 +356,12 @@ if menu_opcion == "📄 Procesar Factura":
                 empaque = parse_empaque_proveedor(prov_actual, raw_tam, unidad, raw_desc)
                 total_unidades = int(cant_compra * empaque)
 
-                if "ALOE PURE PLUS ORIGINAL" in nombre_completo:
-                    if empaque == 1:
-                        nombre_completo = "ALOE PURE PLUS ORIGINAL 1.5 LT"
-                    else:
-                        nombre_completo = "ALOE PURE PLUS ORIGINAL"
-
                 m_med = re.search(r'(\d+\s*(?:ML|L|LT|G|KG|OZ|Z))', str((raw_tam or "") + " " + (raw_desc or "")).upper())
                 presentacion_limpia = m_med.group(1) if m_med else (raw_tam if raw_tam else "S/P")
 
                 codigo_final = buscar_en_catalogo_maestro(nombre_completo, presentacion_limpia)
 
-                nombre_display_excel = "ALOE PURE PLUS ORIGINAL" if "1.5 LT" in nombre_completo else nombre_completo
+                nombre_display_excel = nombre_completo
 
                 p_unit_extraido = safe_float(item.get("precio_unitario"), 0.0)
                 monto_neto_linea = safe_float(
@@ -395,7 +387,7 @@ if menu_opcion == "📄 Procesar Factura":
                 display_codigo = codigo_final
                 if codigo_final == "S/C":
                     st.markdown("---")
-                    st.markdown(f"⚠️️ **{nombre_display_excel} ({presentacion_limpia})** sin código en el archivo maestro.")
+                    st.markdown(f"⚠️ **{nombre_display_excel} ({presentacion_limpia})** sin código en el archivo maestro.")
                     
                     col_c1, col_c2, col_c3 = st.columns([2, 1, 1])
                     with col_c1:
@@ -488,7 +480,7 @@ elif menu_opcion == "📁 Catálogo Maestro EAN":
                 time.sleep(1)
                 st.rerun()
             except Exception as e:
-                st.error(f"⚠️ Error al procesar el archivo: {str(e)}")
+                st.error(f"⚠️️ Error al procesar el archivo: {str(e)}")
     st.markdown('</div>', unsafe_allow_html=True)
 
     st.markdown("---")
@@ -499,10 +491,7 @@ elif menu_opcion == "📁 Catálogo Maestro EAN":
         if st.button("🗑️ Resetear / Limpiar Archivo Maestro"):
             base_inicial = {
                 "PTE. LIGHT HU 22OZ": "70601561", "PRESIDENTE LIGHT HU 22OZ": "70601561",
-                "PTE. HU 12OZ": "74621774", "BRAHMA LIGHT HU 12OZ": "7468973200194",
-                "CORONA EXTRA 330ML": "7503034941200", "MICHELOB ULTRA 355ML": "7422110104967",
-                "FOUR LOKO MARACUYA": "849806004962", "FOUR LOKO PONCHE DE FRUTAS": "849806001220",
-                "FOUR LOKO SANDIA": "849806001206", "CLAMATO COCTEL TOMATE C": "01484035"
+                "FIREBALL APPLE WHISKY 50ML": "088004031416", "CLAMATO COCTEL TOMATE C": "01484035"
             }
             save_json_file(MASTER_CATALOG_FILE, base_inicial)
             st.success("¡Archivo maestro restablecido y limpiado correctamente!")
@@ -517,9 +506,9 @@ elif menu_opcion == "📁 Catálogo Maestro EAN":
         with st.form("form_agregar_maestro"):
             col_m1, col_m2 = st.columns([2, 1])
             with col_m1:
-                nuevo_prod_nombre = st.text_input("Nombre / Descripción Oficial (Ej: FOUR LOKO MARACUYA)")
+                nuevo_prod_nombre = st.text_input("Nombre / Descripción Oficial (Ej: FIREBALL APPLE 50 ML)")
             with col_m2:
-                nuevo_prod_codigo = st.text_input("Código EAN / SAP Oficial (Ej: 849806004962)")
+                nuevo_prod_codigo = st.text_input("Código EAN / SAP Oficial (Ej: 088004031416)")
             
             btn_guardar_maestro = st.form_submit_button("💾 Guardar en Archivo Maestro")
             if btn_guardar_maestro:
