@@ -76,7 +76,7 @@ if "supplier_memory" not in st.session_state:
         "CENTRO DE DISTRIBUCION CRISTIAN": {
             "nombre": "CENTRO DE DISTRIBUCION CRISTIAN",
             "tipo_formato": "pos_cajas_unidades",
-            "instruccion_prompt": "Analiza este documento de CENTRO DE DISTRIBUCION CRISTIAN (CDC) renglón por renglón. Extrae 'descripcion' (nombre del artículo sin empaque), 'tamano' (ej. 355ML, 750ML, 175 ML), 'cantidad' (ej. 1.0), 'unidad' (ej. Caja-24, Caja-6, Caja-12, Caja-48) y 'precio_unitario' (precio por caja/unidad de empaque)."
+            "instruccion_prompt": "Analiza este documento de CENTRO DE DISTRIBUCION CRISTIAN (CDC) renglón por renglón. Extrae 'descripcion', 'tamano', 'cantidad', 'unidad' y 'precio_unitario'."
         },
         "ALVAREZ & SANCHEZ": {
             "nombre": "ALVAREZ & SANCHEZ",
@@ -179,7 +179,6 @@ def limpiar_nombre_y_extraer_presentacion(descripcion_raw, tamano_raw=""):
 def parse_empaque_proveedor(proveedor_nombre, unidad_txt="", tamano_txt="", descripcion_txt=""):
     combined = normalizar_texto(f"{unidad_txt} {tamano_txt} {descripcion_txt}")
     
-    # Extraer empaque del texto tipo "CAJA-24", "CAJA-6", etc.
     m_caj_num = re.search(r'(?:CAJA|CJ|BOX)[\s\-]*(\d+)', combined)
     if m_caj_num:
         val = int(m_caj_num.group(1))
@@ -210,19 +209,18 @@ def buscar_en_catalogo_maestro(nombre_producto, presentacion=""):
     master_dict = load_json_file(MASTER_CATALOG_FILE, "dict")
     master_norm = {normalizar_texto(k): v for k, v in master_dict.items()}
 
+    # 1. Coincidencia exacta estricta
     if combined_query in master_norm:
         return clean_ean_code(master_norm[combined_query])
     if n_norm in master_norm:
         return clean_ean_code(master_norm[n_norm])
 
-    for m_key, m_code in master_norm.items():
-        if m_key in combined_query or combined_query in m_key or m_key in n_norm or n_norm in m_key:
-            code_clean = clean_ean_code(m_code)
-            if code_clean != "S/C":
-                return code_clean
-
+    # 2. Búsqueda estricta por similitud alta de tokens principales (evita falsos positivos entre marcas)
     tokens_query = set(re.findall(r'\b[A-Z0-9]+\b', combined_query))
-    tokens_query = {t for t in tokens_query if len(t) > 1}
+    tokens_query = {t for t in tokens_query if len(t) > 1 and t not in {"ML", "CL", "L", "OZ", "CON", "SIN"}}
+
+    if not tokens_query:
+        return "S/C"
 
     mejor_codigo = "S/C"
     max_coincidentes = 0
@@ -231,7 +229,9 @@ def buscar_en_catalogo_maestro(nombre_producto, presentacion=""):
         tokens_master = set(re.findall(r'\b[A-Z0-9]+\b', m_key))
         comunes = tokens_query.intersection(tokens_master)
         score = len(comunes)
-        if score > max_coincidentes and score >= 2:
+        
+        # Exigimos alta concordancia (al menos 3 tokens clave o coincidencia total de marca + variante)
+        if score > max_coincidentes and score >= 3:
             max_coincidentes = score
             mejor_codigo = clean_ean_code(m_code)
 
@@ -241,14 +241,14 @@ st.sidebar.markdown("<h3 style='color: #0284c7;'>⚡ WilPOS Multi-Proveedor</h3>
 menu_opcion = st.sidebar.radio("Navegación", ["📄 Procesar Factura", "📁 Catálogo Maestro EAN", "🏢 Gestionar Proveedores"])
 
 st.sidebar.markdown("---")
-st.sidebar.markdown("<p style='font-size: 0.8rem; color: #10b981; font-weight: 600;'>🟢 Perfiles Separados Activos</p>", unsafe_allow_html=True)
+st.sidebar.markdown("<p style='font-size: 0.8rem; color: #10b981; font-weight: 600;'>🟢 Antiduplicidad EAN Activa</p>", unsafe_allow_html=True)
 
 # ==========================================
 # MÓDULO 1: PROCESAR FACTURA
 # ==========================================
 if menu_opcion == "📄 Procesar Factura":
-    st.markdown("<h2>📄 Procesador con Perfiles Independientes</h2>", unsafe_allow_html=True)
-    st.markdown("<p style='color: #64748b;'>Sube tu documento. El sistema detecta automáticamente si es Centro de Distribución Cristian, Álvarez & Sánchez u otro proveedor.</p>", unsafe_allow_html=True)
+    st.markdown("<h2>📄 Procesador con Antiduplicidad de Códigos EAN</h2>", unsafe_allow_html=True)
+    st.markdown("<p style='color: #64748b;'>Sube tu factura. El sistema asignará códigos estrictos y dejará 'S/C' si requiere verificación para evitar errores.</p>", unsafe_allow_html=True)
     st.markdown("---")
 
     if "factura_data" not in st.session_state: st.session_state["factura_data"] = None
@@ -266,8 +266,8 @@ if menu_opcion == "📄 Procesar Factura":
     archivo_subido = st.file_uploader("📂 Sube tu factura o tique (PDF multi-página o Imagen)", type=["pdf", "png", "jpg", "jpeg"])
     
     if archivo_subido is not None:
-        if st.button("🚀 Detectar Proveedor y Procesar con su Perfil"):
-            with st.spinner("🔍 Analizando documento y extrayendo ítems..."):
+        if st.button("🚀 Detectar Proveedor y Procesar con Seguridad EAN"):
+            with st.spinner("🔍 Analizando documento con filtros estrictos de códigos..."):
                 try:
                     if not gemini_key: raise ValueError("No hay clave de API configurada.")
                     model = genai.GenerativeModel('gemini-3.8-flash')
@@ -278,8 +278,7 @@ if menu_opcion == "📄 Procesar Factura":
                     image_input = {"mime_type": "application/pdf", "data": file_bytes} if "pdf" in f_type.lower() else Image.open(io.BytesIO(file_bytes))
 
                     prompt_deteccion = (
-                        "Analiza este documento comercial (factura o tique) e identifica estrictamente el nombre comercial del proveedor emisor "
-                        "(ej. CENTRO DE DISTRIBUCION CRISTIAN, ALVAREZ & SANCHEZ, EL CATADOR, ELIAS DISTRIBUCION). "
+                        "Analiza este documento comercial (factura o tique) e identifica estrictamente el nombre comercial del proveedor emisor. "
                         "Devuelve únicamente un JSON con esta estructura: {\"proveedor_detectado\": \"NOMBRE DEL PROVEEDOR\"}"
                     )
                     
@@ -317,9 +316,9 @@ if menu_opcion == "📄 Procesar Factura":
                     prompt_unificado = (
                         f"Estás procesando un tique o factura del proveedor: '{prov_encontrado}'. "
                         f"Instrucción específica de su perfil: {instruccion_proveedor} "
-                        "Extrae 'descripcion', 'tamano' (ej. 355ML, 750ML), 'cantidad', 'unidad' (ej. Caja-24, Caja-12 o CAJA), 'precio_unitario' y 'monto_neto' (o calcula precio total por línea). "
+                        "Extrae 'descripcion', 'tamano' (ej. 75 CL o 750 ML), 'cantidad', 'unidad', 'precio_unitario', 'descuento_porcentaje' y 'monto_neto'. "
                         "Devuelve un JSON puro con esta estructura exacta y llaves en minúscula: "
-                        '{"paginacion": "1 de 1", "proveedor_detectado": "' + prov_encontrado + '", "subtotal": 0.0, "itbis": 0.0, "descuentos": 0.0, "total": 0.0, "items": [{"descripcion": "...", "tamano": "750ML", "cantidad": 1.0, "unidad": "Caja-12", "precio_unitario": 9550.26, "descuento_porcentaje": 0.0, "monto_neto": 9550.26}]}. '
+                        '{"paginacion": "1 de 1", "proveedor_detectado": "' + prov_encontrado + '", "subtotal": 0.0, "itbis": 0.0, "descuentos": 0.0, "total": 0.0, "items": [{"descripcion": "...", "tamano": "75 CL", "cantidad": 1.0, "unidad": "CAJA", "precio_unitario": 15600.0, "descuento_porcentaje": 0.0, "monto_neto": 14040.0}]}. '
                         "Respuesta JSON pura."
                     )
 
@@ -336,7 +335,7 @@ if menu_opcion == "📄 Procesar Factura":
                     st.session_state["prov_activo"] = prov_encontrado
                     st.session_state["paginacion_detectada"] = str(parsed_json.get("paginacion", "1 de 1"))
                     
-                    st.success(f"🎯 **¡Proveedor Detectado!** Perfil independiente aplicado: **{prov_encontrado}** ({len(parsed_json.get('items', []))} renglones).")
+                    st.success(f"🎯 **¡Proveedor Detectado!** Perfil aplicado: **{prov_encontrado}** ({len(parsed_json.get('items', []))} renglones).")
                 except Exception as e:
                     st.error(f"⚠️ Error al procesar: {str(e)}")
     st.markdown('</div>', unsafe_allow_html=True)
@@ -389,7 +388,12 @@ if menu_opcion == "📄 Procesar Factura":
                 empaque = parse_empaque_proveedor(prov_actual, unidad, raw_tam, raw_desc)
                 total_unidades = int(cant_compra * empaque)
 
+                # Búsqueda estricta (evita códigos repetidos erróneos)
                 codigo_final = buscar_en_catalogo_maestro(nombre_limpio, presentacion_limpia)
+
+                # Validación de códigos manuales en sesión
+                if nombre_limpio in st.session_state["codigos_manuales_sesion"]:
+                    codigo_final = st.session_state["codigos_manuales_sesion"][nombre_limpio]
 
                 p_unit_extraido = safe_float(item.get("precio_unitario"), 0.0)
                 desc_pct = safe_float(item.get("descuento_porcentaje"), 0.0)
@@ -412,7 +416,7 @@ if menu_opcion == "📄 Procesar Factura":
                 display_codigo = codigo_final
                 if codigo_final == "S/C":
                     st.markdown("---")
-                    st.markdown(f"⚠️ **{nombre_limpio}** sin código en el archivo maestro.")
+                    st.markdown(f"⚠️ **{nombre_limpio} ({presentacion_limpia})** sin código EAN asignado (requiere validación).")
                     
                     col_c1, col_c2, col_c3 = st.columns([2, 1, 1])
                     with col_c1:
@@ -424,7 +428,7 @@ if menu_opcion == "📄 Procesar Factura":
                         if sel_maestro != "-- Buscar en Maestro --":
                             display_codigo = master_dict[sel_maestro]
                     with col_c2:
-                        codigo_manual_input = st.text_input("Ingresar código manual", key=f"manual_input_{idx}_{nombre_limpio}_{idx}", placeholder="Ej. 70601561")
+                        codigo_manual_input = st.text_input("Ingresar código manual", key=f"manual_input_{idx}_{nombre_limpio}_{idx}", placeholder="Ej. 7804300...")
                         if codigo_manual_input and len(codigo_manual_input.strip()) >= 7:
                             clean_m = clean_ean_code(codigo_manual_input)
                             if clean_m != "S/C":
@@ -436,9 +440,12 @@ if menu_opcion == "📄 Procesar Factura":
                         st.markdown(f"[🌐 Buscar en la Web]({url_busqueda})", unsafe_allow_html=True)
 
                     if display_codigo != "S/C":
-                        if st.button("✅ Usar este código para esta factura", key=f"btn_conf_{idx}_{nombre_limpio}"):
+                        if st.button("✅ Guardar y Usar este Código", key=f"btn_conf_{idx}_{nombre_limpio}"):
                             st.session_state["codigos_manuales_sesion"][nombre_limpio] = display_codigo
-                            st.success(f"¡Código {display_codigo} aplicado a esta factura!")
+                            # Actualizar automáticamente en catálogo maestro para futuras facturas
+                            master_dict[nombre_limpio] = display_codigo
+                            save_json_file(MASTER_CATALOG_FILE, master_dict)
+                            st.success(f"¡Código {display_codigo} guardado y aplicado!")
                             time.sleep(0.5)
                             st.rerun()
 
@@ -533,9 +540,9 @@ elif menu_opcion == "📁 Catálogo Maestro EAN":
         with st.form("form_agregar_maestro"):
             col_m1, col_m2 = st.columns([2, 1])
             with col_m1:
-                nuevo_prod_nombre = st.text_input("Nombre / Descripción Oficial (Ej: CERVEZA CORONA CERO 355ML)")
+                nuevo_prod_nombre = st.text_input("Nombre / Descripción Oficial (Ej: JW BLUE 75 CL)")
             with col_m2:
-                nuevo_prod_codigo = st.text_input("Código EAN / SAP Oficial (Ej: 70601561)")
+                nuevo_prod_codigo = st.text_input("Código EAN / SAP Oficial (Ej: 5000267022108)")
             
             btn_guardar_maestro = st.form_submit_button("💾 Guardar en Archivo Maestro")
             if btn_guardar_maestro:
@@ -559,7 +566,7 @@ elif menu_opcion == "📁 Catálogo Maestro EAN":
 # ==========================================
 elif menu_opcion == "🏢 Gestionar Proveedores":
     st.markdown("<h2>🏢 Configuración de Perfiles Independientes por Proveedor</h2>", unsafe_allow_html=True)
-    st.markdown("<p style='color: #64748b;'>Administra, edita o crea perfiles separados para cada proveedor (Centro de Distribución Cristian, Álvarez & Sánchez, etc.).</p>", unsafe_allow_html=True)
+    st.markdown("<p style='color: #64748b;'>Administra, edita o crea perfiles separados para cada proveedor.</p>", unsafe_allow_html=True)
     st.markdown("---")
 
     supps = st.session_state["supplier_memory"]
