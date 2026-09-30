@@ -76,7 +76,7 @@ if "supplier_memory" not in st.session_state:
         "EL CATADOR": {
             "nombre": "EL CATADOR",
             "tipo_formato": "factura_cajas_descuento",
-            "instruccion_prompt": "Analiza esta factura de EL CATADOR renglón por renglón. Extrae 'descripcion', 'tamano' (ej. 750ML), 'cantidad', 'unidad' (ej. CAJA12, CAJA24, BOTELLA), 'precio_unitario', 'descuento_porcentaje' (ej. 10.70%) y 'monto_neto'."
+            "instruccion_prompt": "Analiza esta factura de EL CATADOR renglón por renglón. Extrae 'descripcion', 'tamano' (ej. 750ML), 'cantidad', 'unidad' (ej. CAJA12, CAJA24, BOTELLA), 'precio_unitario' (Precio Und de la caja), 'descuento_porcentaje' (ej. 10.70%) y 'monto_neto'."
         },
         "PRICESMART": {
             "nombre": "PRICESMART",
@@ -154,7 +154,6 @@ def limpiar_nombre_y_extraer_presentacion(proveedor_activo, descripcion_raw, tam
     if "75CL" in presentacion:
         presentacion = "750ML"
 
-    # Limpieza de ruidos y artefactos de empaque en el nombre del producto
     desc_limpia = re.sub(r'\b(CAJA\s*\d*|CJ\s*\d*\s*BOT|\d+\s*X\s*\d+\s*(?:ML|CL|L)|\d+/\s*\d+\s*(?:ML|CL|L|750ML)|750\s*ML|75\s*CL|750ML|75CL|\d+OZ)\b', '', t_norm)
     desc_limpia = re.sub(r'\s+', ' ', desc_limpia).strip()
     
@@ -165,7 +164,6 @@ def limpiar_nombre_y_extraer_presentacion(proveedor_activo, descripcion_raw, tam
 
 def parse_empaque_proveedor(proveedor_nombre, unidad_txt="", tamano_txt="", descripcion_txt=""):
     combined = normalizar_texto(f"{unidad_txt} {tamano_txt} {descripcion_txt}")
-    prov_up = normalizar_texto(proveedor_nombre)
     
     m_caj_num = re.search(r'(?:CAJA|CJ|BOX)[\s\-]*(\d+)', combined)
     if m_caj_num:
@@ -223,14 +221,14 @@ st.sidebar.markdown("<h3 style='color: #0284c7;'>⚡ WilPOS Multi-Proveedor</h3>
 menu_opcion = st.sidebar.radio("Navegación", ["📄 Procesar Factura", "📁 Catálogo Maestro EAN", "🏢 Gestionar Proveedores"])
 
 st.sidebar.markdown("---")
-st.sidebar.markdown("<p style='font-size: 0.8rem; color: #10b981; font-weight: 600;'>🟢 Revisión de Vinos Frontera Activa</p>", unsafe_allow_html=True)
+st.sidebar.markdown("<p style='font-size: 0.8rem; color: #10b981; font-weight: 600;'>🟢 Corrección de Costo Unitario Activa</p>", unsafe_allow_html=True)
 
 # ==========================================
 # MÓDULO 1: PROCESAR FACTURA
 # ==========================================
 if menu_opcion == "📄 Procesar Factura":
     st.markdown("<h2>📄 Procesador de Facturas y Tiques</h2>", unsafe_allow_html=True)
-    st.markdown("<p style='color: #64748b;'>Sube tu factura de El Catador o cualquier otro proveedor.</p>", unsafe_allow_html=True)
+    st.markdown("<p style='color: #64748b;'>Sube tu factura. El cálculo de costos unitarios por botella está blindado matemáticamente.</p>", unsafe_allow_html=True)
     st.markdown("---")
 
     if "factura_data" not in st.session_state: st.session_state["factura_data"] = None
@@ -298,7 +296,7 @@ if menu_opcion == "📄 Procesar Factura":
                     prompt_unificado = (
                         f"Estás procesando un tique o factura del proveedor: '{prov_encontrado}'. "
                         f"Instrucción específica de su perfil: {instruccion_proveedor} "
-                        "Extrae 'descripcion', 'tamano', 'cantidad', 'unidad', 'precio_unitario', 'descuento_porcentaje' y 'monto_neto'. "
+                        "Extrae 'descripcion', 'tamano', 'cantidad', 'unidad', 'precio_unitario' (el precio de lista de la caja o unidad antes de descuento), 'descuento_porcentaje' y 'monto_neto'. "
                         "Devuelve un JSON puro con esta estructura exacta y llaves en minúscula: "
                         '{"paginacion": "1 de 1", "proveedor_detectado": "' + prov_encontrado + '", "subtotal": 0.0, "itbis": 0.0, "descuentos": 0.0, "total": 0.0, "items": [{"descripcion": "...", "tamano": "750ML", "cantidad": 1.0, "unidad": "CAJA12", "precio_unitario": 5450.0, "descuento_porcentaje": 10.70, "monto_neto": 4866.85}]}. '
                         "Respuesta JSON pura."
@@ -379,11 +377,16 @@ if menu_opcion == "📄 Procesar Factura":
                 desc_pct = safe_float(item.get("descuento_porcentaje"), 0.0)
                 monto_neto_linea = safe_float(item.get("monto_neto"), 0.0)
 
-                if p_unit_extraido > 0:
+                # ==========================================
+                # CÁLCULO BLINDADO DE COSTO UNITARIO REAL
+                # ==========================================
+                if monto_neto_linea > 0 and total_unidades > 0:
+                    # Si tenemos el monto neto de la línea (ej. $4,866.85) y el total de unidades (12 botellas)
+                    costo_unitario_real = round(monto_neto_linea / total_unidades, 2)
+                elif p_unit_extraido > 0:
+                    # Si se parte del precio unitario de caja
                     precio_neto_item = p_unit_extraido * (1 - (desc_pct / 100.0))
                     costo_unitario_real = round(precio_neto_item / empaque, 2) if empaque > 1 else precio_neto_item
-                elif monto_neto_linea > 0 and total_unidades > 0:
-                    costo_unitario_real = round(monto_neto_linea / total_unidades, 2)
                 else:
                     costo_unitario_real = 0.0
 
