@@ -73,6 +73,11 @@ def save_json_file(filepath, data):
 if "supplier_memory" not in st.session_state:
     loaded_supps = load_json_file(SUPPLIER_MEMORY_FILE, "dict")
     default_profiles = {
+        "PRICESMART": {
+            "nombre": "PRICESMART",
+            "tipo_formato": "factura_tique_unidades",
+            "instruccion_prompt": "Analiza este comprobante de PRICESMART renglón por renglón. Extrae 'descripcion' (ej. Agua Con Gas o Sparkling Ice, limpiando códigos repetidos al inicio), 'tamano', 'cantidad', 'unidad' (ej. EA), 'precio_unitario' y 'monto_neto'."
+        },
         "CENTRO DE DISTRIBUCION CRISTIAN": {
             "nombre": "CENTRO DE DISTRIBUCION CRISTIAN",
             "tipo_formato": "pos_cajas_unidades",
@@ -99,7 +104,7 @@ if "supplier_memory" not in st.session_state:
             "instruccion_prompt": "Analiza este tique de CND / BEES renglón por renglón. Extrae 'descripcion', 'tamano', 'cantidad', 'unidad' y 'precio_unitario'."
         }
     }
-    if not loaded_supps or "CENTRO DE DISTRIBUCION CRISTIAN" not in loaded_supps:
+    if not loaded_supps or "PRICESMART" not in loaded_supps:
         loaded_supps.update(default_profiles)
         save_json_file(SUPPLIER_MEMORY_FILE, loaded_supps)
     st.session_state["supplier_memory"] = loaded_supps
@@ -154,25 +159,27 @@ def limpiar_nombre_y_extraer_presentacion(descripcion_raw, tamano_raw=""):
     t_norm = normalizar_texto(descripcion_raw)
     t_tam = normalizar_texto(tamano_raw)
     
-    # Conversiones y expansiones exactas solicitadas
+    # Limpiar códigos repetidos al inicio comunes en tiques como PriceSmart (ej. "754118 MSAguaCnGas")
+    t_norm = re.sub(r'^\d+\s+', '', t_norm)
+    t_norm = re.sub(r'^MS\s*', '', t_norm)
+    
+    # Conversiones y expansiones de marcas
     t_norm = re.sub(r'\bJW\b', 'JOHNNIE WALKER', t_norm)
     t_norm = re.sub(r'\bDJ\b', 'DON JULIO', t_norm)
-    
     if "OLD PARR" in t_norm:
         t_norm = "OLD PARR 12 AÑOS"
     
     combined_raw = f"{t_norm} {t_tam}"
     
-    # Extraer presentación estándar a 750ML para Old Parr y licores similares
+    # Extraer presentación
     if "OLD PARR" in t_norm:
         presentacion = "750ML"
     else:
         m_med = re.search(r'(\d+\s*(?:ML|L|LT|G|KG|OZ|CL))', combined_raw)
-        presentacion = m_med.group(1).replace(" ", "") if m_med else "750ML"
+        presentacion = m_med.group(1).replace(" ", "") if m_med else "UN"
         if "75CL" in presentacion:
             presentacion = "750ML"
 
-    # Clasificación de variantes de Antioqueño
     if "ANTIOQ" in combined_raw:
         if "TAPA ROJA" in combined_raw or "29% TAPA ROJA" in combined_raw:
             desc_limpia = f"ANTIOQUEÑO TAPA ROJA {presentacion}"
@@ -185,16 +192,17 @@ def limpiar_nombre_y_extraer_presentacion(descripcion_raw, tamano_raw=""):
     elif "OLD PARR" in t_norm:
         desc_limpia = f"OLD PARR 12 AÑOS {presentacion}"
     else:
-        desc_limpia = re.sub(r'\b(CAJA\s*\d*|CJ\s*\d*\s*BOT|\d+\s*X\s*\d+\s*(?:ML|CL|L|CL)|750\s*ML|75\s*CL|750ML|75CL|29%|24%|TV|SIN\s*AZUCAR)\b', '', t_norm)
+        desc_limpia = re.sub(r'\b(CAJA\s*\d*|CJ\s*\d*\s*BOT|\d+\s*X\s*\d+\s*(?:ML|CL|L)|750\s*ML|75\s*CL|750ML|75CL|29%|24%|TV|SIN\s*AZUCAR|EA)\b', '', t_norm)
         desc_limpia = re.sub(r'\s+', ' ', desc_limpia).strip()
-        if presentacion not in desc_limpia:
-            desc_limpia = f"{desc_limpia} {presentacion}".strip()
     
     return desc_limpia, presentacion
 
 def parse_empaque_proveedor(proveedor_nombre, unidad_txt="", tamano_txt="", descripcion_txt=""):
     combined = normalizar_texto(f"{unidad_txt} {tamano_txt} {descripcion_txt}")
     
+    if "EA" in combined or "UN" in combined:
+        return 1
+
     m_caj_num = re.search(r'(?:CAJA|CJ|BOX)[\s\-]*(\d+)', combined)
     if m_caj_num:
         val = int(m_caj_num.group(1))
@@ -210,11 +218,6 @@ def parse_empaque_proveedor(proveedor_nombre, unidad_txt="", tamano_txt="", desc
     if "24X" in combined or "24/" in combined or "CJ24" in combined:
         return 24
 
-    prov_up = normalizar_texto(proveedor_nombre)
-    if "CND" in prov_up or "BEES" in prov_up:
-        if str(unidad_txt).upper() == "UN": return 1
-        return 24
-
     return 1
 
 def buscar_en_catalogo_maestro(nombre_producto, presentacion=""):
@@ -225,15 +228,13 @@ def buscar_en_catalogo_maestro(nombre_producto, presentacion=""):
     master_dict = load_json_file(MASTER_CATALOG_FILE, "dict")
     master_norm = {normalizar_texto(k): v for k, v in master_dict.items()}
 
-    # 1. Coincidencia exacta estricta
     if combined_query in master_norm:
         return clean_ean_code(master_norm[combined_query])
     if n_norm in master_norm:
         return clean_ean_code(master_norm[n_norm])
 
-    # 2. Búsqueda estricta por similitud alta de tokens principales
     tokens_query = set(re.findall(r'\b[A-Z0-9]+\b', combined_query))
-    tokens_query = {t for t in tokens_query if len(t) > 1 and t not in {"ML", "CL", "L", "OZ", "CON", "SIN"}}
+    tokens_query = {t for t in tokens_query if len(t) > 1 and t not in {"ML", "CL", "L", "OZ", "CON", "SIN", "EA"}}
 
     if not tokens_query:
         return "S/C"
@@ -246,7 +247,7 @@ def buscar_en_catalogo_maestro(nombre_producto, presentacion=""):
         comunes = tokens_query.intersection(tokens_master)
         score = len(comunes)
         
-        if score > max_coincidentes and score >= 3:
+        if score > max_coincidentes and score >= 2:
             max_coincidentes = score
             mejor_codigo = clean_ean_code(m_code)
 
@@ -256,14 +257,14 @@ st.sidebar.markdown("<h3 style='color: #0284c7;'>⚡ WilPOS Multi-Proveedor</h3>
 menu_opcion = st.sidebar.radio("Navegación", ["📄 Procesar Factura", "📁 Catálogo Maestro EAN", "🏢 Gestionar Proveedores"])
 
 st.sidebar.markdown("---")
-st.sidebar.markdown("<p style='font-size: 0.8rem; color: #10b981; font-weight: 600;'>🟢 Old Parr 12 Años 750ML Activo</p>", unsafe_allow_html=True)
+st.sidebar.markdown("<p style='font-size: 0.8rem; color: #10b981; font-weight: 600;'>🟢 Perfil PriceSmart Activo</p>", unsafe_allow_html=True)
 
 # ==========================================
 # MÓDULO 1: PROCESAR FACTURA
 # ==========================================
 if menu_opcion == "📄 Procesar Factura":
-    st.markdown("<h2>📄 Procesador con Normalización de Old Parr</h2>", unsafe_allow_html=True)
-    st.markdown("<p style='color: #64748b;'>Sube tu factura. El sistema convierte Old Parr 75 CL a Old Parr 12 Años 750ML automáticamente.</p>", unsafe_allow_html=True)
+    st.markdown("<h2>📄 Procesador con Perfil PriceSmart y Múltiples Proveedores</h2>", unsafe_allow_html=True)
+    st.markdown("<p style='color: #64748b;'>Sube tu factura o tique. El sistema aplicará el perfil correspondiente de forma automática.</p>", unsafe_allow_html=True)
     st.markdown("---")
 
     if "factura_data" not in st.session_state: st.session_state["factura_data"] = None
@@ -281,8 +282,8 @@ if menu_opcion == "📄 Procesar Factura":
     archivo_subido = st.file_uploader("📂 Sube tu factura o tique (PDF multi-página o Imagen)", type=["pdf", "png", "jpg", "jpeg"])
     
     if archivo_subido is not None:
-        if st.button("🚀 Detectar Proveedor y Procesar Factura"):
-            with st.spinner("🔍 Analizando documento con normalización de licores..."):
+        if st.button("🚀 Detectar Proveedor y Procesar Documento"):
+            with st.spinner("🔍 Analizando documento con perfil especializado..."):
                 try:
                     if not gemini_key: raise ValueError("No hay clave de API configurada.")
                     model = genai.GenerativeModel('gemini-3.8-flash')
@@ -293,7 +294,7 @@ if menu_opcion == "📄 Procesar Factura":
                     image_input = {"mime_type": "application/pdf", "data": file_bytes} if "pdf" in f_type.lower() else Image.open(io.BytesIO(file_bytes))
 
                     prompt_deteccion = (
-                        "Analiza este documento comercial (factura o tique) e identifica estrictamente el nombre comercial del proveedor emisor. "
+                        "Analiza este documento comercial (factura o tique) e identifica estrictamente el nombre comercial del proveedor emisor (ej. PRICESMART, CENTRO DE DISTRIBUCION CRISTIAN, ALVAREZ & SANCHEZ, EL CATADOR, ELIAS DISTRIBUCION). "
                         "Devuelve únicamente un JSON con esta estructura: {\"proveedor_detectado\": \"NOMBRE DEL PROVEEDOR\"}"
                     )
                     
@@ -331,9 +332,9 @@ if menu_opcion == "📄 Procesar Factura":
                     prompt_unificado = (
                         f"Estás procesando un tique o factura del proveedor: '{prov_encontrado}'. "
                         f"Instrucción específica de su perfil: {instruccion_proveedor} "
-                        "Extrae 'descripcion', 'tamano', 'cantidad', 'unidad', 'precio_unitario', 'descuento_porcentaje' y 'monto_neto'. "
+                        "Extrae 'descripcion', 'tamano', 'cantidad', 'unidad' (ej. EA), 'precio_unitario' y 'monto_neto' (o valor). "
                         "Devuelve un JSON puro con esta estructura exacta y llaves en minúscula: "
-                        '{"paginacion": "1 de 1", "proveedor_detectado": "' + prov_encontrado + '", "subtotal": 0.0, "itbis": 0.0, "descuentos": 0.0, "total": 0.0, "items": [{"descripcion": "...", "tamano": "75 CL", "cantidad": 1.0, "unidad": "CAJA", "precio_unitario": 15600.0, "descuento_porcentaje": 0.0, "monto_neto": 14040.0}]}. '
+                        '{"paginacion": "1 de 1", "proveedor_detectado": "' + prov_encontrado + '", "subtotal": 0.0, "itbis": 0.0, "descuentos": 0.0, "total": 0.0, "items": [{"descripcion": "...", "tamano": "", "cantidad": 1.0, "unidad": "EA", "precio_unitario": 788.14, "descuento_porcentaje": 0.0, "monto_neto": 788.14}]}. '
                         "Respuesta JSON pura."
                     )
 
@@ -413,8 +414,8 @@ if menu_opcion == "📄 Procesar Factura":
                 monto_neto_linea = safe_float(item.get("monto_neto"), 0.0)
 
                 if p_unit_extraido > 0:
-                    precio_caja_neto = p_unit_extraido * (1 - (desc_pct / 100.0))
-                    costo_unitario_real = round(precio_caja_neto / empaque, 2) if empaque > 1 else precio_caja_neto
+                    precio_neto_item = p_unit_extraido * (1 - (desc_pct / 100.0))
+                    costo_unitario_real = round(precio_neto_item / empaque, 2) if empaque > 1 else precio_neto_item
                 elif monto_neto_linea > 0 and total_unidades > 0:
                     costo_unitario_real = round(monto_neto_linea / total_unidades, 2)
                 else:
@@ -441,7 +442,7 @@ if menu_opcion == "📄 Procesar Factura":
                         if sel_maestro != "-- Buscar en Maestro --":
                             display_codigo = master_dict[sel_maestro]
                     with col_c2:
-                        codigo_manual_input = st.text_input("Ingresar código manual", key=f"manual_input_{idx}_{nombre_limpio}_{idx}", placeholder="Ej. 7804300...")
+                        codigo_manual_input = st.text_input("Ingresar código manual", key=f"manual_input_{idx}_{nombre_limpio}_{idx}", placeholder="Ej. 754118...")
                         if codigo_manual_input and len(codigo_manual_input.strip()) >= 7:
                             clean_m = clean_ean_code(codigo_manual_input)
                             if clean_m != "S/C":
@@ -552,9 +553,9 @@ elif menu_opcion == "📁 Catálogo Maestro EAN":
         with st.form("form_agregar_maestro"):
             col_m1, col_m2 = st.columns([2, 1])
             with col_m1:
-                nuevo_prod_nombre = st.text_input("Nombre / Descripción Oficial (Ej: OLD PARR 12 AÑOS 750ML)")
+                nuevo_prod_nombre = st.text_input("Nombre / Descripción Oficial (Ej: AGUA CON GAS 500ML)")
             with col_m2:
-                nuevo_prod_codigo = st.text_input("Código EAN / SAP Oficial (Ej: 7804300120986)")
+                nuevo_prod_codigo = st.text_input("Código EAN / SAP Oficial (Ej: 754118)")
             
             btn_guardar_maestro = st.form_submit_button("💾 Guardar en Archivo Maestro")
             if btn_guardar_maestro:
