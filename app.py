@@ -224,7 +224,7 @@ st.sidebar.markdown("<h3 style='color: #0284c7;'>⚡ WilPOS Multi-Proveedor</h3>
 menu_opcion = st.sidebar.radio("Navegación", ["📄 Procesar Factura (Por Página)", "📁 Catálogo Maestro EAN", "🏢 Gestionar Proveedores"])
 
 st.sidebar.markdown("---")
-st.sidebar.markdown("<p style='font-size: 0.8rem; color: #10b981; font-weight: 600;'>🟢 Resolución de Duplicados Activa</p>", unsafe_allow_html=True)
+st.sidebar.markdown("<p style='font-size: 0.8rem; color: #10b981; font-weight: 600;'>🟢 Resolución Inteligente Activa</p>", unsafe_allow_html=True)
 
 if st.sidebar.button("🔄 Reiniciar Historial de Páginas"):
     st.session_state["paginas_procesadas_historial"] = set()
@@ -238,7 +238,7 @@ if st.sidebar.button("🔄 Reiniciar Historial de Páginas"):
 # ==========================================
 if menu_opcion == "📄 Procesar Factura (Por Página)":
     st.markdown("<h2>📄 Procesador de Facturas (Resolución de Códigos Duplicados)</h2>", unsafe_allow_html=True)
-    st.markdown("<p style='color: #64748b;'>Selecciona la página que deseas procesar. El sistema te permitirá corregir en vivo cualquier código EAN duplicado.</p>", unsafe_allow_html=True)
+    st.markdown("<p style='color: #64748b;'>Selecciona la página que deseas procesar. Confirma el dueño legítimo del código y busca el código correcto para el producto erróneo.</p>", unsafe_allow_html=True)
     st.markdown("---")
 
     if "factura_data" not in st.session_state: st.session_state["factura_data"] = None
@@ -429,7 +429,7 @@ if menu_opcion == "📄 Procesar Factura (Por Página)":
                 })
 
             # ==========================================
-            # AUDITORÍA Y CORRECCIÓN DE CÓDIGOS REPETIDOS
+            # AUDITORÍA Y CORRECCIÓN INTELIGENTE DE DUPLICADOS
             # ==========================================
             codigos_vistos = {}
             duplicados_encontrados = []
@@ -445,30 +445,36 @@ if menu_opcion == "📄 Procesar Factura (Por Página)":
             if duplicados_encontrados:
                 st.warning("⚠️ **¡Atención! Se detectaron códigos EAN repetidos en esta página:**")
                 for cod_dup, p1, p2 in duplicados_encontrados:
-                    st.markdown(f"- El código **{cod_dup}** está asignado a: `📊 {p1}` y `📊 {p2}`")
-                
-                st.markdown("#### 🛠️ Asigna el Código Correcto al Producto Afectado:")
-                for cod_dup, p1, p2 in duplicados_encontrados:
-                    prod_a_corregir = st.selectbox(
-                        f"Selecciona cuál de los dos productos con código {cod_dup} deseas corregir:",
+                    st.markdown(f"---")
+                    st.markdown(f"🔹 **Código compartido:** `{cod_dup}` asignado a: `📊 {p1}` y `📊 {p2}`")
+                    
+                    # 1. Confirmar cuál es el dueño legítimo
+                    prod_legitimo = st.selectbox(
+                        f"✅ ¿A cuál de estos dos productos SÍ le pertenece el código {cod_dup}?",
                         [p1, p2],
-                        key=f"sel_prod_dup_{cod_dup}"
+                        key=f"dueño_legitimo_{cod_dup}"
                     )
+                    
+                    # 2. El otro producto es el erróneo que necesita buscar en el maestro
+                    prod_erroneo = p2 if prod_legitimo == p1 else p1
+                    
+                    st.markdown(f"🔍 El producto **{prod_erroneo}** tiene el código erróneo. Asigne su código correcto:")
+                    
                     col_dc1, col_dc2 = st.columns([2, 1])
                     with col_dc1:
                         nuevo_c_maestro = st.selectbox(
-                            f"Buscar nuevo código en Catálogo Maestro para [{prod_a_corregir}]",
+                            f"Buscar código correcto en Catálogo Maestro para [{prod_erroneo}]",
                             ["-- Seleccionar del Maestro --"] + nombres_maestro_lista,
-                            key=f"maestro_dup_{cod_dup}_{prod_a_corregir}"
+                            key=f"maestro_corregir_{cod_dup}_{prod_erroneo}"
                         )
                     with col_dc2:
                         nuevo_c_manual = st.text_input(
-                            f"O ingresa código manual",
-                            key=f"manual_dup_{cod_dup}_{prod_a_corregir}",
+                            f"O ingrese código manual",
+                            key=f"manual_corregir_{cod_dup}_{prod_erroneo}",
                             placeholder="EAN correcto..."
                         )
                     
-                    if st.button(f"✅ Aplicar Corrección para [{prod_a_corregir}]", key=f"btn_corr_{cod_dup}_{prod_a_corregir}"):
+                    if st.button(f"💾 Guardar y Corregir para [{prod_erroneo}]", key=f"btn_aplicar_corr_{cod_dup}_{prod_erroneo}"):
                         asignar_codigo = "S/C"
                         if nuevo_c_maestro != "-- Seleccionar del Maestro --":
                             asignar_codigo = master_dict[nuevo_c_maestro]
@@ -476,10 +482,10 @@ if menu_opcion == "📄 Procesar Factura (Por Página)":
                             asignar_codigo = clean_ean_code(nuevo_c_manual)
                         
                         if asignar_codigo != "S/C":
-                            st.session_state["codigos_manuales_sesion"][prod_a_corregir] = asignar_codigo
-                            master_dict[prod_a_corregir] = asignar_codigo
+                            st.session_state["codigos_manuales_sesion"][prod_erroneo] = asignar_codigo
+                            master_dict[prod_erroneo] = asignar_codigo
                             save_json_file(MASTER_CATALOG_FILE, master_dict)
-                            st.success(f"¡Código {asignar_codigo} asignado exitosamente a {prod_a_corregir}!")
+                            st.success(f"¡Código {asignar_codigo} asignado correctamente a {prod_erroneo}! El código {cod_dup} quedó exclusivamente para {prod_legitimo}.")
                             time.sleep(0.5)
                             st.rerun()
             else:
