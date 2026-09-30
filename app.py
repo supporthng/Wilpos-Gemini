@@ -388,7 +388,6 @@ if menu_opcion == "📄 Procesar Factura (Por Página)":
             master_dict = load_json_file(MASTER_CATALOG_FILE, "dict")
             nombres_maestro_lista = list(master_dict.keys())
 
-            # Pre-evaluación y aplicación de códigos de sesión / manuales
             for idx, item in enumerate(items, start=1):
                 raw_desc = str(item.get("descripcion", ""))
                 raw_tam = str(item.get("tamano", ""))
@@ -486,7 +485,6 @@ if menu_opcion == "📄 Procesar Factura (Por Página)":
             else:
                 st.success("✅ **Auditoría de Códigos:** No hay códigos EAN repetidos en esta página.")
 
-            # Generación final de tabla y Excel
             wb = openpyxl.Workbook()
             ws = wb.active
             ws.title = "Inventario"
@@ -510,14 +508,14 @@ if menu_opcion == "📄 Procesar Factura (Por Página)":
                         if sel_maestro != "-- Buscar en Maestro --":
                             display_codigo = master_dict[sel_maestro]
                     with col_c2:
-                        codigo_ manual_input = st.text_input("Código manual", key=f"man_{idx}_{nombre_limpio}", placeholder="EAN...")
+                        codigo_manual_input = st.text_input("Código manual", key=f"man_{idx}_{nombre_limpio}", placeholder="EAN...")
                         if codigo_manual_input and len(codigo_manual_input.strip()) >= 7:
                             clean_m = clean_ean_code(codigo_manual_input)
                             if clean_m != "S/C": display_codigo = clean_m
                     with col_c3:
                         st.markdown("<br>", unsafe_allow_html=True)
                         q_b = f"EAN barcode {nombre_limpio} {presentacion_limpia}".replace(" ", "+")
-                        st.markdown(f"[🌐 Buscar]({https://www.google.com/search?q={q_b}})", unsafe_allow_html=True)
+                        st.markdown(f"[🌐 Buscar](https://www.google.com/search?q={q_b})", unsafe_allow_html=True)
 
                     if display_codigo != "S/C":
                         if st.button("💾 Guardar", key=f"btn_sv_{idx}_{nombre_limpio}"):
