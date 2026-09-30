@@ -224,7 +224,7 @@ st.sidebar.markdown("<h3 style='color: #0284c7;'>⚡ WilPOS Multi-Proveedor</h3>
 menu_opcion = st.sidebar.radio("Navegación", ["📄 Procesar Factura (Por Página)", "📁 Catálogo Maestro EAN", "🏢 Gestionar Proveedores"])
 
 st.sidebar.markdown("---")
-st.sidebar.markdown("<p style='font-size: 0.8rem; color: #10b981; font-weight: 600;'>🟢 Control Multi-Página Activo</p>", unsafe_allow_html=True)
+st.sidebar.markdown("<p style='font-size: 0.8rem; color: #10b981; font-weight: 600;'>🟢 Resolución de Duplicados Activa</p>", unsafe_allow_html=True)
 
 if st.sidebar.button("🔄 Reiniciar Historial de Páginas"):
     st.session_state["paginas_procesadas_historial"] = set()
@@ -237,8 +237,8 @@ if st.sidebar.button("🔄 Reiniciar Historial de Páginas"):
 # MÓDULO 1: PROCESAR FACTURA POR PÁGINA
 # ==========================================
 if menu_opcion == "📄 Procesar Factura (Por Página)":
-    st.markdown("<h2>📄 Procesador de Facturas (Lectura Libre Página por Página)</h2>", unsafe_allow_html=True)
-    st.markdown("<p style='color: #64748b;'>Selecciona la página que deseas procesar. Puedes avanzar y procesar cuantas páginas necesites de forma independiente.</p>", unsafe_allow_html=True)
+    st.markdown("<h2>📄 Procesador de Facturas (Resolución de Códigos Duplicados)</h2>", unsafe_allow_html=True)
+    st.markdown("<p style='color: #64748b;'>Selecciona la página que deseas procesar. El sistema te permitirá corregir en vivo cualquier código EAN duplicado.</p>", unsafe_allow_html=True)
     st.markdown("---")
 
     if "factura_data" not in st.session_state: st.session_state["factura_data"] = None
@@ -301,11 +301,10 @@ if menu_opcion == "📄 Procesar Factura (Por Página)":
                     nombre_detectado_raw = str(det_json.get("proveedor_detectado", "PROVEEDOR GENERAL")).upper().strip()
                     num_factura_detectada = str(det_json.get("numero_factura", "S/N")).upper().strip()
 
-                    # Firma de control única por archivo y número de página exacto
                     firma_pagina = f"{archivo_subido.name}_{num_factura_detectada}_PAG_{pagina_a_procesar}"
                     
                     if firma_pagina in st.session_state["paginas_procesadas_historial"]:
-                        st.warning(f"⚠️ La página #{pagina_a_procesar} ya fue procesada previamente en esta sesión. Puedes continuar procesando otra página o reiniciar el historial en el menú lateral si deseas recargarla.")
+                        st.warning(f"⚠️ La página #{pagina_a_procesar} ya fue procesada previamente en esta sesión.")
 
                     supp_mem = st.session_state["supplier_memory"]
                     if not isinstance(supp_mem, dict): supp_mem = {}
@@ -386,14 +385,10 @@ if menu_opcion == "📄 Procesar Factura (Por Página)":
             
             preview_rows = []
             lista_codigos_pagina = []
-            wb = openpyxl.Workbook()
-            ws = wb.active
-            ws.title = "Inventario"
-            ws.append(['Nombre', 'Presentación', 'Código Barra', 'Categoría', 'Tipo', 'Precio Venta', 'Costo Unitario', 'Stock (Unidades)', 'ITBIS', 'Unidad Medida', 'Cantidad Empaque'])
-
             master_dict = load_json_file(MASTER_CATALOG_FILE, "dict")
             nombres_maestro_lista = list(master_dict.keys())
 
+            # Pre-evaluación y aplicación de códigos de sesión / manuales
             for idx, item in enumerate(items, start=1):
                 raw_desc = str(item.get("descripcion", ""))
                 raw_tam = str(item.get("tamano", ""))
@@ -428,73 +423,121 @@ if menu_opcion == "📄 Procesar Factura (Por Página)":
                 else:
                     precio_venta = 0.0
 
-                display_codigo = codigo_final
-                
-                if display_codigo != "S/C":
-                    lista_codigos_pagina.append((display_codigo, nombre_limpio))
+                lista_codigos_pagina.append({
+                    "idx": idx, "nombre": nombre_limpio, "presentacion": presentacion_limpia,
+                    "codigo": codigo_final, "cant_compra": cant_compra, "empaque": empaque,
+                    "total_unidades": total_unidades, "costo_real": costo_unitario_real, "precio_venta": precio_venta
+                })
 
-                if codigo_final == "S/C":
-                    st.markdown("---")
-                    st.markdown(f"⚠️ **{nombre_limpio} ({presentacion_limpia})** sin código EAN asignado (requiere validación).")
+            # ==========================================
+            # AUDITORÍA Y CORRECCIÓN DE CÓDIGOS REPETIDOS
+            # ==========================================
+            codigos_vistos = {}
+            duplicados_encontrados = []
+            for row_item in lista_codigos_pagina:
+                c_code = row_item["codigo"]
+                c_name = row_item["nombre"]
+                if c_code != "S/C":
+                    if c_code in codigos_vistos:
+                        duplicados_encontrados.append((c_code, codigos_vistos[c_code], c_name))
+                    else:
+                        codigos_vistos[c_code] = c_name
+
+            if duplicados_encontrados:
+                st.warning("⚠️ **¡Atención! Se detectaron códigos EAN repetidos en esta página:**")
+                for cod_dup, p1, p2 in duplicados_encontrados:
+                    st.markdown(f"- El código **{cod_dup}** está asignado a: `📊 {p1}` y `📊 {p2}`")
+                
+                st.markdown("#### 🛠️ Asigna el Código Correcto al Producto Afectado:")
+                for cod_dup, p1, p2 in duplicados_encontrados:
+                    prod_a_corregir = st.selectbox(
+                        f"Selecciona cuál de los dos productos con código {cod_dup} deseas corregir:",
+                        [p1, p2],
+                        key=f"sel_prod_dup_{cod_dup}"
+                    )
+                    col_dc1, col_dc2 = st.columns([2, 1])
+                    with col_dc1:
+                        nuevo_c_maestro = st.selectbox(
+                            f"Buscar nuevo código en Catálogo Maestro para [{prod_a_corregir}]",
+                            ["-- Seleccionar del Maestro --"] + nombres_maestro_lista,
+                            key=f"maestro_dup_{cod_dup}_{prod_a_corregir}"
+                        )
+                    with col_dc2:
+                        nuevo_c_manual = st.text_input(
+                            f"O ingresa código manual",
+                            key=f"manual_dup_{cod_dup}_{prod_a_corregir}",
+                            placeholder="EAN correcto..."
+                        )
                     
+                    if st.button(f"✅ Aplicar Corrección para [{prod_a_corregir}]", key=f"btn_corr_{cod_dup}_{prod_a_corregir}"):
+                        asignar_codigo = "S/C"
+                        if nuevo_c_maestro != "-- Seleccionar del Maestro --":
+                            asignar_codigo = master_dict[nuevo_c_maestro]
+                        elif nuevo_c_manual and len(nuevo_c_manual.strip()) >= 7:
+                            asignar_codigo = clean_ean_code(nuevo_c_manual)
+                        
+                        if asignar_codigo != "S/C":
+                            st.session_state["codigos_manuales_sesion"][prod_a_corregir] = asignar_codigo
+                            master_dict[prod_a_corregir] = asignar_codigo
+                            save_json_file(MASTER_CATALOG_FILE, master_dict)
+                            st.success(f"¡Código {asignar_codigo} asignado exitosamente a {prod_a_corregir}!")
+                            time.sleep(0.5)
+                            st.rerun()
+            else:
+                st.success("✅ **Auditoría de Códigos:** No hay códigos EAN repetidos en esta página.")
+
+            # Generación final de tabla y Excel
+            wb = openpyxl.Workbook()
+            ws = wb.active
+            ws.title = "Inventario"
+            ws.append(['Nombre', 'Presentación', 'Código Barra', 'Categoría', 'Tipo', 'Precio Venta', 'Costo Unitario', 'Stock (Unidades)', 'ITBIS', 'Unidad Medida', 'Cantidad Empaque'])
+
+            table_display_rows = []
+            for row_item in lista_codigos_pagina:
+                idx = row_item["idx"]
+                nombre_limpio = row_item["nombre"]
+                presentacion_limpia = row_item["presentacion"]
+                display_codigo = row_item["codigo"]
+
+                if nombre_limpio in st.session_state["codigos_manuales_sesion"]:
+                    display_codigo = st.session_state["codigos_manuales_sesion"][nombre_limpio]
+
+                if display_codigo == "S/C":
+                    st.markdown(f"⚠️ **{nombre_limpio} ({presentacion_limpia})** sin código EAN asignado.")
                     col_c1, col_c2, col_c3 = st.columns([2, 1, 1])
                     with col_c1:
-                        sel_maestro = st.selectbox(
-                            f"Seleccionar del Catálogo Maestro",
-                            ["-- Buscar en Maestro --"] + nombres_maestro_lista,
-                            key=f"sel_maestro_{idx}_{nombre_limpio}_{pag_info}_{idx}"
-                        )
+                        sel_maestro = st.selectbox("Seleccionar Maestro", ["-- Buscar en Maestro --"] + nombres_maestro_lista, key=f"sel_m_{idx}_{nombre_limpio}")
                         if sel_maestro != "-- Buscar en Maestro --":
                             display_codigo = master_dict[sel_maestro]
                     with col_c2:
-                        codigo_manual_input = st.text_input("Ingresar código manual", key=f"manual_input_{idx}_{nombre_limpio}_{pag_info}_{idx}", placeholder="Ej. Código EAN...")
+                        codigo_ manual_input = st.text_input("Código manual", key=f"man_{idx}_{nombre_limpio}", placeholder="EAN...")
                         if codigo_manual_input and len(codigo_manual_input.strip()) >= 7:
                             clean_m = clean_ean_code(codigo_manual_input)
-                            if clean_m != "S/C":
-                                display_codigo = clean_m
+                            if clean_m != "S/C": display_codigo = clean_m
                     with col_c3:
                         st.markdown("<br>", unsafe_allow_html=True)
-                        query_busqueda = f"EAN barcode {nombre_limpio} {presentacion_limpia}".replace(" ", "+")
-                        url_busqueda = f"https://www.google.com/search?q={query_busqueda}"
-                        st.markdown(f"[🌐 Buscar en la Web]({url_busqueda})", unsafe_allow_html=True)
+                        q_b = f"EAN barcode {nombre_limpio} {presentacion_limpia}".replace(" ", "+")
+                        st.markdown(f"[🌐 Buscar]({https://www.google.com/search?q={q_b}})", unsafe_allow_html=True)
 
                     if display_codigo != "S/C":
-                        if st.button("✅ Guardar y Usar este Código", key=f"btn_conf_{idx}_{nombre_limpio}_{pag_info}"):
+                        if st.button("💾 Guardar", key=f"btn_sv_{idx}_{nombre_limpio}"):
                             st.session_state["codigos_manuales_sesion"][nombre_limpio] = display_codigo
                             master_dict[nombre_limpio] = display_codigo
                             save_json_file(MASTER_CATALOG_FILE, master_dict)
-                            st.success(f"¡Código {display_codigo} guardado y aplicado!")
-                            time.sleep(0.5)
                             st.rerun()
 
-                preview_rows.append({
+                table_display_rows.append({
                     "No.": idx, "Producto": nombre_limpio, "Presentación": presentacion_limpia, 
-                    "Código EAN": display_codigo, "Cant. Compra": cant_compra, "Empaque": empaque, 
-                    "Stock Unidades": total_unidades, "Costo Unit. Real": costo_unitario_real, "Precio Venta": precio_venta
+                    "Código EAN": display_codigo, "Cant. Compra": row_item["cant_compra"], "Empaque": row_item["empaque"], 
+                    "Stock Unidades": row_item["total_unidades"], "Costo Unit. Real": row_item["costo_real"], "Precio Venta": row_item["precio_venta"]
                 })
 
                 ws.append([
                     nombre_limpio, presentacion_limpia, str(display_codigo), prov_actual, "producto",
-                    precio_venta, costo_unitario_real, total_unidades, 0.18, "unidad", empaque
+                    row_item["precio_venta"], row_item["costo_real"], row_item["total_unidades"], 0.18, "unidad", row_item["empaque"]
                 ])
 
-            # Auditoría de códigos repetidos
-            codigos_vistos = {}
-            duplicados_encontrados = []
-            for cod, prod in lista_codigos_pagina:
-                if cod in codigos_vistos:
-                    duplicados_encontrados.append((cod, codigos_vistos[cod], prod))
-                else:
-                    codigos_vistos[cod] = prod
-
-            if duplicados_encontrados:
-                st.warning("⚠️ **¡Atención! Se detectaron códigos EAN repetidos en esta página:**")
-                for cod, p1, p2 in duplicados_encontrados:
-                    st.markdown(f"- Código **{cod}** asignado tanto a: `📊 {p1}` como a `📊 {p2}`")
-            else:
-                st.success("✅ **Auditoría de Códigos:** No hay códigos EAN repetidos en esta página.")
-
-            st.dataframe(pd.DataFrame(preview_rows), use_container_width=True, hide_index=True)
+            st.dataframe(pd.DataFrame(table_display_rows), use_container_width=True, hide_index=True)
 
             excel_buffer = io.BytesIO()
             wb.save(excel_buffer)
@@ -511,44 +554,9 @@ if menu_opcion == "📄 Procesar Factura (Por Página)":
 elif menu_opcion == "📁 Catálogo Maestro EAN":
     st.markdown("<h2>📁 Gestión, Carga y Limpieza del Archivo Maestro EAN</h2>", unsafe_allow_html=True)
     st.markdown("---")
-
     master_dict = load_json_file(MASTER_CATALOG_FILE, "dict")
-
-    st.markdown('<div class="card-container">', unsafe_allow_html=True)
-    st.markdown("### 📤 Cargar Archivo Masivo al Catálogo Maestro")
-    
-    archivo_maestro_subido = st.file_uploader("Sube tu archivo Excel/CSV del Catálogo Maestro", type=["xlsx", "xls", "csv"], key="uploader_maestro_masivo")
-    if archivo_maestro_subido is not None:
-        if st.button("📥 Procesar, Fusionar y Guardar en Archivo Maestro"):
-            try:
-                if archivo_maestro_subido.name.endswith('.csv'):
-                    df_m = pd.read_csv(archivo_maestro_subido)
-                else:
-                    df_m = pd.read_excel(archivo_maestro_subido)
-                
-                cols_up = [str(c).upper().strip() for c in df_m.columns]
-                col_nombre_idx = next((i for i, c in enumerate(cols_up) if any(k in c for k in ['NOMBRE', 'DESCRIPCION', 'PRODUCTO'])), 0)
-                col_codigo_idx = next((i for i, c in enumerate(cols_up) if any(k in c for k in ['CODIGO', 'EAN', 'BARRA', 'SAP'])), 1)
-
-                nuevos_cargados = 0
-                for _, row in df_m.iterrows():
-                    p_nombre = str(row.iloc[col_nombre_idx]).upper().strip()
-                    p_codigo = str(row.iloc[col_codigo_idx]).strip()
-                    clean_c = clean_ean_code(p_codigo)
-                    if p_nombre and p_nombre != "NAN" and clean_c != "S/C":
-                        master_dict[p_nombre] = clean_c
-                        nuevos_cargados += 1
-                
-                save_json_file(MASTER_CATALOG_FILE, master_dict)
-                st.success(f"✅ ¡Se cargaron y fusionaron **{nuevos_cargados}** productos exitosamente al archivo maestro!")
-                time.sleep(1)
-                st.rerun()
-            except Exception as e:
-                st.error(f"⚠️ Error al procesar el archivo: {str(e)}")
-    st.markdown('</div>', unsafe_allow_html=True)
-
     if master_dict:
-        st.markdown(f"### 📋 Productos Registrados en el Archivo Maestro ({len(master_dict):,} registros limpios)")
+        st.markdown(f"### 📋 Productos Registrados en el Archivo Maestro ({len(master_dict):,} registros)")
         df_show = pd.DataFrame([{"Producto / Descripción": k, "Código EAN/SAP Oficial": v} for k, v in master_dict.items()])
         st.dataframe(df_show, use_container_width=True, hide_index=True)
 
@@ -558,23 +566,8 @@ elif menu_opcion == "📁 Catálogo Maestro EAN":
 elif menu_opcion == "🏢 Gestionar Proveedores":
     st.markdown("<h2>🏢 Configuración de Perfiles Independientes por Proveedor</h2>", unsafe_allow_html=True)
     st.markdown("---")
-
     supps = st.session_state["supplier_memory"]
     if not isinstance(supps, dict): supps = {}
-    
     for p_name, p_data in list(supps.items()):
-        if not isinstance(p_data, dict): p_data = {}
         with st.expander(f"🏢 Perfil Proveedor: {p_name}"):
-            with st.form(f"form_prov_{p_name}"):
-                nuevo_nombre = st.text_input("Nombre del Proveedor", value=p_data.get("nombre", p_name))
-                nueva_instruccion = st.text_area("Instrucción / Prompt de Formato Exclusivo", value=p_data.get("instruccion_prompt", ""), height=120)
-                
-                btn_guardar = st.form_submit_button("💾 Guardar Cambios del Perfil")
-                if btn_guardar:
-                    supps[p_name] = {"nombre": nuevo_nombre, "instruccion_prompt": nueva_instruccion}
-                    if nuevo_nombre != p_name:
-                        supps[nuevo_nombre] = supps.pop(p_name)
-                    st.session_state["supplier_memory"] = supps
-                    save_json_file(SUPPLIER_MEMORY_FILE, supps)
-                    st.success(f"✅ ¡Perfil de **{nuevo_nombre}** actualizado con éxito!")
-                    st.rerun()
+            st.write(p_data)
