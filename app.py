@@ -120,7 +120,7 @@ if "master_catalog" not in st.session_state:
             "JOHNNIE WALKER BLUE LABEL 750ML": "5000267022108",
             "TEQUILA DON JULIO REPOSADO 750ML": "7501035602409",
             "CANADA DRY GINGER ALE 12OZ": "078114031201",
-            "JUGO MANZANA 32OZ": "1011017752620"
+            "MOTT 32OZ": "1011017752620"
         }
         loaded_master = base_defaults
         save_json_file(MASTER_CATALOG_FILE, loaded_master)
@@ -166,15 +166,19 @@ def limpiar_nombre_y_extraer_presentacion(proveedor_activo, descripcion_raw, tam
         t_norm = re.sub(r'^\d+\s+', '', t_norm)
         t_norm = re.sub(r'^MS\s*', '', t_norm)
     
-    # Conversiones de marcas
+    # Conversiones y sinónimos oficiales
     t_norm = re.sub(r'\bJW\b', 'JOHNNIE WALKER', t_norm)
     t_norm = re.sub(r'\bDJ\b', 'DON JULIO', t_norm)
     if "OLD PARR" in t_norm:
         t_norm = "OLD PARR 12 AÑOS"
     
+    # Mapeo exacto solicitado para Jugo de Manzana Mott's
+    if "MANZ" in t_norm or "JUGO" in t_norm or "MOTT" in t_norm:
+        if "32" in t_norm or "32" in t_tam:
+            t_norm = "MOTT"
+    
     combined_raw = f"{t_norm} {t_tam}"
     
-    # Extraer presentación limpia (ej. 32OZ, 12OZ, etc.) eliminando duplicados
     m_med = re.search(r'(\d+\s*(?:ML|L|LT|G|KG|OZ|CL))', combined_raw)
     presentacion = m_med.group(1).replace(" ", "") if m_med else ("750ML" if "OLD PARR" in t_norm else "UN")
     if "75CL" in presentacion:
@@ -184,10 +188,11 @@ def limpiar_nombre_y_extraer_presentacion(proveedor_activo, descripcion_raw, tam
         desc_limpia = f"ANTIOQUEÑO TAPA ROJA {presentacion}"
     elif "OLD PARR" in t_norm:
         desc_limpia = f"OLD PARR 12 AÑOS {presentacion}"
+    elif "MOTT" in t_norm:
+        desc_limpia = f"MOTT {presentacion}"
     else:
-        # Remover artefactos repetidos, números de packs y medidas del texto del nombre
         desc_limpia = re.sub(r'\b(CAJA\s*\d*|CJ\s*\d*\s*BOT|\d+\s*X\s*\d+\s*(?:ML|CL|L)|\d+\s+1UN|1UN|EA|750\s*ML|75\s*CL|750ML|75CL|\d+OZ)\b', '', t_norm)
-        desc_limpia = re.sub(r'\b\d+\s+\d+\b', '', desc_limpia) # Limpia números repetidos como "12 1"
+        desc_limpia = re.sub(r'\b\d+\s+\d+\b', '', desc_limpia)
         desc_limpia = re.sub(r'\s+', ' ', desc_limpia).strip()
         if presentacion != "UN" and presentacion not in desc_limpia:
             desc_limpia = f"{desc_limpia} {presentacion}".strip()
@@ -199,7 +204,6 @@ def parse_empaque_proveedor(proveedor_nombre, unidad_txt="", tamano_txt="", desc
     prov_up = normalizar_texto(proveedor_nombre)
     
     if "PRICESMART" in prov_up:
-        # Detectar empaques de packs (ej. "12" al inicio o antes de la medida)
         m_pack = re.search(r'\b(12|24|6|48)\b', combined)
         if m_pack:
             val = int(m_pack.group(1))
@@ -256,14 +260,14 @@ st.sidebar.markdown("<h3 style='color: #0284c7;'>⚡ WilPOS Multi-Proveedor</h3>
 menu_opcion = st.sidebar.radio("Navegación", ["📄 Procesar Factura", "📁 Catálogo Maestro EAN", "🏢 Gestionar Proveedores"])
 
 st.sidebar.markdown("---")
-st.sidebar.markdown("<p style='font-size: 0.8rem; color: #10b981; font-weight: 600;'>🟢 Limpieza Avanzada de Ruidos Activa</p>", unsafe_allow_html=True)
+st.sidebar.markdown("<p style='font-size: 0.8rem; color: #10b981; font-weight: 600;'>🟢 Mapeo Mott's 32OZ Activo</p>", unsafe_allow_html=True)
 
 # ==========================================
 # MÓDULO 1: PROCESAR FACTURA
 # ==========================================
 if menu_opcion == "📄 Procesar Factura":
-    st.markdown("<h2>📄 Procesador con Limpieza Robusta de Renglones Densos</h2>", unsafe_allow_html=True)
-    st.markdown("<p style='color: #64748b;'>Sube tu factura o tique. El sistema elimina duplicados de medidas y calcula los costos de manera impecable.</p>", unsafe_allow_html=True)
+    st.markdown("<h2>📄 Procesador con Equivalencias y Mapeo de Mott's</h2>", unsafe_allow_html=True)
+    st.markdown("<p style='color: #64748b;'>Sube tu tique o factura. Las abreviaturas de jugos se normalizan automáticamente a MOTT 32OZ.</p>", unsafe_allow_html=True)
     st.markdown("---")
 
     if "factura_data" not in st.session_state: st.session_state["factura_data"] = None
@@ -281,8 +285,8 @@ if menu_opcion == "📄 Procesar Factura":
     archivo_subido = st.file_uploader("📂 Sube tu factura o tique (PDF multi-página o Imagen)", type=["pdf", "png", "jpg", "jpeg"])
     
     if archivo_subido is not None:
-        if st.button("🚀 Detectar Proveedor y Procesar con Limpieza Avanzada"):
-            with st.spinner("🔍 Analizando documento y normalizando renglones..."):
+        if st.button("🚀 Detectar Proveedor y Procesar con Mapeo Inteligente"):
+            with st.spinner("🔍 Analizando documento con equivalencias de productos..."):
                 try:
                     if not gemini_key: raise ValueError("No hay clave de API configurada.")
                     model = genai.GenerativeModel('gemini-3.8-flash')
@@ -539,7 +543,7 @@ elif menu_opcion == "📁 Catálogo Maestro EAN":
                 "ANTIOQUEÑO TAPA VERDE 750 ML": "7702131234581",
                 "OLD PARR 12 AÑOS 750ML": "7804300120986",
                 "CANADA DRY GINGER ALE 12OZ": "078114031201",
-                "JUGO MANZANA 32OZ": "1011017752620"
+                "MOTT 32OZ": "1011017752620"
             }
             save_json_file(MASTER_CATALOG_FILE, base_inicial)
             st.success("¡Archivo maestro restablecido y limpiado correctamente!")
@@ -554,7 +558,7 @@ elif menu_opcion == "📁 Catálogo Maestro EAN":
         with st.form("form_agregar_maestro"):
             col_m1, col_m2 = st.columns([2, 1])
             with col_m1:
-                nuevo_prod_nombre = st.text_input("Nombre / Descripción Oficial (Ej: JUGO MANZANA 32OZ)")
+                nuevo_prod_nombre = st.text_input("Nombre / Descripción Oficial (Ej: MOTT 32OZ)")
             with col_m2:
                 nuevo_prod_codigo = st.text_input("Código EAN / SAP Oficial (Ej: 1011017752620)")
             
