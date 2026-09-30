@@ -76,12 +76,12 @@ if "supplier_memory" not in st.session_state:
         "EL CATADOR": {
             "nombre": "EL CATADOR",
             "tipo_formato": "factura_cajas_descuento",
-            "instruccion_prompt": "Analiza esta factura de EL CATADOR renglón por renglón. Extrae 'descripcion', 'tamano' (ej. 750ML), 'cantidad' (Despachada), 'unidad' (ej. CAJA12, CAJA24, BOTELLA), 'precio_unitario' (Precio Und), 'descuento_porcentaje' (ej. 10.70%) y 'monto_neto'."
+            "instruccion_prompt": "Analiza esta factura de EL CATADOR renglón por renglón. Extrae 'descripcion', 'tamano' (ej. 750ML), 'cantidad', 'unidad' (ej. CAJA12, CAJA24, BOTELLA), 'precio_unitario', 'descuento_porcentaje' (ej. 10.70%) y 'monto_neto'."
         },
         "PRICESMART": {
             "nombre": "PRICESMART",
             "tipo_formato": "factura_tique_unidades",
-            "instruccion_prompt": "Analiza este comprobante de PRICESMART renglón por renglón. Extrae 'descripcion', 'tamano', 'cantidad', 'unidad' (ej. EA, 1UN), 'precio_unitario' y 'monto_neto'."
+            "instruccion_prompt": "Analiza este comprobante de PRICESMART renglón por renglón. Extrae 'descripcion', 'tamano', 'cantidad', 'unidad', 'precio_unitario' y 'monto_neto'."
         },
         "CENTRO DE DISTRIBUCION CRISTIAN": {
             "nombre": "CENTRO DE DISTRIBUCION CRISTIAN",
@@ -92,16 +92,6 @@ if "supplier_memory" not in st.session_state:
             "nombre": "ALVAREZ & SANCHEZ",
             "tipo_formato": "factura_desglose_descuentos",
             "instruccion_prompt": "Analiza esta factura de ALVAREZ & SANCHEZ renglón por renglón. Extrae 'descripcion', 'tamano', 'cantidad', 'unidad', 'precio_unitario', 'descuento_porcentaje' y 'monto_neto'."
-        },
-        "ELÍAS DISTRIBUCIÓN": {
-            "nombre": "ELÍAS DISTRIBUCIÓN",
-            "tipo_formato": "factura_cajas_unidades",
-            "instruccion_prompt": "Analiza esta factura de ELÍAS DISTRIBUCIÓN renglón por renglón. Extrae 'descripcion', 'unidad', 'cantidad', 'precio_unitario' y 'monto_neto'."
-        },
-        "CND / BEES": {
-            "nombre": "CND / BEES",
-            "tipo_formato": "tique_doble_linea_blindado",
-            "instruccion_prompt": "Analiza este tique de CND / BEES renglón por renglón. Extrae 'descripcion', 'tamano', 'cantidad', 'unidad' y 'precio_unitario'."
         }
     }
     if not loaded_supps or "EL CATADOR" not in loaded_supps:
@@ -114,13 +104,8 @@ if "master_catalog" not in st.session_state:
     if not loaded_master:
         base_defaults = {
             "ANTIOQUEÑO TAPA ROJA 750 ML": "7702131234567",
-            "ANTIOQUEÑO TAPA AZUL 750 ML": "7702131234574",
-            "ANTIOQUEÑO TAPA VERDE 750 ML": "7702131234581",
             "OLD PARR 12 AÑOS 750ML": "7804300120986",
-            "JOHNNIE WALKER BLUE LABEL 750ML": "5000267022108",
-            "TEQUILA DON JULIO REPOSADO 750ML": "7501035602409",
-            "CANADA DRY GINGER ALE 12OZ": "078114031201",
-            "MOTT 32OZ": "1011017752620"
+            "FRONTERA SAUVIGNON BLANC C Y T 750ML": "051497455286"
         }
         loaded_master = base_defaults
         save_json_file(MASTER_CATALOG_FILE, loaded_master)
@@ -162,32 +147,19 @@ def limpiar_nombre_y_extraer_presentacion(proveedor_activo, descripcion_raw, tam
     t_tam = normalizar_texto(tamano_raw)
     prov_up = normalizar_texto(proveedor_activo)
     
-    if "PRICESMART" in prov_up:
-        t_norm = re.sub(r'^\d+\s+', '', t_norm)
-        t_norm = re.sub(r'^MS\s*', '', t_norm)
-    
-    t_norm = re.sub(r'\bJW\b', 'JOHNNIE WALKER', t_norm)
-    t_norm = re.sub(r'\bDJ\b', 'DON JULIO', t_norm)
-    if "OLD PARR" in t_norm:
-        t_norm = "OLD PARR 12 AÑOS"
-    
     combined_raw = f"{t_norm} {t_tam}"
     
     m_med = re.search(r'(\d+\s*(?:ML|L|LT|G|KG|OZ|CL))', combined_raw)
-    presentacion = m_med.group(1).replace(" ", "") if m_med else ("750ML" if "OLD PARR" in t_norm or "EL CATADOR" in prov_up else "UN")
+    presentacion = m_med.group(1).replace(" ", "") if m_med else ("750ML" if "EL CATADOR" in prov_up else "UN")
     if "75CL" in presentacion:
         presentacion = "750ML"
 
-    if "ANTIOQ" in combined_raw:
-        desc_limpia = f"ANTIOQUEÑO TAPA ROJA {presentacion}"
-    elif "OLD PARR" in t_norm:
-        desc_limpia = f"OLD PARR 12 AÑOS {presentacion}"
-    else:
-        desc_limpia = re.sub(r'\b(CAJA\s*\d*|CJ\s*\d*\s*BOT|\d+\s*X\s*\d+\s*(?:ML|CL|L)|\d+\s+1UN|1UN|EA|750\s*ML|75\s*CL|750ML|75CL|\d+OZ)\b', '', t_norm)
-        desc_limpia = re.sub(r'\b\d+\s+\d+\b', '', desc_limpia)
-        desc_limpia = re.sub(r'\s+', ' ', desc_limpia).strip()
-        if presentacion != "UN" and presentacion not in desc_limpia:
-            desc_limpia = f"{desc_limpia} {presentacion}".strip()
+    # Limpieza de ruidos y artefactos de empaque en el nombre del producto
+    desc_limpia = re.sub(r'\b(CAJA\s*\d*|CJ\s*\d*\s*BOT|\d+\s*X\s*\d+\s*(?:ML|CL|L)|\d+/\s*\d+\s*(?:ML|CL|L|750ML)|750\s*ML|75\s*CL|750ML|75CL|\d+OZ)\b', '', t_norm)
+    desc_limpia = re.sub(r'\s+', ' ', desc_limpia).strip()
+    
+    if presentacion != "UN" and presentacion not in desc_limpia:
+        desc_limpia = f"{desc_limpia} {presentacion}".strip()
     
     return desc_limpia, presentacion
 
@@ -195,19 +167,15 @@ def parse_empaque_proveedor(proveedor_nombre, unidad_txt="", tamano_txt="", desc
     combined = normalizar_texto(f"{unidad_txt} {tamano_txt} {descripcion_txt}")
     prov_up = normalizar_texto(proveedor_nombre)
     
-    if "PRICESMART" in prov_up:
-        m_pack = re.search(r'\b(12|24|6|48)\b', combined)
-        if m_pack:
-            val = int(m_pack.group(1))
-            if val > 1: return val
-        if "EA" in combined or "1UN" in combined or ("UN" in combined and "12" not in combined):
-            return 1
-
-    # Detección específica para El Catador y distribuidores de licores con formato CAJA12, CAJA24, etc.
     m_caj_num = re.search(r'(?:CAJA|CJ|BOX)[\s\-]*(\d+)', combined)
     if m_caj_num:
         val = int(m_caj_num.group(1))
         if val > 0: return val
+
+    m_slash = re.search(r'\b(\d+)\s*/\s*\d+\s*(?:ML|L|OZ|CL)', combined)
+    if m_slash:
+        val = int(m_slash.group(1))
+        if val > 1: return val
 
     if "12X" in combined or "12/" in combined or "CJ12" in combined:
         return 12
@@ -255,14 +223,14 @@ st.sidebar.markdown("<h3 style='color: #0284c7;'>⚡ WilPOS Multi-Proveedor</h3>
 menu_opcion = st.sidebar.radio("Navegación", ["📄 Procesar Factura", "📁 Catálogo Maestro EAN", "🏢 Gestionar Proveedores"])
 
 st.sidebar.markdown("---")
-st.sidebar.markdown("<p style='font-size: 0.8rem; color: #10b981; font-weight: 600;'>🟢 Perfil El Catador Activo</p>", unsafe_allow_html=True)
+st.sidebar.markdown("<p style='font-size: 0.8rem; color: #10b981; font-weight: 600;'>🟢 Revisión de Vinos Frontera Activa</p>", unsafe_allow_html=True)
 
 # ==========================================
 # MÓDULO 1: PROCESAR FACTURA
 # ==========================================
 if menu_opcion == "📄 Procesar Factura":
-    st.markdown("<h2>📄 Procesador con Perfil El Catador y Descuentos</h2>", unsafe_allow_html=True)
-    st.markdown("<p style='color: #64748b;'>Sube la factura de El Catador (o cualquier otro proveedor). El sistema aplicará automáticamente su perfil y descuentos.</p>", unsafe_allow_html=True)
+    st.markdown("<h2>📄 Procesador de Facturas y Tiques</h2>", unsafe_allow_html=True)
+    st.markdown("<p style='color: #64748b;'>Sube tu factura de El Catador o cualquier otro proveedor.</p>", unsafe_allow_html=True)
     st.markdown("---")
 
     if "factura_data" not in st.session_state: st.session_state["factura_data"] = None
@@ -280,8 +248,8 @@ if menu_opcion == "📄 Procesar Factura":
     archivo_subido = st.file_uploader("📂 Sube tu factura o tique (PDF multi-página o Imagen)", type=["pdf", "png", "jpg", "jpeg"])
     
     if archivo_subido is not None:
-        if st.button("🚀 Detectar Proveedor y Procesar Factura"):
-            with st.spinner("🔍 Analizando factura de El Catador..."):
+        if st.button("🚀 Procesar Factura con Precisión"):
+            with st.spinner("🔍 Analizando documento comercial..."):
                 try:
                     if not gemini_key: raise ValueError("No hay clave de API configurada.")
                     model = genai.GenerativeModel('gemini-3.8-flash')
@@ -292,7 +260,7 @@ if menu_opcion == "📄 Procesar Factura":
                     image_input = {"mime_type": "application/pdf", "data": file_bytes} if "pdf" in f_type.lower() else Image.open(io.BytesIO(file_bytes))
 
                     prompt_deteccion = (
-                        "Analiza este documento comercial (factura o tique) e identifica estrictamente el nombre comercial del proveedor emisor (ej. EL CATADOR, PRICESMART, etc.). "
+                        "Analiza este documento comercial e identifica estrictamente el nombre comercial del proveedor emisor. "
                         "Devuelve únicamente un JSON con esta estructura: {\"proveedor_detectado\": \"NOMBRE DEL PROVEEDOR\"}"
                     )
                     
@@ -332,7 +300,7 @@ if menu_opcion == "📄 Procesar Factura":
                         f"Instrucción específica de su perfil: {instruccion_proveedor} "
                         "Extrae 'descripcion', 'tamano', 'cantidad', 'unidad', 'precio_unitario', 'descuento_porcentaje' y 'monto_neto'. "
                         "Devuelve un JSON puro con esta estructura exacta y llaves en minúscula: "
-                        '{"paginacion": "1 de 1", "proveedor_detectado": "' + prov_encontrado + '", "subtotal": 0.0, "itbis": 0.0, "descuentos": 0.0, "total": 0.0, "items": [{"descripcion": "...", "tamano": "750ML", "cantidad": 1.0, "unidad": "CAJA12", "precio_unitario": 14100.0, "descuento_porcentaje": 10.70, "monto_neto": 25182.60}]}. '
+                        '{"paginacion": "1 de 1", "proveedor_detectado": "' + prov_encontrado + '", "subtotal": 0.0, "itbis": 0.0, "descuentos": 0.0, "total": 0.0, "items": [{"descripcion": "...", "tamano": "750ML", "cantidad": 1.0, "unidad": "CAJA12", "precio_unitario": 5450.0, "descuento_porcentaje": 10.70, "monto_neto": 4866.85}]}. '
                         "Respuesta JSON pura."
                     )
 
@@ -440,7 +408,7 @@ if menu_opcion == "📄 Procesar Factura":
                         if sel_maestro != "-- Buscar en Maestro --":
                             display_codigo = master_dict[sel_maestro]
                     with col_c2:
-                        codigo_manual_input = st.text_input("Ingresar código manual", key=f"manual_input_{idx}_{nombre_limpio}_{idx}", placeholder="Ej. Código EAN...")
+                        codigo_manual_input = st.text_input("Ingresar código manual", key=f"manual_input_{idx}_{nombre_limpio}_{idx}", placeholder="Ej. 051497455286...")
                         if codigo_manual_input and len(codigo_manual_input.strip()) >= 7:
                             clean_m = clean_ean_code(codigo_manual_input)
                             if clean_m != "S/C":
@@ -534,11 +502,8 @@ elif menu_opcion == "📁 Catálogo Maestro EAN":
         if st.button("🗑️ Resetear / Limpiar Archivo Maestro"):
             base_inicial = {
                 "ANTIOQUEÑO TAPA ROJA 750 ML": "7702131234567",
-                "ANTIOQUEÑO TAPA AZUL 750 ML": "7702131234574",
-                "ANTIOQUEÑO TAPA VERDE 750 ML": "7702131234581",
                 "OLD PARR 12 AÑOS 750ML": "7804300120986",
-                "CANADA DRY GINGER ALE 12OZ": "078114031201",
-                "MOTT 32OZ": "1011017752620"
+                "FRONTERA SAUVIGNON BLANC C Y T 750ML": "051497455286"
             }
             save_json_file(MASTER_CATALOG_FILE, base_inicial)
             st.success("¡Archivo maestro restablecido y limpiado correctamente!")
