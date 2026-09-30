@@ -98,8 +98,9 @@ if "master_catalog" not in st.session_state:
     loaded_master = load_json_file(MASTER_CATALOG_FILE, "dict")
     if not loaded_master:
         base_defaults = {
-            "ANTIOQUEÑO TAPA ROJA 750 ML": "7702131234567",
-            "ANTIOQUEÑO SIN AZUCAR 750 ML": "7702131234574",
+            "ANTIOQUEÑO TRADICIONAL 750 ML": "7702131234567",
+            "ANTIOQUEÑO SIN AZÚCAR 750 ML": "7702131234574",
+            "ANTIOQUEÑO SIN AZÚCAR 24% 750 ML": "7702131234581",
             "FIREBALL APPLE WHISKY 50ML": "088004031416",
             "PTE. LIGHT HU 22OZ": "70601561"
         }
@@ -140,18 +141,29 @@ def normalizar_texto(texto):
 
 def limpiar_nombre_y_extraer_presentacion(descripcion_raw):
     """
-    Limpia la descripción dejando únicamente el nombre base del producto
-    y extrae la presentación (ej. 750 ML, 75 CL, 50 ML).
+    Limpia la descripción aplicando el mapeo de tapas de Antioqueño
+    y separa estrictamente la presentación (ej. 750 ML, 75 CL, 50 ML).
     """
     t_norm = normalizar_texto(descripcion_raw)
     
-    # Extraer presentación antes de limpiar
+    # Extraer presentación
     m_med = re.search(r'(\d+\s*(?:ML|L|LT|G|KG|OZ|CL))', t_norm)
     presentacion = m_med.group(1) if m_med else "750 ML"
     
-    # Limpiar ruidos comerciales y empaques de la descripción
-    desc_limpia = re.sub(r'\b(CAJA\s*\d*|CJ\s*\d*\s*BOT|12\s*X\s*750\s*ML|12X75\s*CL|750\s*ML|75\s*CL|29%|24%|TV|SIN\s*AZUCAR)\b', '', t_norm)
-    desc_limpia = re.sub(r'\s+', ' ', desc_limpia).strip()
+    # Aplicar regla de negocio de Tapas Antioqueño
+    if "ANTIOQ" in t_norm:
+        if "TAPA ROJA" in t_norm:
+            desc_limpia = "ANTIOQUEÑO TRADICIONAL"
+        elif "TAPA VERDE" in t_norm or "24%" in t_norm:
+            desc_limpia = "ANTIOQUEÑO SIN AZÚCAR 24%"
+        elif "TAPA AZUL" in t_norm or "SIN AZUCAR" in t_norm:
+            desc_limpia = "ANTIOQUEÑO SIN AZÚCAR"
+        else:
+            desc_limpia = "ANTIOQUEÑO TRADICIONAL"
+    else:
+        # Limpieza general para otros productos
+        desc_limpia = re.sub(r'\b(CAJA\s*\d*|CJ\s*\d*\s*BOT|12\s*X\s*750\s*ML|12X75\s*CL|750\s*ML|75\s*CL|29%|24%|TV|SIN\s*AZUCAR)\b', '', t_norm)
+        desc_limpia = re.sub(r'\s+', ' ', desc_limpia).strip()
     
     return desc_limpia, presentacion
 
@@ -219,14 +231,14 @@ st.sidebar.markdown("<h3 style='color: #0284c7;'>⚡ WilPOS Multi-Proveedor</h3>
 menu_opcion = st.sidebar.radio("Navegación", ["📄 Procesar Factura", "📁 Catálogo Maestro EAN", "🏢 Gestionar Proveedores"])
 
 st.sidebar.markdown("---")
-st.sidebar.markdown("<p style='font-size: 0.8rem; color: #10b981; font-weight: 600;'>🟢 Limpieza de Nombre Activa</p>", unsafe_allow_html=True)
+st.sidebar.markdown("<p style='font-size: 0.8rem; color: #10b981; font-weight: 600;'>🟢 Clasificador de Tapas Activo</p>", unsafe_allow_html=True)
 
 # ==========================================
 # MÓDULO 1: PROCESAR FACTURA
 # ==========================================
 if menu_opcion == "📄 Procesar Factura":
-    st.markdown("<h2>📄 Procesador con Limpieza de Nombres y Costos Exactos</h2>", unsafe_allow_html=True)
-    st.markdown("<p style='color: #64748b;'>Sube tu factura. El sistema separa la descripción limpia y la presentación, y calcula el costo por botella.</p>", unsafe_allow_html=True)
+    st.markdown("<h2>📄 Procesador con Clasificación de Tapas y Costos Exactos</h2>", unsafe_allow_html=True)
+    st.markdown("<p style='color: #64748b;'>Sube tu factura. El sistema clasifica los aguardientes por tapa/grado y calcula el costo por botella.</p>", unsafe_allow_html=True)
     st.markdown("---")
 
     if "factura_data" not in st.session_state: st.session_state["factura_data"] = None
@@ -237,7 +249,7 @@ if menu_opcion == "📄 Procesar Factura":
     
     col_s1, col_s2 = st.columns([2, 1])
     with col_s1:
-        st.info("💡 Sube tu factura (ej. Elías Distribución o El Catador).")
+        st.info("💡 Sube tu factura (ej. Elías Distribución).")
     with col_s2:
         margen_utilidad = st.number_input("⚙️ Margen Utilidad (%)", min_value=0.0, max_value=500.0, value=25.0, step=1.0)
         
@@ -245,7 +257,7 @@ if menu_opcion == "📄 Procesar Factura":
     
     if archivo_subido is not None:
         if st.button("🚀 Detectar Proveedor y Procesar Documento"):
-            with st.spinner("🔍 Analizando documento y limpiando nombres..."):
+            with st.spinner("🔍 Analizando documento y aplicando reglas de tapas..."):
                 try:
                     if not gemini_key: raise ValueError("No hay clave de API configurada.")
                     model = genai.GenerativeModel('gemini-3.8-flash')
@@ -359,14 +371,14 @@ if menu_opcion == "📄 Procesar Factura":
                 raw_desc = str(item.get("descripcion", ""))
                 unidad = str(item.get("unidad", ""))
                 
-                # Separar nombre limpio y presentación
+                # Separar nombre limpio y presentación (con regla de tapas)
                 nombre_limpio, presentacion_limpia = limpiar_nombre_y_extraer_presentacion(raw_desc)
                 
                 cant_compra = safe_float(item.get("cantidad"), 1.0)
                 empaque = parse_empaque_proveedor(prov_actual, unidad, raw_desc)
                 total_unidades = int(cant_compra * empaque)
 
-                codigo_final = buscar_en_catalogo_maestro(raw_desc, presentacion_limpia)
+                codigo_final = buscar_en_catalogo_maestro(nombre_limpio, presentacion_limpia)
 
                 p_unit_extraido = safe_float(item.get("precio_unitario"), 0.0)
                 desc_pct = safe_float(item.get("descuento_porcentaje"), 0.0)
@@ -492,8 +504,9 @@ elif menu_opcion == "📁 Catálogo Maestro EAN":
     with col_l1:
         if st.button("🗑️ Resetear / Limpiar Archivo Maestro"):
             base_inicial = {
-                "ANTIOQUEÑO TAPA ROJA 750 ML": "7702131234567",
-                "ANTIOQUEÑO SIN AZUCAR 750 ML": "7702131234574",
+                "ANTIOQUEÑO TRADICIONAL 750 ML": "7702131234567",
+                "ANTIOQUEÑO SIN AZÚCAR 750 ML": "7702131234574",
+                "ANTIOQUEÑO SIN AZÚCAR 24% 750 ML": "7702131234581",
                 "FIREBALL APPLE WHISKY 50ML": "088004031416"
             }
             save_json_file(MASTER_CATALOG_FILE, base_inicial)
@@ -509,7 +522,7 @@ elif menu_opcion == "📁 Catálogo Maestro EAN":
         with st.form("form_agregar_maestro"):
             col_m1, col_m2 = st.columns([2, 1])
             with col_m1:
-                nuevo_prod_nombre = st.text_input("Nombre / Descripción Oficial (Ej: ANTIOQUEÑO TAPA ROJA 750 ML)")
+                nuevo_prod_nombre = st.text_input("Nombre / Descripción Oficial (Ej: ANTIOQUEÑO TRADICIONAL 750 ML)")
             with col_m2:
                 nuevo_prod_codigo = st.text_input("Código EAN / SAP Oficial (Ej: 7702131234567)")
             
