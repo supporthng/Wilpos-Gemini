@@ -73,6 +73,11 @@ def save_json_file(filepath, data):
 if "supplier_memory" not in st.session_state:
     loaded_supps = load_json_file(SUPPLIER_MEMORY_FILE, "dict")
     default_profiles = {
+        "BEPENSA DOMINICANA SA": {
+            "nombre": "BEPENSA DOMINICANA SA",
+            "tipo_formato": "factura_tique_bepensa",
+            "instruccion_prompt": "Analiza esta página de la factura de BEPENSA DOMINICANA SA renglón por renglón. Cada ítem muestra código, descripción con tamaño y empaque, cantidad, precio unitario, descuento, ITBIS y total. Extrae 'descripcion', 'tamano', 'cantidad', 'unidad', 'precio_unitario', 'descuento_porcentaje' y 'monto_neto'."
+        },
         "EL CATADOR": {
             "nombre": "EL CATADOR",
             "tipo_formato": "factura_cajas_descuento",
@@ -94,7 +99,7 @@ if "supplier_memory" not in st.session_state:
             "instruccion_prompt": "Analiza esta página de la factura de ALVAREZ & SANCHEZ renglón por renglón. Extrae 'descripcion', 'tamano', 'cantidad', 'unidad', 'precio_unitario', 'descuento_porcentaje' y 'monto_neto'."
         }
     }
-    if not loaded_supps or "EL CATADOR" not in loaded_supps:
+    if not loaded_supps or "BEPENSA DOMINICANA SA" not in loaded_supps:
         loaded_supps.update(default_profiles)
         save_json_file(SUPPLIER_MEMORY_FILE, loaded_supps)
     st.session_state["supplier_memory"] = loaded_supps
@@ -227,13 +232,13 @@ st.sidebar.markdown("<h3 style='color: #0284c7;'>⚡ WilPOS Multi-Proveedor</h3>
 menu_opcion = st.sidebar.radio("Navegación", ["📄 Procesar Factura (Por Página)", "📁 Catálogo Maestro EAN", "🏢 Gestionar Proveedores"])
 
 st.sidebar.markdown("---")
-st.sidebar.markdown("<p style='font-size: 0.8rem; color: #10b981; font-weight: 600;'>🟢 Resolución Inteligente Activa</p>", unsafe_allow_html=True)
+st.sidebar.markdown("<p style='font-size: 0.8rem; color: #10b981; font-weight: 600;'>🟢 Perfil Bepensa Integrado</p>", unsafe_allow_html=True)
 
 if st.sidebar.button("🔄 Reiniciar Historial y Filtros"):
     st.session_state["paginas_procesadas_historial"] = set()
     st.session_state["duplicados_confirmados_sesion"] = set()
     st.session_state["factura_data"] = None
-    st.success("Historial de páginas y confirmaciones limpiado.")
+    st.success("Historial limpiado.")
     time.sleep(0.5)
     st.rerun()
 
@@ -241,8 +246,8 @@ if st.sidebar.button("🔄 Reiniciar Historial y Filtros"):
 # MÓDULO 1: PROCESAR FACTURA POR PÁGINA
 # ==========================================
 if menu_opcion == "📄 Procesar Factura (Por Página)":
-    st.markdown("<h2>📄 Procesador de Facturas (Resolución Limpia de Duplicados)</h2>", unsafe_allow_html=True)
-    st.markdown("<p style='color: #64748b;'>Selecciona la página que deseas procesar. Los productos confirmados se ocultan automáticamente de la vista de conflicto.</p>", unsafe_allow_html=True)
+    st.markdown("<h2>📄 Procesador de Facturas (Multi-Proveedor)</h2>", unsafe_allow_html=True)
+    st.markdown("<p style='color: #64748b;'>Sube tu factura de Bepensa o cualquier otro proveedor. El sistema detecta el perfil automáticamente.</p>", unsafe_allow_html=True)
     st.markdown("---")
 
     if "factura_data" not in st.session_state: st.session_state["factura_data"] = None
@@ -440,7 +445,6 @@ if menu_opcion == "📄 Procesar Factura (Por Página)":
             for row_item in lista_codigos_pagina:
                 c_code = row_item["codigo"]
                 c_name = row_item["nombre"]
-                # Solo evaluar duplicados si no han sido confirmados previamente en esta sesión
                 if c_code != "S/C" and c_name not in st.session_state["duplicados_confirmados_sesion"]:
                     if c_code in codigos_vistos:
                         duplicados_encontrados.append((c_code, codigos_vistos[c_code], c_name))
@@ -485,9 +489,7 @@ if menu_opcion == "📄 Procesar Factura (Por Página)":
                             asignar_codigo = clean_ean_code(nuevo_c_manual)
                         
                         if asignar_codigo != "S/C":
-                            # Marcar el producto legítimo como confirmado para que desaparezca de la lista
                             st.session_state["duplicados_confirmados_sesion"].add(prod_legitimo)
-                            # Guardar el nuevo código para el producto erróneo
                             st.session_state["codigos_manuales_sesion"][prod_erroneo] = asignar_codigo
                             master_dict[prod_erroneo] = asignar_codigo
                             save_json_file(MASTER_CATALOG_FILE, master_dict)
