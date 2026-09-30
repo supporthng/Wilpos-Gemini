@@ -68,7 +68,7 @@ def save_json_file(filepath, data):
         pass
 
 # ==========================================
-# GESTIÓN DE PERFILES SEPARADOS Y CATÁLOGO
+# GESTIÓN DE PERFILES Y CATÁLOGO
 # ==========================================
 if "supplier_memory" not in st.session_state:
     loaded_supps = load_json_file(SUPPLIER_MEMORY_FILE, "dict")
@@ -76,22 +76,22 @@ if "supplier_memory" not in st.session_state:
         "EL CATADOR": {
             "nombre": "EL CATADOR",
             "tipo_formato": "factura_cajas_descuento",
-            "instruccion_prompt": "Analiza esta factura de EL CATADOR renglón por renglón. Extrae 'descripcion', 'tamano' (ej. 750ML), 'cantidad' (Despachada), 'unidad' (ej. CAJA12, CAJA24, BOTELLA), 'precio_unitario' (Precio Und de la caja), 'descuento_porcentaje' (ej. 10.70%) y 'monto_neto'."
+            "instruccion_prompt": "Analiza esta página de la factura de EL CATADOR renglón por renglón. Extrae 'descripcion', 'tamano', 'cantidad', 'unidad', 'precio_unitario', 'descuento_porcentaje' y 'monto_neto'."
         },
         "PRICESMART": {
             "nombre": "PRICESMART",
             "tipo_formato": "factura_tique_unidades",
-            "instruccion_prompt": "Analiza este comprobante de PRICESMART renglón por renglón. Extrae 'descripcion', 'tamano', 'cantidad', 'unidad', 'precio_unitario' y 'monto_neto'."
+            "instruccion_prompt": "Analiza esta página del comprobante de PRICESMART renglón por renglón. Extrae 'descripcion', 'tamano', 'cantidad', 'unidad', 'precio_unitario' y 'monto_neto'."
         },
         "CENTRO DE DISTRIBUCION CRISTIAN": {
             "nombre": "CENTRO DE DISTRIBUCION CRISTIAN",
             "tipo_formato": "pos_cajas_unidades",
-            "instruccion_prompt": "Analiza este documento de CENTRO DE DISTRIBUCION CRISTIAN (CDC) renglón por renglón. Extrae 'descripcion', 'tamano', 'cantidad', 'unidad' y 'precio_unitario'."
+            "instruccion_prompt": "Analiza esta página de CENTRO DE DISTRIBUCION CRISTIAN renglón por renglón. Extrae 'descripcion', 'tamano', 'cantidad', 'unidad' y 'precio_unitario'."
         },
         "ALVAREZ & SANCHEZ": {
             "nombre": "ALVAREZ & SANCHEZ",
             "tipo_formato": "factura_desglose_descuentos",
-            "instruccion_prompt": "Analiza esta factura de ALVAREZ & SANCHEZ renglón por renglón. Extrae 'descripcion', 'tamano', 'cantidad', 'unidad', 'precio_unitario', 'descuento_porcentaje' y 'monto_neto'."
+            "instruccion_prompt": "Analiza esta página de la factura de ALVAREZ & SANCHEZ renglón por renglón. Extrae 'descripcion', 'tamano', 'cantidad', 'unidad', 'precio_unitario', 'descuento_porcentaje' y 'monto_neto'."
         }
     }
     if not loaded_supps or "EL CATADOR" not in loaded_supps:
@@ -113,6 +113,9 @@ if "master_catalog" not in st.session_state:
 
 if "codigos_manuales_sesion" not in st.session_state:
     st.session_state["codigos_manuales_sesion"] = {}
+
+if "paginas_procesadas_historial" not in st.session_state:
+    st.session_state["paginas_procesadas_historial"] = set()
 
 def safe_float(val, default=0.0):
     try:
@@ -218,36 +221,54 @@ def buscar_en_catalogo_maestro(nombre_producto, presentacion=""):
     return mejor_codigo if mejor_codigo != "S/C" else "S/C"
 
 st.sidebar.markdown("<h3 style='color: #0284c7;'>⚡ WilPOS Multi-Proveedor</h3>", unsafe_allow_html=True)
-menu_opcion = st.sidebar.radio("Navegación", ["📄 Procesar Factura", "📁 Catálogo Maestro EAN", "🏢 Gestionar Proveedores"])
+menu_opcion = st.sidebar.radio("Navegación", ["📄 Procesar Factura (Por Página)", "📁 Catálogo Maestro EAN", "🏢 Gestionar Proveedores"])
 
 st.sidebar.markdown("---")
-st.sidebar.markdown("<p style='font-size: 0.8rem; color: #10b981; font-weight: 600;'>🟢 Cálculo de Costo por Botella Blindado</p>", unsafe_allow_html=True)
+st.sidebar.markdown("<p style='font-size: 0.8rem; color: #10b981; font-weight: 600;'>🟢 Control Multi-Página Activo</p>", unsafe_allow_html=True)
+
+if st.sidebar.button("🔄 Reiniciar Historial de Páginas"):
+    st.session_state["paginas_procesadas_historial"] = set()
+    st.session_state["factura_data"] = None
+    st.success("Historial de páginas limpiado con éxito.")
+    time.sleep(0.5)
+    st.rerun()
 
 # ==========================================
-# MÓDULO 1: PROCESAR FACTURA
+# MÓDULO 1: PROCESAR FACTURA POR PÁGINA
 # ==========================================
-if menu_opcion == "📄 Procesar Factura":
-    st.markdown("<h2>📄 Procesador de Facturas y Tiques</h2>", unsafe_allow_html=True)
-    st.markdown("<p style='color: #64748b;'>Sube tu factura. El costo unitario por botella se calcula directamente dividiendo el costo neto de la caja entre su empaque.</p>", unsafe_allow_html=True)
+if menu_opcion == "📄 Procesar Factura (Por Página)":
+    st.markdown("<h2>📄 Procesador de Facturas (Lectura Libre Página por Página)</h2>", unsafe_allow_html=True)
+    st.markdown("<p style='color: #64748b;'>Selecciona la página que deseas procesar. Puedes avanzar y procesar cuantas páginas necesites de forma independiente.</p>", unsafe_allow_html=True)
     st.markdown("---")
 
     if "factura_data" not in st.session_state: st.session_state["factura_data"] = None
     if "prov_activo" not in st.session_state: st.session_state["prov_activo"] = ""
-    if "paginacion_detectada" not in st.session_state: st.session_state["paginacion_detectada"] = ""
 
     st.markdown('<div class="card-container">', unsafe_allow_html=True)
     
     col_s1, col_s2 = st.columns([2, 1])
     with col_s1:
-        st.info("💡 Sube tu factura o tique (PDF o Imagen).")
+        st.info("💡 Sube tu factura (PDF multi-página o imagen).")
     with col_s2:
         margen_utilidad = st.number_input("⚙️ Margen Utilidad (%)", min_value=0.0, max_value=500.0, value=25.0, step=1.0)
         
-    archivo_subido = st.file_uploader("📂 Sube tu factura o tique (PDF multi-página o Imagen)", type=["pdf", "png", "jpg", "jpeg"])
+    archivo_subido = st.file_uploader("📂 Sube tu archivo", type=["pdf", "png", "jpg", "jpeg"])
     
+    pagina_a_procesar = 1
+    if archivo_subido is not None and archivo_subido.name.endswith('.pdf'):
+        try:
+            import fitz # PyMuPDF
+            archivo_subido.seek(0)
+            doc_pdf = fitz.open(stream=archivo_subido.read(), filetype="pdf")
+            total_paginas = len(doc_pdf)
+            st.markdown(f"📄 **PDF detectado con {total_paginas} página(s).**")
+            pagina_a_procesar = st.selectbox("Selecciona la página exacta a procesar:", list(range(1, total_paginas + 1)))
+        except Exception:
+            pagina_a_procesar = st.number_input("Número de página a procesar:", min_value=1, value=1, step=1)
+
     if archivo_subido is not None:
-        if st.button("🚀 Procesar Factura con Precisión"):
-            with st.spinner("🔍 Analizando documento comercial..."):
+        if st.button(f"🚀 Procesar Página #{pagina_a_procesar}"):
+            with st.spinner(f"🔍 Analizando página #{pagina_a_procesar}..."):
                 try:
                     if not gemini_key: raise ValueError("No hay clave de API configurada.")
                     model = genai.GenerativeModel('gemini-3.8-flash')
@@ -255,20 +276,36 @@ if menu_opcion == "📄 Procesar Factura":
                     archivo_subido.seek(0)
                     file_bytes = archivo_subido.read()
                     f_type = getattr(archivo_subido, 'type', 'image/jpeg')
-                    image_input = {"mime_type": "application/pdf", "data": file_bytes} if "pdf" in f_type.lower() else Image.open(io.BytesIO(file_bytes))
+                    
+                    target_image = None
+                    if "pdf" in f_type.lower():
+                        import fitz
+                        doc_pdf = fitz.open(stream=file_bytes, filetype="pdf")
+                        page_obj = doc_pdf[pagina_a_procesar - 1]
+                        pix = page_obj.get_pixmap(dpi=150)
+                        target_image = Image.open(io.BytesIO(pix.tobytes("jpeg")))
+                    else:
+                        target_image = Image.open(io.BytesIO(file_bytes))
 
                     prompt_deteccion = (
-                        "Analiza este documento comercial e identifica estrictamente el nombre comercial del proveedor emisor. "
-                        "Devuelve únicamente un JSON con esta estructura: {\"proveedor_detectado\": \"NOMBRE DEL PROVEEDOR\"}"
+                        "Analiza esta página de documento comercial e identifica estrictamente el nombre comercial del proveedor emisor y el número de factura si lo hubiera. "
+                        "Devuelve únicamente un JSON con esta estructura: {\"proveedor_detectado\": \"NOMBRE DEL PROVEEDOR\", \"numero_factura\": \"NUMERO\"}"
                     )
                     
-                    response_det = model.generate_content([image_input, prompt_deteccion])
+                    response_det = model.generate_content([target_image, prompt_deteccion])
                     raw_det_text = response_det.text.strip()
                     if raw_det_text.startswith("```json"): raw_det_text = raw_det_text[7:]
                     if raw_det_text.endswith("```"): raw_det_text = raw_det_text[:-3]
                     
                     det_json = json.loads(raw_det_text.strip())
                     nombre_detectado_raw = str(det_json.get("proveedor_detectado", "PROVEEDOR GENERAL")).upper().strip()
+                    num_factura_detectada = str(det_json.get("numero_factura", "S/N")).upper().strip()
+
+                    # Firma de control única por archivo y número de página exacto
+                    firma_pagina = f"{archivo_subido.name}_{num_factura_detectada}_PAG_{pagina_a_procesar}"
+                    
+                    if firma_pagina in st.session_state["paginas_procesadas_historial"]:
+                        st.warning(f"⚠️ La página #{pagina_a_procesar} ya fue procesada previamente en esta sesión. Puedes continuar procesando otra página o reiniciar el historial en el menú lateral si deseas recargarla.")
 
                     supp_mem = st.session_state["supplier_memory"]
                     if not isinstance(supp_mem, dict): supp_mem = {}
@@ -284,7 +321,7 @@ if menu_opcion == "📄 Procesar Factura":
                         supp_mem[prov_encontrado] = {
                             "nombre": prov_encontrado,
                             "tipo_formato": "factura_desglose_personalizado",
-                            "instruccion_prompt": f"Analiza esta factura de {prov_encontrado} renglón por renglón. Extrae 'descripcion', 'tamano', 'cantidad', 'unidad', 'precio_unitario', 'descuento_porcentaje' y 'monto_neto'."
+                            "instruccion_prompt": f"Analiza esta página de {prov_encontrado} renglón por renglón. Extrae 'descripcion', 'tamano', 'cantidad', 'unidad', 'precio_unitario', 'descuento_porcentaje' y 'monto_neto'."
                         }
                         st.session_state["supplier_memory"] = supp_mem
                         save_json_file(SUPPLIER_MEMORY_FILE, supp_mem)
@@ -294,16 +331,15 @@ if menu_opcion == "📄 Procesar Factura":
                     instruccion_proveedor = prov_dict_data.get("instruccion_prompt", "Extrae todos los ítems.")
 
                     prompt_unificado = (
-                        f"Estás procesando un tique o factura del proveedor: '{prov_encontrado}'. "
+                        f"Estás procesando la página {pagina_a_procesar} de una factura del proveedor: '{prov_encontrado}'. "
                         f"Instrucción específica de su perfil: {instruccion_proveedor} "
-                        "Extrae 'descripcion', 'tamano', 'cantidad' (cantidad de cajas o unidades compradas), 'unidad', 'precio_unitario' (el precio de lista unitario de la caja), 'descuento_porcentaje' y 'monto_neto' (el subtotal neto de la línea). "
+                        "Extrae 'descripcion', 'tamano', 'cantidad', 'unidad', 'precio_unitario', 'descuento_porcentaje' y 'monto_neto' de los ítems presentes en ESTA PÁGINA. "
                         "Devuelve un JSON puro con esta estructura exacta y llaves en minúscula: "
-                        '{"paginacion": "1 de 1", "proveedor_detectado": "' + prov_encontrado + '", "subtotal": 0.0, "itbis": 0.0, "descuentos": 0.0, "total": 0.0, "items": [{"descripcion": "...", "tamano": "750ML", "cantidad": 6.0, "unidad": "CAJA12", "precio_unitario": 5450.0, "descuento_porcentaje": 10.70, "monto_neto": 29201.10}]}. '
+                        '{"paginacion": "' + str(pagina_a_procesar) + '", "proveedor_detectado": "' + prov_encontrado + '", "subtotal": 0.0, "itbis": 0.0, "descuentos": 0.0, "total": 0.0, "items": [{"descripcion": "...", "tamano": "750ML", "cantidad": 1.0, "unidad": "CAJA12", "precio_unitario": 5450.0, "descuento_porcentaje": 10.70, "monto_neto": 4866.85}]}. '
                         "Respuesta JSON pura."
                     )
 
-                    archivo_subido.seek(0)
-                    response = model.generate_content([image_input, prompt_unificado])
+                    response = model.generate_content([target_image, prompt_unificado])
                     
                     raw_text = response.text.strip()
                     if raw_text.startswith("```json"): raw_text = raw_text[7:]
@@ -311,20 +347,20 @@ if menu_opcion == "📄 Procesar Factura":
                     
                     parsed_json = json.loads(raw_text.strip())
 
+                    st.session_state["paginas_procesadas_historial"].add(firma_pagina)
                     st.session_state["factura_data"] = parsed_json
                     st.session_state["prov_activo"] = prov_encontrado
-                    st.session_state["paginacion_detectada"] = str(parsed_json.get("paginacion", "1 de 1"))
                     
-                    st.success(f"🎯 **¡Proveedor Detectado!** Perfil aplicado: **{prov_encontrado}** ({len(parsed_json.get('items', []))} renglones).")
+                    st.success(f"🎯 **¡Página #{pagina_a_procesar} procesada con éxito!** Proveedor: **{prov_encontrado}** ({len(parsed_json.get('items', []))} renglones).")
                 except Exception as e:
-                    st.error(f"⚠️ Error al procesar: {str(e)}")
+                    st.error(f"⚠️ Error al procesar página: {str(e)}")
     st.markdown('</div>', unsafe_allow_html=True)
 
     if st.session_state["factura_data"] is not None:
         data_resp = st.session_state["factura_data"]
         items = data_resp.get("items", [])
         prov_actual = st.session_state.get("prov_activo", "GENERAL")
-        pag_info = str(st.session_state.get("paginacion_detectada", "1 de 1"))
+        pag_info = str(data_resp.get("paginacion", "1"))
         
         subtotal_val = safe_float(data_resp.get("subtotal"))
         itbis_val = safe_float(data_resp.get("itbis"))
@@ -349,6 +385,7 @@ if menu_opcion == "📄 Procesar Factura":
             st.markdown(f"### 📋 Detalle de Renglones Extraídos ({len(items)} ítems)")
             
             preview_rows = []
+            lista_codigos_pagina = []
             wb = openpyxl.Workbook()
             ws = wb.active
             ws.title = "Inventario"
@@ -377,15 +414,10 @@ if menu_opcion == "📄 Procesar Factura":
                 desc_pct = safe_float(item.get("descuento_porcentaje"), 0.0)
                 monto_neto_linea = safe_float(item.get("monto_neto"), 0.0)
 
-                # ==========================================
-                # CÁLCULO BLINDADO DE COSTO UNITARIO REAL
-                # ==========================================
                 if p_unit_extraido > 0:
-                    # 1. Si tenemos el precio unitario de caja, aplicamos el descuento y dividimos estrictamente entre el empaque
                     precio_neto_caja = p_unit_extraido * (1 - (desc_pct / 100.0))
                     costo_unitario_real = round(precio_neto_caja / empaque, 2) if empaque > 1 else precio_neto_caja
                 elif monto_neto_linea > 0 and total_unidades > 0:
-                    # 2. Si el monto neto de la línea abarca todas las cajas, se divide entre el total de unidades de la línea
                     costo_unitario_real = round(monto_neto_linea / total_unidades, 2)
                 else:
                     costo_unitario_real = 0.0
@@ -397,6 +429,10 @@ if menu_opcion == "📄 Procesar Factura":
                     precio_venta = 0.0
 
                 display_codigo = codigo_final
+                
+                if display_codigo != "S/C":
+                    lista_codigos_pagina.append((display_codigo, nombre_limpio))
+
                 if codigo_final == "S/C":
                     st.markdown("---")
                     st.markdown(f"⚠️ **{nombre_limpio} ({presentacion_limpia})** sin código EAN asignado (requiere validación).")
@@ -406,12 +442,12 @@ if menu_opcion == "📄 Procesar Factura":
                         sel_maestro = st.selectbox(
                             f"Seleccionar del Catálogo Maestro",
                             ["-- Buscar en Maestro --"] + nombres_maestro_lista,
-                            key=f"sel_maestro_{idx}_{nombre_limpio}_{idx}"
+                            key=f"sel_maestro_{idx}_{nombre_limpio}_{pag_info}_{idx}"
                         )
                         if sel_maestro != "-- Buscar en Maestro --":
                             display_codigo = master_dict[sel_maestro]
                     with col_c2:
-                        codigo_manual_input = st.text_input("Ingresar código manual", key=f"manual_input_{idx}_{nombre_limpio}_{idx}", placeholder="Ej. 051497455286...")
+                        codigo_manual_input = st.text_input("Ingresar código manual", key=f"manual_input_{idx}_{nombre_limpio}_{pag_info}_{idx}", placeholder="Ej. Código EAN...")
                         if codigo_manual_input and len(codigo_manual_input.strip()) >= 7:
                             clean_m = clean_ean_code(codigo_manual_input)
                             if clean_m != "S/C":
@@ -423,7 +459,7 @@ if menu_opcion == "📄 Procesar Factura":
                         st.markdown(f"[🌐 Buscar en la Web]({url_busqueda})", unsafe_allow_html=True)
 
                     if display_codigo != "S/C":
-                        if st.button("✅ Guardar y Usar este Código", key=f"btn_conf_{idx}_{nombre_limpio}"):
+                        if st.button("✅ Guardar y Usar este Código", key=f"btn_conf_{idx}_{nombre_limpio}_{pag_info}"):
                             st.session_state["codigos_manuales_sesion"][nombre_limpio] = display_codigo
                             master_dict[nombre_limpio] = display_codigo
                             save_json_file(MASTER_CATALOG_FILE, master_dict)
@@ -442,14 +478,30 @@ if menu_opcion == "📄 Procesar Factura":
                     precio_venta, costo_unitario_real, total_unidades, 0.18, "unidad", empaque
                 ])
 
+            # Auditoría de códigos repetidos
+            codigos_vistos = {}
+            duplicados_encontrados = []
+            for cod, prod in lista_codigos_pagina:
+                if cod in codigos_vistos:
+                    duplicados_encontrados.append((cod, codigos_vistos[cod], prod))
+                else:
+                    codigos_vistos[cod] = prod
+
+            if duplicados_encontrados:
+                st.warning("⚠️ **¡Atención! Se detectaron códigos EAN repetidos en esta página:**")
+                for cod, p1, p2 in duplicados_encontrados:
+                    st.markdown(f"- Código **{cod}** asignado tanto a: `📊 {p1}` como a `📊 {p2}`")
+            else:
+                st.success("✅ **Auditoría de Códigos:** No hay códigos EAN repetidos en esta página.")
+
             st.dataframe(pd.DataFrame(preview_rows), use_container_width=True, hide_index=True)
 
             excel_buffer = io.BytesIO()
             wb.save(excel_buffer)
             st.download_button(
-                label=f"📥 Descargar Excel Importable - {prov_actual} (Pág. {pag_info})",
+                label=f"📥 Descargar Excel - {prov_actual} (Pág. {pag_info})",
                 data=excel_buffer.getvalue(),
-                file_name=f"Inventario_Master_{prov_actual.replace(' ', '_')}_Pag_{pag_info.replace(' ', '_')}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
+                file_name=f"Inventario_Master_{prov_actual.replace(' ', '_')}_Pag_{pag_info}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
             )
 
@@ -458,14 +510,12 @@ if menu_opcion == "📄 Procesar Factura":
 # ==========================================
 elif menu_opcion == "📁 Catálogo Maestro EAN":
     st.markdown("<h2>📁 Gestión, Carga y Limpieza del Archivo Maestro EAN</h2>", unsafe_allow_html=True)
-    st.markdown("<p style='color: #64748b;'>Sube tu archivo Excel con el catálogo maestro, limpia registros duplicados o agrega productos individualmente.</p>", unsafe_allow_html=True)
     st.markdown("---")
 
     master_dict = load_json_file(MASTER_CATALOG_FILE, "dict")
 
     st.markdown('<div class="card-container">', unsafe_allow_html=True)
     st.markdown("### 📤 Cargar Archivo Masivo al Catálogo Maestro")
-    st.markdown("<p style='font-size: 0.85rem; color: #64748b;'>Sube tu Excel o CSV con tu listado de productos y códigos oficiales. El sistema fusionará todo automáticamente.</p>", unsafe_allow_html=True)
     
     archivo_maestro_subido = st.file_uploader("Sube tu archivo Excel/CSV del Catálogo Maestro", type=["xlsx", "xls", "csv"], key="uploader_maestro_masivo")
     if archivo_maestro_subido is not None:
@@ -497,46 +547,6 @@ elif menu_opcion == "📁 Catálogo Maestro EAN":
                 st.error(f"⚠️ Error al procesar el archivo: {str(e)}")
     st.markdown('</div>', unsafe_allow_html=True)
 
-    st.markdown("---")
-
-    st.markdown("### 🧹 Herramientas de Mantenimiento")
-    col_l1, col_l2 = st.columns([1, 2])
-    with col_l1:
-        if st.button("🗑️ Resetear / Limpiar Archivo Maestro"):
-            base_inicial = {
-                "ANTIOQUEÑO TAPA ROJA 750 ML": "7702131234567",
-                "OLD PARR 12 AÑOS 750ML": "7804300120986",
-                "FRONTERA SAUVIGNON BLANC C Y T 750ML": "051497455286"
-            }
-            save_json_file(MASTER_CATALOG_FILE, base_inicial)
-            st.success("¡Archivo maestro restablecido y limpiado correctamente!")
-            time.sleep(0.5)
-            st.rerun()
-    with col_l2:
-        st.info("ℹ️ Borra entradas corruptas y restaura los productos base esenciales.")
-
-    st.markdown("---")
-
-    with st.expander("➕ Agregar Producto Individual Manualmente", expanded=False):
-        with st.form("form_agregar_maestro"):
-            col_m1, col_m2 = st.columns([2, 1])
-            with col_m1:
-                nuevo_prod_nombre = st.text_input("Nombre / Descripción Oficial")
-            with col_m2:
-                nuevo_prod_codigo = st.text_input("Código EAN / SAP Oficial")
-            
-            btn_guardar_maestro = st.form_submit_button("💾 Guardar en Archivo Maestro")
-            if btn_guardar_maestro:
-                clean_name = nuevo_prod_nombre.upper().strip()
-                clean_code = clean_ean_code(nuevo_prod_codigo)
-                if clean_name and clean_code != "S/C":
-                    master_dict[clean_name] = clean_code
-                    save_json_file(MASTER_CATALOG_FILE, master_dict)
-                    st.success(f"✅ ¡Producto **{clean_name}** guardado con éxito!")
-                    st.rerun()
-                else:
-                    st.error("⚠️️ Por favor ingresa un nombre válido y un código EAN/SAP correcto.")
-
     if master_dict:
         st.markdown(f"### 📋 Productos Registrados en el Archivo Maestro ({len(master_dict):,} registros limpios)")
         df_show = pd.DataFrame([{"Producto / Descripción": k, "Código EAN/SAP Oficial": v} for k, v in master_dict.items()])
@@ -547,7 +557,6 @@ elif menu_opcion == "📁 Catálogo Maestro EAN":
 # ==========================================
 elif menu_opcion == "🏢 Gestionar Proveedores":
     st.markdown("<h2>🏢 Configuración de Perfiles Independientes por Proveedor</h2>", unsafe_allow_html=True)
-    st.markdown("<p style='color: #64748b;'>Administra, edita o crea perfiles separados para cada proveedor.</p>", unsafe_allow_html=True)
     st.markdown("---")
 
     supps = st.session_state["supplier_memory"]
@@ -560,12 +569,7 @@ elif menu_opcion == "🏢 Gestionar Proveedores":
                 nuevo_nombre = st.text_input("Nombre del Proveedor", value=p_data.get("nombre", p_name))
                 nueva_instruccion = st.text_area("Instrucción / Prompt de Formato Exclusivo", value=p_data.get("instruccion_prompt", ""), height=120)
                 
-                col_btn1, col_btn2 = st.columns(2)
-                with col_btn1:
-                    btn_guardar = st.form_submit_button("💾 Guardar Cambios del Perfil")
-                with col_btn2:
-                    btn_eliminar = st.form_submit_button("🗑️ Eliminar Perfil")
-                
+                btn_guardar = st.form_submit_button("💾 Guardar Cambios del Perfil")
                 if btn_guardar:
                     supps[p_name] = {"nombre": nuevo_nombre, "instruccion_prompt": nueva_instruccion}
                     if nuevo_nombre != p_name:
@@ -573,26 +577,4 @@ elif menu_opcion == "🏢 Gestionar Proveedores":
                     st.session_state["supplier_memory"] = supps
                     save_json_file(SUPPLIER_MEMORY_FILE, supps)
                     st.success(f"✅ ¡Perfil de **{nuevo_nombre}** actualizado con éxito!")
-                    st.rerun()
-                    
-                if btn_eliminar:
-                    if p_name in supps:
-                        supps.pop(p_name)
-                        st.session_state["supplier_memory"] = supps
-                        save_json_file(SUPPLIER_MEMORY_FILE, supps)
-                        st.warning(f"⚠️ Perfil de {p_name} eliminado.")
-                        st.rerun()
-
-    with st.expander("➕ Crear Nuevo Perfil de Proveedor Independiente"):
-        with st.form("form_nuevo_proveedor_manual"):
-            n_prov = st.text_input("Nombre del Proveedor (Ej: CASA BRUGAL)")
-            n_inst = st.text_area("Instrucción de Formato para este Proveedor", value="Analiza la factura de este proveedor renglón por renglón. Extrae 'descripcion', 'tamano', 'cantidad', 'unidad', 'precio_unitario', 'descuento_porcentaje' y 'monto_neto'.")
-            btn_crear = st.form_submit_button("Crear Nuevo Perfil")
-            if btn_crear:
-                clean_p = n_prov.upper().strip()
-                if clean_p:
-                    supps[clean_p] = {"nombre": clean_p, "tipo_formato": "personalizado", "instruccion_prompt": n_inst}
-                    st.session_state["supplier_memory"] = supps
-                    save_json_file(SUPPLIER_MEMORY_FILE, supps)
-                    st.success(f"✅ ¡Perfil independiente creado para {clean_p}!")
                     st.rerun()
