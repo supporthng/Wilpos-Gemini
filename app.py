@@ -232,7 +232,7 @@ st.sidebar.markdown("<h3 style='color: #0284c7;'>⚡ WilPOS Multi-Proveedor</h3>
 menu_opcion = st.sidebar.radio("Navegación", ["📄 Procesar Factura (Por Página)", "📁 Catálogo Maestro EAN", "🏢 Gestionar Proveedores"])
 
 st.sidebar.markdown("---")
-st.sidebar.markdown("<p style='font-size: 0.8rem; color: #10b981; font-weight: 600;'>🟢 Perfil Bepensa Integrado</p>", unsafe_allow_html=True)
+st.sidebar.markdown("<p style='font-size: 0.8rem; color: #10b981; font-weight: 600;'>🟢 Sistema Actualizado</p>", unsafe_allow_html=True)
 
 if st.sidebar.button("🔄 Reiniciar Historial y Filtros"):
     st.session_state["paginas_procesadas_historial"] = set()
@@ -247,7 +247,7 @@ if st.sidebar.button("🔄 Reiniciar Historial y Filtros"):
 # ==========================================
 if menu_opcion == "📄 Procesar Factura (Por Página)":
     st.markdown("<h2>📄 Procesador de Facturas (Multi-Proveedor)</h2>", unsafe_allow_html=True)
-    st.markdown("<p style='color: #64748b;'>Sube tu factura de Bepensa o cualquier otro proveedor. El sistema detecta el perfil automáticamente.</p>", unsafe_allow_html=True)
+    st.markdown("<p style='color: #64748b;'>Sube tu factura. Corrige o asigna códigos correctos al instante desde el panel.</p>", unsafe_allow_html=True)
     st.markdown("---")
 
     if "factura_data" not in st.session_state: st.session_state["factura_data"] = None
@@ -342,6 +342,7 @@ if menu_opcion == "📄 Procesar Factura (Por Página)":
                         f"Estás procesando la página {pagina_a_procesar} de una factura del proveedor: '{prov_encontrado}'. "
                         f"Instrucción específica de su perfil: {instruccion_proveedor} "
                         "Extrae 'descripcion', 'tamano', 'cantidad', 'unidad', 'precio_unitario', 'descuento_porcentaje' y 'monto_neto' de los ítems presentes en ESTA PÁGINA. "
+                        "IMPORTANTE: No inventes códigos EAN ni los confundas entre productos diferentes. "
                         "Devuelve un JSON puro con esta estructura exacta y llaves en minúscula: "
                         '{"paginacion": "' + str(pagina_a_procesar) + '", "proveedor_detectado": "' + prov_encontrado + '", "subtotal": 0.0, "itbis": 0.0, "descuentos": 0.0, "total": 0.0, "items": [{"descripcion": "...", "tamano": "750ML", "cantidad": 1.0, "unidad": "CAJA12", "precio_unitario": 5450.0, "descuento_porcentaje": 10.70, "monto_neto": 4866.85}]}. '
                         "Respuesta JSON pura."
@@ -493,7 +494,7 @@ if menu_opcion == "📄 Procesar Factura (Por Página)":
                             st.session_state["codigos_manuales_sesion"][prod_erroneo] = asignar_codigo
                             master_dict[prod_erroneo] = asignar_codigo
                             save_json_file(MASTER_CATALOG_FILE, master_dict)
-                            st.success(f"¡Conflicto resuelto! El producto **{prod_legitimo}** quedó confirmado con su código y **{prod_erroneo}** fue actualizado.")
+                            st.success(f"¡Conflicto resuelto! El producto **{prod_legitimo}** quedó confirmado y **{prod_erroneo}** fue actualizado.")
                             time.sleep(0.5)
                             st.rerun()
             else:
