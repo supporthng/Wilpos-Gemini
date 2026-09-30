@@ -73,15 +73,20 @@ def save_json_file(filepath, data):
 if "supplier_memory" not in st.session_state:
     loaded_supps = load_json_file(SUPPLIER_MEMORY_FILE, "dict")
     default_profiles = {
+        "CENTRO DE DISTRIBUCION CRISTIAN": {
+            "nombre": "CENTRO DE DISTRIBUCION CRISTIAN",
+            "tipo_formato": "pos_cajas_unidades",
+            "instruccion_prompt": "Analiza este documento de CENTRO DE DISTRIBUCION CRISTIAN (CDC) renglón por renglón. Extrae 'descripcion' (nombre del artículo sin empaque), 'tamano' (ej. 355ML, 750ML, 175 ML), 'cantidad' (ej. 1.0), 'unidad' (ej. Caja-24, Caja-6, Caja-12, Caja-48) y 'precio_unitario' (precio por caja/unidad de empaque)."
+        },
         "ALVAREZ & SANCHEZ": {
             "nombre": "ALVAREZ & SANCHEZ",
             "tipo_formato": "factura_desglose_descuentos",
-            "instruccion_prompt": "Analiza esta factura de ALVAREZ & SANCHEZ renglón por renglón. Extrae 'descripcion', 'tamano' (ej. 12/75 CL), 'cantidad', 'unidad' (ej. CAJA), 'precio_unitario', 'descuento_porcentaje' (ej. 10.0 en columna COM.) y 'monto_neto' (importe)."
+            "instruccion_prompt": "Analiza esta factura de ALVAREZ & SANCHEZ renglón por renglón. Extrae 'descripcion', 'tamano', 'cantidad', 'unidad', 'precio_unitario', 'descuento_porcentaje' y 'monto_neto'."
         },
         "ELÍAS DISTRIBUCIÓN": {
             "nombre": "ELÍAS DISTRIBUCIÓN",
             "tipo_formato": "factura_cajas_unidades",
-            "instruccion_prompt": "Analiza esta factura de ELÍAS DISTRIBUCIÓN renglón por renglón. Extrae 'descripcion', 'unidad' (ej. CJ12BOT), 'cantidad', 'precio_unitario' (precio de la caja) y 'monto_neto'."
+            "instruccion_prompt": "Analiza esta factura de ELÍAS DISTRIBUCIÓN renglón por renglón. Extrae 'descripcion', 'unidad', 'cantidad', 'precio_unitario' y 'monto_neto'."
         },
         "EL CATADOR": {
             "nombre": "EL CATADOR",
@@ -94,7 +99,7 @@ if "supplier_memory" not in st.session_state:
             "instruccion_prompt": "Analiza este tique de CND / BEES renglón por renglón. Extrae 'descripcion', 'tamano', 'cantidad', 'unidad' y 'precio_unitario'."
         }
     }
-    if not loaded_supps or "ALVAREZ & SANCHEZ" not in loaded_supps or "ELÍAS DISTRIBUCIÓN" not in loaded_supps:
+    if not loaded_supps or "CENTRO DE DISTRIBUCION CRISTIAN" not in loaded_supps:
         loaded_supps.update(default_profiles)
         save_json_file(SUPPLIER_MEMORY_FILE, loaded_supps)
     st.session_state["supplier_memory"] = loaded_supps
@@ -174,16 +179,17 @@ def limpiar_nombre_y_extraer_presentacion(descripcion_raw, tamano_raw=""):
 def parse_empaque_proveedor(proveedor_nombre, unidad_txt="", tamano_txt="", descripcion_txt=""):
     combined = normalizar_texto(f"{unidad_txt} {tamano_txt} {descripcion_txt}")
     
+    # Extraer empaque del texto tipo "CAJA-24", "CAJA-6", etc.
+    m_caj_num = re.search(r'(?:CAJA|CJ|BOX)[\s\-]*(\d+)', combined)
+    if m_caj_num:
+        val = int(m_caj_num.group(1))
+        if val > 0: return val
+
     m_slash = re.search(r'\b(\d+)\s*/\s*\d+\s*(?:ML|L|OZ|CL)', combined)
     if m_slash:
         val = int(m_slash.group(1))
         if val > 1: return val
 
-    m_cj = re.search(r'(?:CJ|CAJA|BANC|12X|12\s*BOT)\s*(\d+)?', combined)
-    if m_cj and m_cj.group(1):
-        val = int(m_cj.group(1))
-        if val > 1: return val
-    
     if "12X" in combined or "12/" in combined or "CJ12" in combined:
         return 12
     if "24X" in combined or "24/" in combined or "CJ24" in combined:
@@ -242,7 +248,7 @@ st.sidebar.markdown("<p style='font-size: 0.8rem; color: #10b981; font-weight: 6
 # ==========================================
 if menu_opcion == "📄 Procesar Factura":
     st.markdown("<h2>📄 Procesador con Perfiles Independientes</h2>", unsafe_allow_html=True)
-    st.markdown("<p style='color: #64748b;'>Sube tu factura. El sistema detecta el proveedor, aplica su perfil específico y procesa con precisión.</p>", unsafe_allow_html=True)
+    st.markdown("<p style='color: #64748b;'>Sube tu documento. El sistema detecta automáticamente si es Centro de Distribución Cristian, Álvarez & Sánchez u otro proveedor.</p>", unsafe_allow_html=True)
     st.markdown("---")
 
     if "factura_data" not in st.session_state: st.session_state["factura_data"] = None
@@ -253,7 +259,7 @@ if menu_opcion == "📄 Procesar Factura":
     
     col_s1, col_s2 = st.columns([2, 1])
     with col_s1:
-        st.info("💡 Sube tu documento comercial (PDF o Imagen).")
+        st.info("💡 Sube tu factura o tique (PDF o Imagen).")
     with col_s2:
         margen_utilidad = st.number_input("⚙️ Margen Utilidad (%)", min_value=0.0, max_value=500.0, value=25.0, step=1.0)
         
@@ -261,7 +267,7 @@ if menu_opcion == "📄 Procesar Factura":
     
     if archivo_subido is not None:
         if st.button("🚀 Detectar Proveedor y Procesar con su Perfil"):
-            with st.spinner("🔍 Analizando documento con perfil independiente..."):
+            with st.spinner("🔍 Analizando documento y extrayendo ítems..."):
                 try:
                     if not gemini_key: raise ValueError("No hay clave de API configurada.")
                     model = genai.GenerativeModel('gemini-3.8-flash')
@@ -272,7 +278,8 @@ if menu_opcion == "📄 Procesar Factura":
                     image_input = {"mime_type": "application/pdf", "data": file_bytes} if "pdf" in f_type.lower() else Image.open(io.BytesIO(file_bytes))
 
                     prompt_deteccion = (
-                        "Analiza este documento comercial (factura o tique) e identifica estrictamente el nombre comercial del proveedor emisor. "
+                        "Analiza este documento comercial (factura o tique) e identifica estrictamente el nombre comercial del proveedor emisor "
+                        "(ej. CENTRO DE DISTRIBUCION CRISTIAN, ALVAREZ & SANCHEZ, EL CATADOR, ELIAS DISTRIBUCION). "
                         "Devuelve únicamente un JSON con esta estructura: {\"proveedor_detectado\": \"NOMBRE DEL PROVEEDOR\"}"
                     )
                     
@@ -310,9 +317,9 @@ if menu_opcion == "📄 Procesar Factura":
                     prompt_unificado = (
                         f"Estás procesando un tique o factura del proveedor: '{prov_encontrado}'. "
                         f"Instrucción específica de su perfil: {instruccion_proveedor} "
-                        "Extrae 'descripcion', 'tamano' (ej. 12/75 CL o 750 ML), 'cantidad', 'unidad' (ej. CAJA o CJ12BOT), 'precio_unitario', 'descuento_porcentaje' (si aplica) y 'monto_neto'. "
+                        "Extrae 'descripcion', 'tamano' (ej. 355ML, 750ML), 'cantidad', 'unidad' (ej. Caja-24, Caja-12 o CAJA), 'precio_unitario' y 'monto_neto' (o calcula precio total por línea). "
                         "Devuelve un JSON puro con esta estructura exacta y llaves en minúscula: "
-                        '{"paginacion": "1 de 1", "proveedor_detectado": "' + prov_encontrado + '", "subtotal": 0.0, "itbis": 0.0, "descuentos": 0.0, "total": 0.0, "items": [{"descripcion": "...", "tamano": "12/75 CL", "cantidad": 1.0, "unidad": "CAJA", "precio_unitario": 15600.0, "descuento_porcentaje": 10.0, "monto_neto": 14040.0}]}. '
+                        '{"paginacion": "1 de 1", "proveedor_detectado": "' + prov_encontrado + '", "subtotal": 0.0, "itbis": 0.0, "descuentos": 0.0, "total": 0.0, "items": [{"descripcion": "...", "tamano": "750ML", "cantidad": 1.0, "unidad": "Caja-12", "precio_unitario": 9550.26, "descuento_porcentaje": 0.0, "monto_neto": 9550.26}]}. '
                         "Respuesta JSON pura."
                     )
 
@@ -417,7 +424,7 @@ if menu_opcion == "📄 Procesar Factura":
                         if sel_maestro != "-- Buscar en Maestro --":
                             display_codigo = master_dict[sel_maestro]
                     with col_c2:
-                        codigo_manual_input = st.text_input("Ingresar código manual", key=f"manual_input_{idx}_{nombre_limpio}_{idx}", placeholder="Ej. 8410591003045")
+                        codigo_manual_input = st.text_input("Ingresar código manual", key=f"manual_input_{idx}_{nombre_limpio}_{idx}", placeholder="Ej. 70601561")
                         if codigo_manual_input and len(codigo_manual_input.strip()) >= 7:
                             clean_m = clean_ean_code(codigo_manual_input)
                             if clean_m != "S/C":
@@ -526,9 +533,9 @@ elif menu_opcion == "📁 Catálogo Maestro EAN":
         with st.form("form_agregar_maestro"):
             col_m1, col_m2 = st.columns([2, 1])
             with col_m1:
-                nuevo_prod_nombre = st.text_input("Nombre / Descripción Oficial (Ej: VINO TINTO RESERVA CUNE 750 ML)")
+                nuevo_prod_nombre = st.text_input("Nombre / Descripción Oficial (Ej: CERVEZA CORONA CERO 355ML)")
             with col_m2:
-                nuevo_prod_codigo = st.text_input("Código EAN / SAP Oficial (Ej: 8410591003045)")
+                nuevo_prod_codigo = st.text_input("Código EAN / SAP Oficial (Ej: 70601561)")
             
             btn_guardar_maestro = st.form_submit_button("💾 Guardar en Archivo Maestro")
             if btn_guardar_maestro:
@@ -552,7 +559,7 @@ elif menu_opcion == "📁 Catálogo Maestro EAN":
 # ==========================================
 elif menu_opcion == "🏢 Gestionar Proveedores":
     st.markdown("<h2>🏢 Configuración de Perfiles Independientes por Proveedor</h2>", unsafe_allow_html=True)
-    st.markdown("<p style='color: #64748b;'>Administra, edita o crea perfiles separados para cada proveedor (Álvarez & Sánchez, Elías Distribución, El Catador, etc.).</p>", unsafe_allow_html=True)
+    st.markdown("<p style='color: #64748b;'>Administra, edita o crea perfiles separados para cada proveedor (Centro de Distribución Cristian, Álvarez & Sánchez, etc.).</p>", unsafe_allow_html=True)
     st.markdown("---")
 
     supps = st.session_state["supplier_memory"]
