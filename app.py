@@ -72,10 +72,15 @@ def save_json_file(filepath, data):
 if "supplier_memory" not in st.session_state:
     loaded_supps = load_json_file(SUPPLIER_MEMORY_FILE, "dict")
     default_profiles = {
+        "EL CATADOR": {
+            "nombre": "EL CATADOR",
+            "tipo_formato": "factura_cajas_descuento",
+            "instruccion_prompt": "Analiza esta factura electrónica de EL CATADOR. Extrae renglón por renglón: 'descripcion' (ej. FIREBALL APPLE WHISKY 120/50ML), 'unidad' (ej. CAJA120), 'cantidad' (número de cajas), 'precio_unitario' (precio de la caja), 'descuento_porcentaje' (ej. 10.70) y 'monto_neto'."
+        },
         "CND / BEES": {
             "nombre": "CND / BEES",
             "tipo_formato": "tique_doble_linea_blindado",
-            "instruccion_prompt": "Analiza este tique de CND / BEES donde cada ítem tiene dos líneas: la línea 1 con código interno, unidad (PC o UN) y descripción, y la línea 2 con cantidad, precio unitario (P.Unit) e impuesto neto. Extrae 'descripcion', 'tamano', 'cantidad', 'unidad' y 'precio_unitario'."
+            "instruccion_prompt": "Analiza este tique de CND / BEES. Extrae 'descripcion', 'tamano', 'cantidad', 'unidad' y 'precio_unitario'."
         },
         "ALVAREZ & SANCHEZ": {
             "nombre": "ALVAREZ & SANCHEZ",
@@ -83,7 +88,7 @@ if "supplier_memory" not in st.session_state:
             "instruccion_prompt": "Analiza esta factura de ALVAREZ & SANCHEZ renglón por renglón. Extrae 'descripcion', 'tamano', 'cantidad', 'unidad' y 'monto_neto'."
         }
     }
-    if not loaded_supps or "CND / BEES" not in loaded_supps:
+    if not loaded_supps or "EL CATADOR" not in loaded_supps:
         loaded_supps.update(default_profiles)
         save_json_file(SUPPLIER_MEMORY_FILE, loaded_supps)
     st.session_state["supplier_memory"] = loaded_supps
@@ -106,7 +111,7 @@ if "codigos_manuales_sesion" not in st.session_state:
 def safe_float(val, default=0.0):
     try:
         if val is None: return default
-        s_val = str(val).replace('$', '').replace(',', '').strip()
+        s_val = str(val).replace('$', '').replace('%', '').replace(',', '').strip()
         return float(s_val)
     except (ValueError, TypeError): return default
 
@@ -122,58 +127,43 @@ def clean_ean_code(code_val):
         return str(s_val)
     return "S/C"
 
-def limpiar_nombre_producto(descripcion_raw, tamano_raw):
+def limpiar_nombre_producto(descripcion_raw):
     desc = str(descripcion_raw or "").upper().strip()
-    desc = re.sub(r'\s+\d{4,6}$', '', desc)
-    desc = re.sub(r'\b(PC|UN|CAJA|CAJ|BOT|PZA)\b', '', desc)
+    desc = re.sub(r'\b(CAJA\d+|120/50ML|4X6)\b', '', desc)
     desc = re.sub(r'\s+', ' ', desc).strip()
-    
-    tam = str(tamano_raw or "").upper().strip()
-    m_medida = re.search(r'(\d+\s*(?:ML|L|LT|G|KG|OZ|Z))', tam + " " + desc)
-    medida_limpia = m_medida.group(1) if m_medida else ""
-    
-    if medida_limpia and medida_limpia not in desc:
-        return f"{desc} {medida_limpia}".strip()
-    
     return desc
 
-def parse_empaque_proveedor(proveedor_nombre, tamano_txt="", unidad_txt="", descripcion_txt=""):
-    prov_up = str(proveedor_nombre).upper().strip()
+def parse_empaque_proveedor(proveedor_nombre, unidad_txt="", descripcion_txt=""):
+    combined = f"{str(unidad_txt or '')} {str(descripcion_txt or '')}".upper()
     
+    m_caja = re.search(r'CAJA\s*(\d+)', combined)
+    if m_caja:
+        return int(m_caja.group(1))
+    
+    m_slash = re.search(r'\b(\d+)\s*/\s*\d+\s*(?:ML|L|OZ)', combined)
+    if m_slash:
+        val = int(m_slash.group(1))
+        if val > 1: return val
+
+    prov_up = str(proveedor_nombre).upper().strip()
     if "CND" in prov_up or "BEES" in prov_up:
-        unidad_upper = str(unidad_txt or "").upper().strip()
-        if unidad_upper == "UN": return 1
+        if str(unidad_txt).upper() == "UN": return 1
+        return 24
 
-        combined = f"{str(tamano_txt or '')} {str(unidad_txt or '')} {str(descripcion_txt or '')}".upper()
-        if "4X6" in combined: return 24
-        m_slash = re.search(r'\b(48|24|20|18|16|12|6|4)\s*/', combined)
-        if m_slash:
-            val = int(m_slash.group(1))
-            if val > 1: return val
-        return 1
-
-    combined_gen = f"{str(tamano_txt or '')} {str(unidad_txt or '')} {str(descripcion_txt or '')}".upper()
-    m_gen = re.search(r'\b(24|12|6)\b', combined_gen)
-    if m_gen: return int(m_gen.group(1))
     return 1
 
 def buscar_en_catalogo_maestro(nombre_producto, presentacion=""):
-    """
-    BUSCADOR MAESTRO INTELIGENTE CON COINCIDENCIA POR TOKENS CLAVE PONDERADOS
-    """
     n_upper = str(nombre_producto or "").upper().strip()
     p_upper = str(presentacion or "").upper().strip()
     combined_query = f"{n_upper} {p_upper}".strip()
 
     master_dict = load_json_file(MASTER_CATALOG_FILE, "dict")
 
-    # 1. Coincidencia exacta
     if combined_query in master_dict:
         return clean_ean_code(master_dict[combined_query])
     if n_upper in master_dict:
         return clean_ean_code(master_dict[n_upper])
 
-    # 2. Coincidencia por subcadena directa
     for m_name, m_code in master_dict.items():
         m_clean = str(m_name).upper().strip()
         if m_clean in n_upper or n_upper in m_clean or m_clean in combined_query or combined_query in m_clean:
@@ -181,8 +171,6 @@ def buscar_en_catalogo_maestro(nombre_producto, presentacion=""):
             if code_clean != "S/C":
                 return code_clean
 
-    # 3. Coincidencia inteligente por tokens clave (Token Overlap con alta precisión)
-    # Extraer palabras alfanuméricas ignorando artículos o conectores menores de 2 letras
     tokens_query = set(re.findall(r'\b[A-Z0-9]+\b', combined_query))
     tokens_query = {t for t in tokens_query if len(t) > 1}
 
@@ -193,29 +181,24 @@ def buscar_en_catalogo_maestro(nombre_producto, presentacion=""):
         tokens_master = set(re.findall(r'\b[A-Z0-9]+\b', str(m_name).upper()))
         comunes = tokens_query.intersection(tokens_master)
         score = len(comunes)
-        
-        # Si comparten marcas clave y la medida (ej. FIREBALL + APPLE + 50 + ML)
         if score > max_coincidentes and score >= 2:
             max_coincidentes = score
             mejor_codigo = clean_ean_code(m_code)
 
-    if mejor_codigo != "S/C":
-        return mejor_codigo
-
-    return "S/C"
+    return mejor_codigo if mejor_codigo != "S/C" else "S/C"
 
 st.sidebar.markdown("<h3 style='color: #0284c7;'>⚡ WilPOS Multi-Proveedor</h3>", unsafe_allow_html=True)
 menu_opcion = st.sidebar.radio("Navegación", ["📄 Procesar Factura", "📁 Catálogo Maestro EAN", "🏢 Gestionar Proveedores"])
 
 st.sidebar.markdown("---")
-st.sidebar.markdown("<p style='font-size: 0.8rem; color: #10b981; font-weight: 600;'>🟢 Buscador Tokenizado Activo</p>", unsafe_allow_html=True)
+st.sidebar.markdown("<p style='font-size: 0.8rem; color: #10b981; font-weight: 600;'>🟢 Perfil El Catador Activo</p>", unsafe_allow_html=True)
 
 # ==========================================
 # MÓDULO 1: PROCESAR FACTURA
 # ==========================================
 if menu_opcion == "📄 Procesar Factura":
-    st.markdown("<h2>📄 Procesador con Búsqueda Inteligente</h2>", unsafe_allow_html=True)
-    st.markdown("<p style='color: #64748b;'>Sube tu factura. El sistema emparejará los productos de forma inteligente contra tu archivo maestro.</p>", unsafe_allow_html=True)
+    st.markdown("<h2>📄 Procesador con Perfil Especializado El Catador</h2>", unsafe_allow_html=True)
+    st.markdown("<p style='color: #64748b;'>Sube tu factura. El sistema detecta el perfil de El Catador y calcula costos unitarios reales aplicando descuentos y empaques.</p>", unsafe_allow_html=True)
     st.markdown("---")
 
     if "factura_data" not in st.session_state: st.session_state["factura_data"] = None
@@ -226,7 +209,7 @@ if menu_opcion == "📄 Procesar Factura":
     
     col_s1, col_s2 = st.columns([2, 1])
     with col_s1:
-        st.info("💡 Sube tu documento. Se aplicará el emparejamiento inteligente de tokens.")
+        st.info("💡 Sube tu documento. El perfil de El Catador calculará con precisión el costo por unidad.")
     with col_s2:
         margen_utilidad = st.number_input("⚙️ Margen Utilidad (%)", min_value=0.0, max_value=500.0, value=25.0, step=1.0)
         
@@ -234,7 +217,7 @@ if menu_opcion == "📄 Procesar Factura":
     
     if archivo_subido is not None:
         if st.button("🚀 Detectar Proveedor y Procesar Documento"):
-            with st.spinner("🔍 Analizando documento y consultando archivo maestro..."):
+            with st.spinner("🔍 Analizando documento con perfil especializado..."):
                 try:
                     if not gemini_key: raise ValueError("No hay clave de API configurada.")
                     model = genai.GenerativeModel('gemini-3.8-flash')
@@ -245,7 +228,7 @@ if menu_opcion == "📄 Procesar Factura":
                     image_input = {"mime_type": "application/pdf", "data": file_bytes} if "pdf" in f_type.lower() else Image.open(io.BytesIO(file_bytes))
 
                     prompt_deteccion = (
-                        "Analiza este documento comercial (factura o tique) e identifica estrictamente el nombre comercial del proveedor emisor. "
+                        "Analiza este documento comercial (factura o tique) e identifica estrictamente el nombre comercial del proveedor emisor (ej. EL CATADOR, CND, etc.). "
                         "Devuelve únicamente un JSON con esta estructura: {\"proveedor_detectado\": \"NOMBRE DEL PROVEEDOR\"}"
                     )
                     
@@ -271,7 +254,7 @@ if menu_opcion == "📄 Procesar Factura":
                         supp_mem[prov_encontrado] = {
                             "nombre": prov_encontrado,
                             "tipo_formato": "factura_desglose",
-                            "instruccion_prompt": f"Analiza esta factura de {prov_encontrado} renglón por renglón. Extrae 'descripcion', 'tamano', 'cantidad', 'unidad' y 'precio_unitario'."
+                            "instruccion_prompt": f"Analiza esta factura de {prov_encontrado} renglón por renglón. Extrae 'descripcion', 'unidad', 'cantidad', 'precio_unitario', 'descuento_porcentaje' y 'monto_neto'."
                         }
                         st.session_state["supplier_memory"] = supp_mem
                         save_json_file(SUPPLIER_MEMORY_FILE, supp_mem)
@@ -283,9 +266,9 @@ if menu_opcion == "📄 Procesar Factura":
                     prompt_unificado = (
                         f"Estás procesando un tique o factura del proveedor: '{prov_encontrado}'. "
                         f"Instrucción específica: {instruccion_proveedor} "
-                        "Extrae 'precio_unitario' exactamente como aparece en el documento y la 'unidad' (PC o UN). "
+                        "Extrae 'precio_unitario' (precio por caja o unidad de compra), 'descuento_porcentaje' (si aplica, ej. 10.7), 'monto_neto' y la 'unidad' (ej. CAJA120 o UN). "
                         "Devuelve un JSON puro con esta estructura exacta y llaves en minúscula: "
-                        '{"paginacion": "1 de 1", "proveedor_detectado": "' + prov_encontrado + '", "subtotal": 0.0, "itbis": 0.0, "descuentos": 0.0, "total": 0.0, "items": [{"descripcion": "...", "tamano": "...", "cantidad": 1.0, "unidad": "PC", "precio_unitario": 0.0, "monto_neto": 0.0}]}. '
+                        '{"paginacion": "1 de 1", "proveedor_detectado": "' + prov_encontrado + '", "subtotal": 0.0, "itbis": 0.0, "descuentos": 0.0, "total": 0.0, "items": [{"descripcion": "...", "unidad": "CAJA120", "cantidad": 4.0, "precio_unitario": 10500.0, "descuento_porcentaje": 10.7, "monto_neto": 37506.0}]}. '
                         "Respuesta JSON pura."
                     )
 
@@ -339,40 +322,33 @@ if menu_opcion == "📄 Procesar Factura":
             wb = openpyxl.Workbook()
             ws = wb.active
             ws.title = "Inventario"
-            ws.append(['Nombre', 'Presentación', 'Código Barra', 'Categoría', 'Tipo', 'Precio Venta', 'Costo', 'Stock', 'ITBIS', 'Unidad Medida', 'Cantidad Empaque'])
+            ws.append(['Nombre', 'Presentación', 'Código Barra', 'Categoría', 'Tipo', 'Precio Venta', 'Costo Unitario', 'Stock (Unidades)', 'ITBIS', 'Unidad Medida', 'Cantidad Empaque'])
 
             master_dict = load_json_file(MASTER_CATALOG_FILE, "dict")
             nombres_maestro_lista = list(master_dict.keys())
 
             for idx, item in enumerate(items, start=1):
                 raw_desc = item.get("descripcion", "")
-                raw_tam = item.get("tamano", "")
-                
-                nombre_completo = limpiar_nombre_producto(raw_desc, raw_tam)
-
-                cant_compra = safe_float(item.get("cantidad"), 1.0)
                 unidad = str(item.get("unidad", ""))
                 
-                empaque = parse_empaque_proveedor(prov_actual, raw_tam, unidad, raw_desc)
+                nombre_limpio = limpiar_nombre_producto(raw_desc)
+                cant_compra = safe_float(item.get("cantidad"), 1.0)
+                
+                empaque = parse_empaque_proveedor(prov_actual, unidad, raw_desc)
                 total_unidades = int(cant_compra * empaque)
 
-                m_med = re.search(r'(\d+\s*(?:ML|L|LT|G|KG|OZ|Z))', str((raw_tam or "") + " " + (raw_desc or "")).upper())
-                presentacion_limpia = m_med.group(1) if m_med else (raw_tam if raw_tam else "S/P")
+                m_med = re.search(r'(\d+\s*(?:ML|L|LT|G|KG|OZ))', raw_desc.upper())
+                presentacion_limpia = m_med.group(1) if m_med else "S/P"
 
-                codigo_final = buscar_en_catalogo_maestro(nombre_completo, presentacion_limpia)
-
-                nombre_display_excel = nombre_completo
+                codigo_final = buscar_en_catalogo_maestro(nombre_limpio, presentacion_limpia)
 
                 p_unit_extraido = safe_float(item.get("precio_unitario"), 0.0)
-                monto_neto_linea = safe_float(
-                    item.get("monto_neto") or 
-                    item.get("impuesto_neto") or 
-                    item.get("valor"), 
-                    0.0
-                )
+                desc_pct = safe_float(item.get("descuento_porcentaje"), 0.0)
+                monto_neto_linea = safe_float(item.get("monto_neto"), 0.0)
 
                 if p_unit_extraido > 0:
-                    costo_unitario_real = round(p_unit_extraido / empaque, 2) if empaque > 1 else p_unit_extraido
+                    precio_caja_neto = p_unit_extraido * (1 - (desc_pct / 100.0))
+                    costo_unitario_real = round(precio_caja_neto / empaque, 2) if empaque > 1 else precio_caja_neto
                 elif monto_neto_linea > 0 and total_unidades > 0:
                     costo_unitario_real = round(monto_neto_linea / total_unidades, 2)
                 else:
@@ -387,44 +363,44 @@ if menu_opcion == "📄 Procesar Factura":
                 display_codigo = codigo_final
                 if codigo_final == "S/C":
                     st.markdown("---")
-                    st.markdown(f"⚠️ **{nombre_display_excel} ({presentacion_limpia})** sin código en el archivo maestro.")
+                    st.markdown(f"⚠️ **{nombre_limpio} ({presentacion_limpia})** sin código en el archivo maestro.")
                     
                     col_c1, col_c2, col_c3 = st.columns([2, 1, 1])
                     with col_c1:
                         sel_maestro = st.selectbox(
                             f"Seleccionar del Catálogo Maestro",
                             ["-- Buscar en Maestro --"] + nombres_maestro_lista,
-                            key=f"sel_maestro_{idx}_{nombre_display_excel}_{idx}"
+                            key=f"sel_maestro_{idx}_{nombre_limpio}_{idx}"
                         )
                         if sel_maestro != "-- Buscar en Maestro --":
                             display_codigo = master_dict[sel_maestro]
                     with col_c2:
-                        codigo_manual_input = st.text_input("Ingresar código manual", key=f"manual_input_{idx}_{nombre_display_excel}_{idx}", placeholder="Ej. 052000324884")
+                        codigo_manual_input = st.text_input("Ingresar código manual", key=f"manual_input_{idx}_{nombre_limpio}_{idx}", placeholder="Ej. 088004031416")
                         if codigo_manual_input and len(codigo_manual_input.strip()) >= 7:
                             clean_m = clean_ean_code(codigo_manual_input)
                             if clean_m != "S/C":
                                 display_codigo = clean_m
                     with col_c3:
                         st.markdown("<br>", unsafe_allow_html=True)
-                        query_busqueda = f"EAN barcode {nombre_display_excel} {presentacion_limpia}".replace(" ", "+")
+                        query_busqueda = f"EAN barcode {nombre_limpio} {presentacion_limpia}".replace(" ", "+")
                         url_busqueda = f"https://www.google.com/search?q={query_busqueda}"
                         st.markdown(f"[🌐 Buscar en la Web]({url_busqueda})", unsafe_allow_html=True)
 
                     if display_codigo != "S/C":
-                        if st.button("✅ Usar este código para esta factura", key=f"btn_conf_{idx}_{nombre_display_excel}"):
-                            st.session_state["codigos_manuales_sesion"][nombre_display_excel] = display_codigo
+                        if st.button("✅ Usar este código para esta factura", key=f"btn_conf_{idx}_{nombre_limpio}"):
+                            st.session_state["codigos_manuales_sesion"][nombre_limpio] = display_codigo
                             st.success(f"¡Código {display_codigo} aplicado a esta factura!")
                             time.sleep(0.5)
                             st.rerun()
 
                 preview_rows.append({
-                    "No.": idx, "Producto": nombre_display_excel, "Código EAN Asignado": display_codigo,
-                    "Cant. Compra": cant_compra, "Empaque": empaque, "Stock (Unidades)": total_unidades,
+                    "No.": idx, "Producto": nombre_limpio, "Código EAN Asignado": display_codigo,
+                    "Cant. Compra": cant_compra, "Empaque": empaque, "Stock Unidades": total_unidades,
                     "Costo Unit. Real": costo_unitario_real, "Precio Venta": precio_venta
                 })
 
                 ws.append([
-                    nombre_display_excel, presentacion_limpia, str(display_codigo), prov_actual, "producto",
+                    nombre_limpio, presentacion_limpia, str(display_codigo), prov_actual, "producto",
                     precio_venta, costo_unitario_real, total_unidades, 0.18, "unidad", empaque
                 ])
 
@@ -480,7 +456,7 @@ elif menu_opcion == "📁 Catálogo Maestro EAN":
                 time.sleep(1)
                 st.rerun()
             except Exception as e:
-                st.error(f"⚠️️ Error al procesar el archivo: {str(e)}")
+                st.error(f"⚠️ Error al procesar el archivo: {str(e)}")
     st.markdown('</div>', unsafe_allow_html=True)
 
     st.markdown("---")
@@ -491,7 +467,8 @@ elif menu_opcion == "📁 Catálogo Maestro EAN":
         if st.button("🗑️ Resetear / Limpiar Archivo Maestro"):
             base_inicial = {
                 "PTE. LIGHT HU 22OZ": "70601561", "PRESIDENTE LIGHT HU 22OZ": "70601561",
-                "FIREBALL APPLE WHISKY 50ML": "088004031416", "CLAMATO COCTEL TOMATE C": "01484035"
+                "FIREBALL APPLE WHISKY 50ML": "088004031416", "FIREBALL APPLE 50 ML": "088004031416",
+                "CLAMATO COCTEL TOMATE C": "01484035", "GATORADE FRUIT PUNCH": "7460548000154"
             }
             save_json_file(MASTER_CATALOG_FILE, base_inicial)
             st.success("¡Archivo maestro restablecido y limpiado correctamente!")
