@@ -76,7 +76,7 @@ if "supplier_memory" not in st.session_state:
         "EL CATADOR": {
             "nombre": "EL CATADOR",
             "tipo_formato": "factura_cajas_descuento",
-            "instruccion_prompt": "Analiza esta factura de EL CATADOR renglón por renglón. Extrae 'descripcion', 'tamano' (ej. 750ML), 'cantidad', 'unidad' (ej. CAJA12, CAJA24, BOTELLA), 'precio_unitario' (Precio Und de la caja), 'descuento_porcentaje' (ej. 10.70%) y 'monto_neto'."
+            "instruccion_prompt": "Analiza esta factura de EL CATADOR renglón por renglón. Extrae 'descripcion', 'tamano' (ej. 750ML), 'cantidad' (Despachada), 'unidad' (ej. CAJA12, CAJA24, BOTELLA), 'precio_unitario' (Precio Und de la caja), 'descuento_porcentaje' (ej. 10.70%) y 'monto_neto'."
         },
         "PRICESMART": {
             "nombre": "PRICESMART",
@@ -221,14 +221,14 @@ st.sidebar.markdown("<h3 style='color: #0284c7;'>⚡ WilPOS Multi-Proveedor</h3>
 menu_opcion = st.sidebar.radio("Navegación", ["📄 Procesar Factura", "📁 Catálogo Maestro EAN", "🏢 Gestionar Proveedores"])
 
 st.sidebar.markdown("---")
-st.sidebar.markdown("<p style='font-size: 0.8rem; color: #10b981; font-weight: 600;'>🟢 Corrección de Costo Unitario Activa</p>", unsafe_allow_html=True)
+st.sidebar.markdown("<p style='font-size: 0.8rem; color: #10b981; font-weight: 600;'>🟢 Cálculo de Costo por Botella Blindado</p>", unsafe_allow_html=True)
 
 # ==========================================
 # MÓDULO 1: PROCESAR FACTURA
 # ==========================================
 if menu_opcion == "📄 Procesar Factura":
     st.markdown("<h2>📄 Procesador de Facturas y Tiques</h2>", unsafe_allow_html=True)
-    st.markdown("<p style='color: #64748b;'>Sube tu factura. El cálculo de costos unitarios por botella está blindado matemáticamente.</p>", unsafe_allow_html=True)
+    st.markdown("<p style='color: #64748b;'>Sube tu factura. El costo unitario por botella se calcula directamente dividiendo el costo neto de la caja entre su empaque.</p>", unsafe_allow_html=True)
     st.markdown("---")
 
     if "factura_data" not in st.session_state: st.session_state["factura_data"] = None
@@ -296,9 +296,9 @@ if menu_opcion == "📄 Procesar Factura":
                     prompt_unificado = (
                         f"Estás procesando un tique o factura del proveedor: '{prov_encontrado}'. "
                         f"Instrucción específica de su perfil: {instruccion_proveedor} "
-                        "Extrae 'descripcion', 'tamano', 'cantidad', 'unidad', 'precio_unitario' (el precio de lista de la caja o unidad antes de descuento), 'descuento_porcentaje' y 'monto_neto'. "
+                        "Extrae 'descripcion', 'tamano', 'cantidad' (cantidad de cajas o unidades compradas), 'unidad', 'precio_unitario' (el precio de lista unitario de la caja), 'descuento_porcentaje' y 'monto_neto' (el subtotal neto de la línea). "
                         "Devuelve un JSON puro con esta estructura exacta y llaves en minúscula: "
-                        '{"paginacion": "1 de 1", "proveedor_detectado": "' + prov_encontrado + '", "subtotal": 0.0, "itbis": 0.0, "descuentos": 0.0, "total": 0.0, "items": [{"descripcion": "...", "tamano": "750ML", "cantidad": 1.0, "unidad": "CAJA12", "precio_unitario": 5450.0, "descuento_porcentaje": 10.70, "monto_neto": 4866.85}]}. '
+                        '{"paginacion": "1 de 1", "proveedor_detectado": "' + prov_encontrado + '", "subtotal": 0.0, "itbis": 0.0, "descuentos": 0.0, "total": 0.0, "items": [{"descripcion": "...", "tamano": "750ML", "cantidad": 6.0, "unidad": "CAJA12", "precio_unitario": 5450.0, "descuento_porcentaje": 10.70, "monto_neto": 29201.10}]}. '
                         "Respuesta JSON pura."
                     )
 
@@ -380,13 +380,13 @@ if menu_opcion == "📄 Procesar Factura":
                 # ==========================================
                 # CÁLCULO BLINDADO DE COSTO UNITARIO REAL
                 # ==========================================
-                if monto_neto_linea > 0 and total_unidades > 0:
-                    # Si tenemos el monto neto de la línea (ej. $4,866.85) y el total de unidades (12 botellas)
+                if p_unit_extraido > 0:
+                    # 1. Si tenemos el precio unitario de caja, aplicamos el descuento y dividimos estrictamente entre el empaque
+                    precio_neto_caja = p_unit_extraido * (1 - (desc_pct / 100.0))
+                    costo_unitario_real = round(precio_neto_caja / empaque, 2) if empaque > 1 else precio_neto_caja
+                elif monto_neto_linea > 0 and total_unidades > 0:
+                    # 2. Si el monto neto de la línea abarca todas las cajas, se divide entre el total de unidades de la línea
                     costo_unitario_real = round(monto_neto_linea / total_unidades, 2)
-                elif p_unit_extraido > 0:
-                    # Si se parte del precio unitario de caja
-                    precio_neto_item = p_unit_extraido * (1 - (desc_pct / 100.0))
-                    costo_unitario_real = round(precio_neto_item / empaque, 2) if empaque > 1 else precio_neto_item
                 else:
                     costo_unitario_real = 0.0
 
@@ -535,7 +535,7 @@ elif menu_opcion == "📁 Catálogo Maestro EAN":
                     st.success(f"✅ ¡Producto **{clean_name}** guardado con éxito!")
                     st.rerun()
                 else:
-                    st.error("⚠️ Por favor ingresa un nombre válido y un código EAN/SAP correcto.")
+                    st.error("⚠️️ Por favor ingresa un nombre válido y un código EAN/SAP correcto.")
 
     if master_dict:
         st.markdown(f"### 📋 Productos Registrados en el Archivo Maestro ({len(master_dict):,} registros limpios)")
