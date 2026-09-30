@@ -117,6 +117,9 @@ if "codigos_manuales_sesion" not in st.session_state:
 if "paginas_procesadas_historial" not in st.session_state:
     st.session_state["paginas_procesadas_historial"] = set()
 
+if "duplicados_confirmados_sesion" not in st.session_state:
+    st.session_state["duplicados_confirmados_sesion"] = set()
+
 def safe_float(val, default=0.0):
     try:
         if val is None: return default
@@ -226,10 +229,11 @@ menu_opcion = st.sidebar.radio("Navegación", ["📄 Procesar Factura (Por Pági
 st.sidebar.markdown("---")
 st.sidebar.markdown("<p style='font-size: 0.8rem; color: #10b981; font-weight: 600;'>🟢 Resolución Inteligente Activa</p>", unsafe_allow_html=True)
 
-if st.sidebar.button("🔄 Reiniciar Historial de Páginas"):
+if st.sidebar.button("🔄 Reiniciar Historial y Filtros"):
     st.session_state["paginas_procesadas_historial"] = set()
+    st.session_state["duplicados_confirmados_sesion"] = set()
     st.session_state["factura_data"] = None
-    st.success("Historial de páginas limpiado con éxito.")
+    st.success("Historial de páginas y confirmaciones limpiado.")
     time.sleep(0.5)
     st.rerun()
 
@@ -237,8 +241,8 @@ if st.sidebar.button("🔄 Reiniciar Historial de Páginas"):
 # MÓDULO 1: PROCESAR FACTURA POR PÁGINA
 # ==========================================
 if menu_opcion == "📄 Procesar Factura (Por Página)":
-    st.markdown("<h2>📄 Procesador de Facturas (Resolución de Códigos Duplicados)</h2>", unsafe_allow_html=True)
-    st.markdown("<p style='color: #64748b;'>Selecciona la página que deseas procesar. Confirma el dueño legítimo del código y busca el código correcto para el producto erróneo.</p>", unsafe_allow_html=True)
+    st.markdown("<h2>📄 Procesador de Facturas (Resolución Limpia de Duplicados)</h2>", unsafe_allow_html=True)
+    st.markdown("<p style='color: #64748b;'>Selecciona la página que deseas procesar. Los productos confirmados se ocultan automáticamente de la vista de conflicto.</p>", unsafe_allow_html=True)
     st.markdown("---")
 
     if "factura_data" not in st.session_state: st.session_state["factura_data"] = None
@@ -429,14 +433,15 @@ if menu_opcion == "📄 Procesar Factura (Por Página)":
                 })
 
             # ==========================================
-            # AUDITORÍA Y CORRECCIÓN INTELIGENTE DE DUPLICADOS
+            # AUDITORÍA Y CORRECCIÓN INTELIGENTE DE DUPLICADOS (FILTRANDO CONFIRMADOS)
             # ==========================================
             codigos_vistos = {}
             duplicados_encontrados = []
             for row_item in lista_codigos_pagina:
                 c_code = row_item["codigo"]
                 c_name = row_item["nombre"]
-                if c_code != "S/C":
+                # Solo evaluar duplicados si no han sido confirmados previamente en esta sesión
+                if c_code != "S/C" and c_name not in st.session_state["duplicados_confirmados_sesion"]:
                     if c_code in codigos_vistos:
                         duplicados_encontrados.append((c_code, codigos_vistos[c_code], c_name))
                     else:
@@ -445,17 +450,15 @@ if menu_opcion == "📄 Procesar Factura (Por Página)":
             if duplicados_encontrados:
                 st.warning("⚠️ **¡Atención! Se detectaron códigos EAN repetidos en esta página:**")
                 for cod_dup, p1, p2 in duplicados_encontrados:
-                    st.markdown(f"---")
+                    st.markdown("---")
                     st.markdown(f"🔹 **Código compartido:** `{cod_dup}` asignado a: `📊 {p1}` y `📊 {p2}`")
                     
-                    # 1. Confirmar cuál es el dueño legítimo
                     prod_legitimo = st.selectbox(
                         f"✅ ¿A cuál de estos dos productos SÍ le pertenece el código {cod_dup}?",
                         [p1, p2],
                         key=f"dueño_legitimo_{cod_dup}"
                     )
                     
-                    # 2. El otro producto es el erróneo que necesita buscar en el maestro
                     prod_erroneo = p2 if prod_legitimo == p1 else p1
                     
                     st.markdown(f"🔍 El producto **{prod_erroneo}** tiene el código erróneo. Asigne su código correcto:")
@@ -474,7 +477,7 @@ if menu_opcion == "📄 Procesar Factura (Por Página)":
                             placeholder="EAN correcto..."
                         )
                     
-                    if st.button(f"💾 Guardar y Corregir para [{prod_erroneo}]", key=f"btn_aplicar_corr_{cod_dup}_{prod_erroneo}"):
+                    if st.button(f"💾 Guardar y Ocultar Conflicto para [{prod_erroneo}]", key=f"btn_aplicar_corr_{cod_dup}_{prod_erroneo}"):
                         asignar_codigo = "S/C"
                         if nuevo_c_maestro != "-- Seleccionar del Maestro --":
                             asignar_codigo = master_dict[nuevo_c_maestro]
@@ -482,14 +485,17 @@ if menu_opcion == "📄 Procesar Factura (Por Página)":
                             asignar_codigo = clean_ean_code(nuevo_c_manual)
                         
                         if asignar_codigo != "S/C":
+                            # Marcar el producto legítimo como confirmado para que desaparezca de la lista
+                            st.session_state["duplicados_confirmados_sesion"].add(prod_legitimo)
+                            # Guardar el nuevo código para el producto erróneo
                             st.session_state["codigos_manuales_sesion"][prod_erroneo] = asignar_codigo
                             master_dict[prod_erroneo] = asignar_codigo
                             save_json_file(MASTER_CATALOG_FILE, master_dict)
-                            st.success(f"¡Código {asignar_codigo} asignado correctamente a {prod_erroneo}! El código {cod_dup} quedó exclusivamente para {prod_legitimo}.")
+                            st.success(f"¡Conflicto resuelto! El producto **{prod_legitimo}** quedó confirmado con su código y **{prod_erroneo}** fue actualizado.")
                             time.sleep(0.5)
                             st.rerun()
             else:
-                st.success("✅ **Auditoría de Códigos:** No hay códigos EAN repetidos en esta página.")
+                st.success("✅ **Auditoría de Códigos:** No hay conflictos de códigos EAN en esta página.")
 
             wb = openpyxl.Workbook()
             ws = wb.active
