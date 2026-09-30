@@ -566,8 +566,37 @@ if menu_opcion == "📄 Procesar Factura (Por Página)":
 # ==========================================
 elif menu_opcion == "📁 Catálogo Maestro EAN":
     st.markdown("<h2>📁 Gestión, Carga y Limpieza del Archivo Maestro EAN</h2>", unsafe_allow_html=True)
+    st.markdown("<p style='color: #64748b;'>Sube tu archivo masivo o agrega productos individualmente.</p>", unsafe_allow_html=True)
     st.markdown("---")
+
     master_dict = load_json_file(MASTER_CATALOG_FILE, "dict")
+
+    # Formulario para Agregar Producto Manualmente (Restaurado)
+    st.markdown('<div class="card-container">', unsafe_allow_html=True)
+    st.markdown("### ➕ Agregar Producto Individual Manualmente")
+    with st.form("form_agregar_maestro_individual"):
+        col_fm1, col_fm2 = st.columns([2, 1])
+        with col_fm1:
+            nuevo_nombre_prod = st.text_input("Nombre / Descripción Oficial del Producto", placeholder="EJ. COCA COLA 500 ML NRP 750ML...")
+        with col_fm2:
+            nuevo_codigo_prod = st.text_input("Código EAN / SAP Oficial", placeholder="EJ. 7461234567890...")
+        
+        btn_submit_maestro = st.form_submit_button("💾 Guardar Producto en Archivo Maestro")
+        if btn_submit_maestro:
+            clean_n = nuevo_nombre_prod.upper().strip()
+            clean_c = clean_ean_code(nuevo_codigo_prod)
+            if clean_n and clean_c != "S/C":
+                master_dict[clean_n] = clean_c
+                save_json_file(MASTER_CATALOG_FILE, master_dict)
+                st.success(f"✅ ¡Producto **{clean_n}** guardado exitosamente con el código **{clean_c}**!")
+                time.sleep(0.5)
+                st.rerun()
+            else:
+                st.error("⚠️ Por favor ingresa un nombre de producto válido y un código EAN/SAP correcto (de 7 a 14 dígitos).")
+    st.markdown('</div>', unsafe_allow_html=True)
+
+    st.markdown("---")
+
     if master_dict:
         st.markdown(f"### 📋 Productos Registrados en el Archivo Maestro ({len(master_dict):,} registros)")
         df_show = pd.DataFrame([{"Producto / Descripción": k, "Código EAN/SAP Oficial": v} for k, v in master_dict.items()])
