@@ -68,63 +68,8 @@ def save_json_file(filepath, data):
         pass
 
 # ==========================================
-# GESTIÓN DE PERFILES Y CATÁLOGO
+# UTILIDADES Y FUNCIONES AUXILIARES
 # ==========================================
-if "supplier_memory" not in st.session_state:
-    loaded_supps = load_json_file(SUPPLIER_MEMORY_FILE, "dict")
-    default_profiles = {
-        "UNITED BRANDS S A": {
-            "nombre": "UNITED BRANDS S A",
-            "tipo_formato": "factura_tabla_united_brands",
-            "instruccion_prompt": "Analiza esta página de la factura de UNITED BRANDS S A renglón por renglón. Extrae 'descripcion', 'tamano', 'cantidad', 'unidad' (ej. 24X12OZ, 750ML), 'precio_unitario', 'descuento_porcentaje', 'monto_neto' (Impuesto Neto sin ITBIS ya con descuento aplicado) y 'itbis'."
-        },
-        "BEPENSA DOMINICANA SA": {
-            "nombre": "BEPENSA DOMINICANA SA",
-            "tipo_formato": "factura_tique_bepensa",
-            "instruccion_prompt": "Analiza esta página de la factura de BEPENSA DOMINICANA SA renglón por renglón. Extrae 'descripcion', 'tamano', 'cantidad', 'unidad', 'precio_unitario', 'descuento_porcentaje' y 'monto_neto'."
-        },
-        "EL CATADOR": {
-            "nombre": "EL CATADOR",
-            "tipo_formato": "factura_cajas_descuento",
-            "instruccion_prompt": "Analiza esta página de la factura de EL CATADOR renglón por renglón. Extrae 'descripcion', 'tamano', 'cantidad', 'unidad', 'precio_unitario', 'descuento_porcentaje' y 'monto_neto'."
-        },
-        "PRICESMART": {
-            "nombre": "PRICESMART",
-            "tipo_formato": "factura_tique_unidades",
-            "instruccion_prompt": "Analiza esta página del comprobante de PRICESMART renglón por renglón. Extrae 'descripcion', 'tamano', 'cantidad', 'unidad', 'precio_unitario' y 'monto_neto'."
-        },
-        "ALVAREZ & SANCHEZ": {
-            "nombre": "ALVAREZ & SANCHEZ",
-            "tipo_formato": "factura_desglose_descuentos",
-            "instruccion_prompt": "Analiza esta página de la factura de ALVAREZ & SANCHEZ renglón por renglón. Extrae 'descripcion', 'tamano', 'cantidad', 'unidad', 'precio_unitario', 'descuento_porcentaje' y 'monto_neto'."
-        }
-    }
-    if not loaded_supps or "UNITED BRANDS S A" not in loaded_supps:
-        loaded_supps.update(default_profiles)
-        save_json_file(SUPPLIER_MEMORY_FILE, loaded_supps)
-    st.session_state["supplier_memory"] = loaded_supps
-
-if "master_catalog" not in st.session_state:
-    loaded_master = load_json_file(MASTER_CATALOG_FILE, "dict")
-    if not loaded_master:
-        base_defaults = {
-            "ANTIOQUEÑO TAPA ROJA 750 ML": "7702131234567",
-            "OLD PARR 12 AÑOS 750ML": "7804300120986",
-            "FRONTERA SAUVIGNON BLANC C Y T 750ML": "051497455286"
-        }
-        loaded_master = base_defaults
-        save_json_file(MASTER_CATALOG_FILE, loaded_master)
-    st.session_state["master_catalog"] = loaded_master
-
-if "codigos_manuales_sesion" not in st.session_state:
-    st.session_state["codigos_manuales_sesion"] = {}
-
-if "paginas_procesadas_historial" not in st.session_state:
-    st.session_state["paginas_procesadas_historial"] = set()
-
-if "duplicados_confirmados_sesion" not in st.session_state:
-    st.session_state["duplicados_confirmados_sesion"] = set()
-
 def safe_float(val, default=0.0):
     try:
         if val is None: return default
@@ -176,16 +121,12 @@ def limpiar_nombre_y_extraer_presentacion(proveedor_activo, descripcion_raw, tam
 def parse_empaque_proveedor(proveedor_nombre, unidad_txt="", tamano_txt="", descripcion_txt=""):
     combined = normalizar_texto(f"{unidad_txt} {tamano_txt} {descripcion_txt}")
     
-    # 1. Buscar formato tipo 24X12OZ, 15X65CL
     m_mult = re.search(r'\b(\d+)\s*[xX]\s*\d+', combined)
     if m_mult:
         val = int(m_mult.group(1))
         if val > 0: return val
 
-    # 2. Si la unidad es 700ML, 750ML, 75CL pero en la descripción o factura se compró por caja (cantidad > 1 o importe alto), 
-    # en United Brands las cajas de licor de 700ml/750ml estándar traen 12 botellas.
     if any(m in unidad_txt.upper() for m in ["ML", "CL", "L"]) and "X" not in unidad_txt.upper():
-        # Verificamos si la descripción menciona BOT o si es un destilado/vino en caja
         if "BOT" in combined or "700ML" in combined or "750ML" in combined or "75CL" in combined:
             return 12
         return 1
@@ -194,13 +135,104 @@ def parse_empaque_proveedor(proveedor_nombre, unidad_txt="", tamano_txt="", desc
         if f" {num} " in combined or combined.endswith(f" {num}") or f"/{num}" in combined:
             return num
 
-    return 12 # Default seguro para cajas de licor si no se especifica lo contrario
+    return 12
+
+def buscar_en_catalogo_maestro(nombre_producto, presentacion=""):
+    n_norm = normalizar_texto(nombre_producto)
+    p_norm = normalizar_texto(presentacion)
+    combined_query = normalizar_texto(f"{n_norm} {p_norm}")
+
+    master_dict = load_json_file(MASTER_CATALOG_FILE, "dict")
+    master_norm = {normalizar_texto(k): v for k, v in master_dict.items()}
+
+    if combined_query in master_norm:
+        return clean_ean_code(master_norm[combined_query])
+    if n_norm in master_norm:
+        return clean_ean_code(master_norm[n_norm])
+
+    tokens_query = set(re.findall(r'\b[A-Z0-9]+\b', combined_query))
+    tokens_query = {t for t in tokens_query if len(t) > 1 and t not in {"ML", "CL", "L", "OZ", "CON", "SIN", "EA", "UN"}}
+
+    if not tokens_query:
+        return "S/C"
+
+    mejor_codigo = "S/C"
+    max_coincidentes = 0
+
+    for m_key, m_code in master_norm.items():
+        tokens_master = set(re.findall(r'\b[A-Z0-9]+\b', m_key))
+        comunes = tokens_query.intersection(tokens_master)
+        score = len(comunes)
+        
+        if score > max_coincidentes and score >= 2:
+            max_coincidentes = score
+            mejor_codigo = clean_ean_code(m_code)
+
+    return mejor_codigo if mejor_codigo != "S/C" else "S/C"
+
+# ==========================================
+# GESTIÓN DE PERFILES Y CATÁLOGO
+# ==========================================
+if "supplier_memory" not in st.session_state:
+    loaded_supps = load_json_file(SUPPLIER_MEMORY_FILE, "dict")
+    default_profiles = {
+        "UNITED BRANDS S A": {
+            "nombre": "UNITED BRANDS S A",
+            "tipo_formato": "factura_tabla_united_brands",
+            "instruccion_prompt": "Analiza esta página de la factura de UNITED BRANDS S A renglón por renglón. Extrae 'descripcion', 'tamano', 'cantidad', 'unidad', 'precio_unitario', 'descuento_porcentaje' y 'monto_neto' (Imp. Neto)."
+        },
+        "BEPENSA DOMINICANA SA": {
+            "nombre": "BEPENSA DOMINICANA SA",
+            "tipo_formato": "factura_tique_bepensa",
+            "instruccion_prompt": "Analiza esta página de la factura de BEPENSA DOMINICANA SA renglón por renglón. Extrae 'descripcion', 'tamano', 'cantidad', 'unidad', 'precio_unitario', 'descuento_porcentaje' y 'monto_neto'."
+        },
+        "EL CATADOR": {
+            "nombre": "EL CATADOR",
+            "tipo_formato": "factura_cajas_descuento",
+            "instruccion_prompt": "Analiza esta página de la factura de EL CATADOR renglón por renglón. Extrae 'descripcion', 'tamano', 'cantidad', 'unidad', 'precio_unitario', 'descuento_porcentaje' y 'monto_neto'."
+        },
+        "PRICESMART": {
+            "nombre": "PRICESMART",
+            "tipo_formato": "factura_tique_unidades",
+            "instruccion_prompt": "Analiza esta página del comprobante de PRICESMART renglón por renglón. Extrae 'descripcion', 'tamano', 'cantidad', 'unidad', 'precio_unitario' y 'monto_neto'."
+        },
+        "ALVAREZ & SANCHEZ": {
+            "nombre": "ALVAREZ & SANCHEZ",
+            "tipo_formato": "factura_desglose_descuentos",
+            "instruccion_prompt": "Analiza esta página de la factura de ALVAREZ & SANCHEZ renglón por renglón. Extrae 'descripcion', 'tamano', 'cantidad', 'unidad', 'precio_unitario', 'descuento_porcentaje' y 'monto_neto'."
+        }
+    }
+    if not loaded_supps or "UNITED BRANDS S A" not in loaded_supps:
+        loaded_supps.update(default_profiles)
+        save_json_file(SUPPLIER_MEMORY_FILE, loaded_supps)
+    st.session_state["supplier_memory"] = loaded_supps
+
+if "master_catalog" not in st.session_state:
+    loaded_master = load_json_file(MASTER_CATALOG_FILE, "dict")
+    if not loaded_master:
+        base_defaults = {
+            "ANTIOQUEÑO TAPA ROJA 750 ML": "7702131234567",
+            "OLD PARR 12 AÑOS 750ML": "7804300120986",
+            "FRONTERA SAUVIGNON BLANC C Y T 750ML": "051497455286"
+        }
+        loaded_master = base_defaults
+        save_json_file(MASTER_CATALOG_FILE, loaded_master)
+    st.session_state["master_catalog"] = loaded_master
+
+if "codigos_manuales_sesion" not in st.session_state:
+    st.session_state["codigos_manuales_sesion"] = {}
+
+if "paginas_procesadas_historial" not in st.session_state:
+    st.session_state["paginas_procesadas_historial"] = set()
+
+if "duplicados_confirmados_sesion" not in st.session_state:
+    st.session_state["duplicados_confirmados_sesion"] = set()
 
 st.sidebar.markdown("<h3 style='color: #0284c7;'>⚡ WilPOS Multi-Proveedor</h3>", unsafe_allow_html=True)
 menu_opcion = st.sidebar.radio("Navegación", ["📄 Procesar Factura (Por Página)", "📁 Catálogo Maestro EAN", "🏢 Gestionar Proveedores"])
 
 st.sidebar.markdown("---")
-st.sidebar.markdown("<p style='font-size: 0.8rem; color: #10b981; font-weight: 600;'>🟢 Costos Netos y Empaques Corregidos</p>", unsafe_allow_html=True)
+st.sidebar.markdown("<p style='font-size: 0.8rem; color: #10b981; font-weight: 600;'>🟢 Sistema Operativo Corregido</p>", unsafe_allow_html=True)
 
 if st.sidebar.button("🔄 Reiniciar Historial y Filtros"):
     st.session_state["paginas_procesadas_historial"] = set()
@@ -214,8 +246,8 @@ if st.sidebar.button("🔄 Reiniciar Historial y Filtros"):
 # MÓDULO 1: PROCESAR FACTURA POR PÁGINA
 # ==========================================
 if menu_opcion == "📄 Procesar Factura (Por Página)":
-    st.markdown("<h2>📄 Procesador de Facturas (Cálculo Financiero Exacto)</h2>", unsafe_allow_html=True)
-    st.markdown("<p style='color: #64748b;'>Sube tu factura. El costo unitario se calcula dividiendo el Impuesto Neto (sin ITBIS y con descuento) entre las cajas y el empaque (ej. 12 botellas).</p>", unsafe_allow_html=True)
+    st.markdown("<h2>📄 Procesador de Facturas (Multi-Proveedor)</h2>", unsafe_allow_html=True)
+    st.markdown("<p style='color: #64748b;'>Sube tu factura. El sistema calcula automáticamente los costos unitarios netos y los precios de venta.</p>", unsafe_allow_html=True)
     st.markdown("---")
 
     if "factura_data" not in st.session_state: st.session_state["factura_data"] = None
@@ -309,9 +341,9 @@ if menu_opcion == "📄 Procesar Factura (Por Página)":
                     prompt_unificado = (
                         f"Estás procesando la página {pagina_a_procesar} de una factura del proveedor: '{prov_encontrado}'. "
                         f"Instrucción específica de su perfil: {instruccion_proveedor} "
-                        "Extrae para cada renglón: 'descripcion', 'tamano', 'cantidad' (número de cajas), 'unidad' (ej. 750ml, 24X12OZ), 'precio_unitario', 'descuento_porcentaje' y 'monto_neto' (que es el valor exacto de la columna 'Imp. Neto', es decir, el total de la línea sin ITBIS y con los descuentos ya restados). "
+                        "Extrae 'descripcion', 'tamano', 'cantidad', 'unidad', 'precio_unitario', 'descuento_porcentaje' y 'monto_neto' (Impuesto Neto sin ITBIS y con descuento aplicado). "
                         "Devuelve un JSON puro con esta estructura exacta y llaves en minúscula: "
-                        '{"paginacion": "' + str(pagina_a_procesar) + '", "proveedor_detectado": "' + prov_encontrado + '", "subtotal": 0.0, "itbis": 0.0, "descuentos": 0.0, "total": 0.0, "items": [{"descripcion": "CHIVAS REGAL 12YO BOT 750ML", "tamano": "750ML", "cantidad": 24.0, "unidad": "750ML", "precio_unitario": 1854.00, "descuento_porcentaje": 12.0, "monto_neto": 39156.48}]}. '
+                        '{"paginacion": "' + str(pagina_a_procesar) + '", "proveedor_detectado": "' + prov_encontrado + '", "subtotal": 0.0, "itbis": 0.0, "descuentos": 0.0, "total": 0.0, "items": [{"descripcion": "...", "tamano": "750ML", "cantidad": 1.0, "unidad": "750ML", "precio_unitario": 100.0, "descuento_porcentaje": 0.0, "monto_neto": 100.0}]}. '
                         "Respuesta JSON pura."
                     )
 
@@ -385,9 +417,6 @@ if menu_opcion == "📄 Procesar Factura (Por Página)":
                 p_unit_extraido = safe_float(item.get("precio_unitario"), 0.0)
                 desc_pct = safe_float(item.get("descuento_porcentaje"), 0.0)
 
-                # ==========================================
-                # CÁLCULO FINANCIERO CORREGIDO (IMP. NETO / TOTAL UNIDADES)
-                # ==========================================
                 if monto_neto_linea > 0 and total_unidades > 0:
                     costo_unitario_real = round(monto_neto_linea / total_unidades, 4)
                 elif p_unit_extraido > 0:
