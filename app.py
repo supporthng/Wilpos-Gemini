@@ -76,7 +76,7 @@ if "supplier_memory" not in st.session_state:
         "BEPENSA DOMINICANA SA": {
             "nombre": "BEPENSA DOMINICANA SA",
             "tipo_formato": "factura_tique_bepensa",
-            "instruccion_prompt": "Analiza esta página de la factura de BEPENSA DOMINICANA SA renglón por renglón. Extrae 'descripcion', 'tamano', 'cantidad' (cajas o bultos), 'unidad', 'precio_unitario' (precio neto de la caja sin ITBIS), 'descuento_porcentaje', 'itbis_linea' y 'monto_neto' (subtotal de la línea sin ITBIS)."
+            "instruccion_prompt": "Analiza esta página de la factura de BEPENSA DOMINICANA SA renglón por renglón. Extrae 'descripcion', 'tamano', 'cantidad', 'unidad', 'precio_unitario' (precio de la caja sin ITBIS), 'descuento_porcentaje' y 'monto_neto' (subtotal de la línea sin ITBIS)."
         },
         "EL CATADOR": {
             "nombre": "EL CATADOR",
@@ -165,7 +165,7 @@ def limpiar_nombre_y_extraer_presentacion(proveedor_activo, descripcion_raw, tam
     if "75CL" in presentacion:
         presentacion = "750ML"
 
-    desc_limpia = re.sub(r'\b(CAJA\s*\d*|CJ\s*\d*\s*BOT|\d+\s*X\s*\d+\s*(?:ML|CL|L)|\d+/\s*\d+\s*(?:ML|CL|L|750ML)|750\s*ML|75\s*CL|750ML|75CL|\d+OZ)\b', '', t_norm)
+    desc_limpia = re.sub(r'\b(CAJA\s*\d*|CJ\s*\d*\s*BOT|\d+\s*X\s*\d+\s*(?:ML|CL|L)|\d+/\s*\d+\s*(?:ML|CL|L|750ML)|750\s*ML|75\s*CL|750ML|75CL|\d+OZ|\d+\s*PZAS|\d+\s*PZA)\b', '', t_norm)
     desc_limpia = re.sub(r'\s+', ' ', desc_limpia).strip()
     
     if presentacion != "UN" and presentacion not in desc_limpia:
@@ -176,19 +176,16 @@ def limpiar_nombre_y_extraer_presentacion(proveedor_activo, descripcion_raw, tam
 def parse_empaque_proveedor(proveedor_nombre, unidad_txt="", tamano_txt="", descripcion_txt=""):
     combined = normalizar_texto(f"{unidad_txt} {tamano_txt} {descripcion_txt}")
     
-    m_caj_num = re.search(r'(?:CAJA|CJ|BOX|PZAS|PZA)[\s\-]*(\d+)', combined)
-    if m_caj_num:
-        val = int(m_caj_num.group(1))
+    # 1. Buscar número precedido o seguido de palabras de empaque (PZAS, PZA, CAJA, CJ, BOT)
+    m_pzas = re.search(r'(?:(\d+)\s*(?:PZAS|PZA|BOT|UNIDADES|UN|CAJA|CJ|BOX))|(?:(?:PZAS|PZA|BOT|CAJA|CJ|BOX)[\s\-]*(\d+))', combined)
+    if m_pzas:
+        val = int(m_pzas.group(1) or m_pzas.group(2))
         if val > 0: return val
 
-    m_slash = re.search(r'\b(\d+)\s*/\s*\d+\s*(?:ML|L|OZ|CL)', combined)
-    if m_slash:
-        val = int(m_slash.group(1))
-        if val > 1: return val
-
-    if "12" in combined: return 12
-    if "24" in combined: return 24
-    if "6" in combined: return 6
+    # 2. Buscar números aislados comunes en bebidas (12, 24, 6)
+    for num in [12, 24, 6, 4]:
+        if f" {num} " in combined or combined.endswith(f" {num}") or f"/{num}" in combined:
+            return num
 
     return 1
 
@@ -229,7 +226,7 @@ st.sidebar.markdown("<h3 style='color: #0284c7;'>⚡ WilPOS Multi-Proveedor</h3>
 menu_opcion = st.sidebar.radio("Navegación", ["📄 Procesar Factura (Por Página)", "📁 Catálogo Maestro EAN", "🏢 Gestionar Proveedores"])
 
 st.sidebar.markdown("---")
-st.sidebar.markdown("<p style='font-size: 0.8rem; color: #10b981; font-weight: 600;'>🟢 Costos Netos sin ITBIS Blindados</p>", unsafe_allow_html=True)
+st.sidebar.markdown("<p style='font-size: 0.8rem; color: #10b981; font-weight: 600;'>🟢 Detección de Empaque 'Pzas' Activa</p>", unsafe_allow_html=True)
 
 if st.sidebar.button("🔄 Reiniciar Historial y Filtros"):
     st.session_state["paginas_procesadas_historial"] = set()
@@ -243,8 +240,8 @@ if st.sidebar.button("🔄 Reiniciar Historial y Filtros"):
 # MÓDULO 1: PROCESAR FACTURA POR PÁGINA
 # ==========================================
 if menu_opcion == "📄 Procesar Factura (Por Página)":
-    st.markdown("<h2>📄 Procesador de Facturas (Cálculo de Costo Unitario Neto)</h2>", unsafe_allow_html=True)
-    st.markdown("<p style='color: #64748b;'>Sube tu factura. El costo unitario se calcula estrictamente dividiendo el subtotal neto de la caja (sin ITBIS) entre el empaque.</p>", unsafe_allow_html=True)
+    st.markdown("<h2>📄 Procesador de Facturas (Cálculo de Costo Unitario Exacto)</h2>", unsafe_allow_html=True)
+    st.markdown("<p style='color: #64748b;'>Sube tu factura. El sistema detecta automáticamente el empaque (ej. 12 Pzas) para dividir el costo de la caja de forma perfecta.</p>", unsafe_allow_html=True)
     st.markdown("---")
 
     if "factura_data" not in st.session_state: st.session_state["factura_data"] = None
@@ -338,10 +335,9 @@ if menu_opcion == "📄 Procesar Factura (Por Página)":
                     prompt_unificado = (
                         f"Estás procesando la página {pagina_a_procesar} de una factura del proveedor: '{prov_encontrado}'. "
                         f"Instrucción específica de su perfil: {instruccion_proveedor} "
-                        "Extrae 'descripcion', 'tamano', 'cantidad' (cantidad de cajas o bultos), 'unidad' (ej. 12 PZAS), 'precio_unitario' (el precio unitario de la caja/paquete SIN ITBIS), 'descuento_porcentaje' y 'monto_neto' (subtotal de la línea SIN ITBIS). "
-                        "IMPORTANTE: No mezcles el ITBIS con el precio unitario ni con el monto neto. "
+                        "Extrae 'descripcion' (ej. 'Coca Cola 500Ml Nrp 12 Pzas'), 'tamano', 'cantidad' (número de cajas o paquetes), 'unidad' (ej. '12 PZAS'), 'precio_unitario' (el precio neto de la caja sin ITBIS), 'descuento_porcentaje' y 'monto_neto' (subtotal de la línea sin ITBIS). "
                         "Devuelve un JSON puro con esta estructura exacta y llaves en minúscula: "
-                        '{"paginacion": "' + str(pagina_a_procesar) + '", "proveedor_detectado": "' + prov_encontrado + '", "subtotal": 0.0, "itbis": 0.0, "descuentos": 0.0, "total": 0.0, "items": [{"descripcion": "...", "tamano": "500ML", "cantidad": 10.0, "unidad": "12 PZAS", "precio_unitario": 344.07, "descuento_porcentaje": 0.0, "monto_neto": 3440.70}]}. '
+                        '{"paginacion": "' + str(pagina_a_procesar) + '", "proveedor_detectado": "' + prov_encontrado + '", "subtotal": 0.0, "itbis": 0.0, "descuentos": 0.0, "total": 0.0, "items": [{"descripcion": "Coca Cola 500Ml Nrp 12 Pzas", "tamano": "500ML", "cantidad": 10.0, "unidad": "12 PZAS", "precio_unitario": 344.07, "descuento_porcentaje": 0.0, "monto_neto": 3440.70}]}. '
                         "Respuesta JSON pura."
                     )
 
@@ -416,20 +412,17 @@ if menu_opcion == "📄 Procesar Factura (Por Página)":
                 monto_neto_linea = safe_float(item.get("monto_neto"), 0.0)
 
                 # ==========================================
-                # CÁLCULO ESTRICTO DE COSTO UNITARIO NETO (SIN ITBIS)
+                # CÁLCULO ESTRICTO DE COSTO UNITARIO NETO (POR BOTELLA)
                 # ==========================================
                 if p_unit_extraido > 0:
-                    # Precio de la caja neto con descuento aplicado, dividido entre el empaque
                     precio_neto_caja = p_unit_extraido * (1 - (desc_pct / 100.0))
                     costo_unitario_real = round(precio_neto_caja / empaque, 4) if empaque > 1 else precio_neto_caja
                 elif monto_neto_linea > 0 and total_unidades > 0:
-                    # Monto neto total de la línea dividido entre el total de unidades
                     costo_unitario_real = round(monto_neto_linea / total_unidades, 4)
                 else:
                     costo_unitario_real = 0.0
 
                 if costo_unitario_real > 0:
-                    # El precio de venta se calcula sobre el costo unitario neto (sin ITBIS), aplicándole la utilidad y sumando el ITBIS (18%) al final
                     precio_con_utilidad = costo_unitario_real * (1 + (margen_utilidad / 100.0))
                     precio_venta = round_to_nearest_5(precio_con_utilidad * 1.18)
                 else:
