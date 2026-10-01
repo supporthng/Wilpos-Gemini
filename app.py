@@ -348,4 +348,266 @@ if menu_opcion == "📄 Procesar Factura (Por Página)":
                     
                     raw_text = response.text.strip()
                     if raw_text.startswith("```json"): raw_text = raw_text[7:]
-                    if raw_text.endswith("
+                    if raw_text.endswith("```"): raw_text = raw_text[:-3]
+                    
+                    parsed_json = json.loads(raw_text.strip())
+
+                    st.session_state["paginas_procesadas_historial"].add(firma_pagina)
+                    st.session_state["factura_data"] = parsed_json
+                    st.session_state["prov_activo"] = prov_encontrado
+                    
+                    st.success(f"🎯 **¡Página #{pagina_a_procesar} procesada con éxito!** Proveedor: **{prov_encontrado}** ({len(parsed_json.get('items', []))} renglones).")
+                except Exception as e:
+                    st.error(f"⚠️ Error al procesar página: {str(e)}")
+    st.markdown('</div>', unsafe_allow_html=True)
+
+    if st.session_state["factura_data"] is not None:
+        data_resp = st.session_state["factura_data"]
+        items = data_resp.get("items", [])
+        prov_actual = st.session_state.get("prov_activo", "GENERAL")
+        pag_info = str(data_resp.get("paginacion", "1"))
+        
+        subtotal_val = safe_float(data_resp.get("subtotal"))
+        itbis_val = safe_float(data_resp.get("itbis"))
+        total_descuentos = safe_float(data_resp.get("descuentos"))
+        total_val = safe_float(data_resp.get("total"))
+
+        total_importe_neto = sum(safe_float(i.get("monto_neto") or (safe_float(i.get("precio_unitario")) * safe_float(i.get("cantidad")))) for i in items)
+        if subtotal_val == 0.0 and items: subtotal_val = total_importe_neto
+        if total_val == 0.0 and items: total_val = subtotal_val * 1.18
+
+        st.markdown(f"### 📊 Dashboard Financiero | Proveedor: {prov_actual} (Pág. {pag_info})")
+        
+        col_m1, col_m2, col_m3, col_m4 = st.columns(4)
+        with col_m1: st.metric(label="Subtotal / Bruto", value=f"${subtotal_val:,.2f}")
+        with col_m2: st.metric(label="ITBIS Total", value=f"${itbis_val:,.2f}")
+        with col_m3: st.metric(label="Descuentos", value=f"${total_descuentos:,.2f}")
+        with col_m4: st.metric(label="Total General", value=f"${total_val:,.2f}")
+            
+        st.markdown("---")
+
+        if items:
+            st.markdown(f"### 📋 Detalle de Renglones Extraídos ({len(items)} ítems)")
+            
+            preview_rows = []
+            lista_codigos_pagina = []
+            master_dict = load_json_file(MASTER_CATALOG_FILE, "dict")
+            nombres_maestro_lista = list(master_dict.keys())
+
+            for idx, item in enumerate(items, start=1):
+                raw_desc = str(item.get("descripcion", ""))
+                raw_tam = str(item.get("tamano", ""))
+                unidad = str(item.get("unidad", ""))
+                
+                nombre_limpio, presentacion_limpia = limpiar_nombre_y_extraer_presentacion(prov_actual, raw_desc, raw_tam)
+                
+                cant_compra = safe_float(item.get("cantidad"), 1.0)
+                empaque = parse_empaque_proveedor(prov_actual, unidad, raw_tam, raw_desc)
+                total_unidades = int(cant_compra * empaque)
+
+                codigo_final = buscar_en_catalogo_maestro(nombre_limpio, presentacion_limpia)
+
+                if nombre_limpio in st.session_state["codigos_manuales_sesion"]:
+                    codigo_final = st.session_state["codigos_manuales_sesion"][nombre_limpio]
+
+                p_unit_extraido = safe_float(item.get("precio_unitario"), 0.0)
+                desc_pct = safe_float(item.get("descuento_porcentaje"), 0.0)
+                monto_neto_linea = safe_float(item.get("monto_neto"), 0.0)
+
+                # ==========================================
+                # CÁLCULO ESTRICTO DE COSTO UNITARIO NETO (POR UNIDAD/LATA)
+                # ==========================================
+                if p_unit_extraido > 0:
+                    precio_neto_caja = p_unit_extraido * (1 - (desc_pct / 100.0))
+                    costo_unitario_real = round(precio_neto_caja / empaque, 4) if empaque > 1 else precio_neto_caja
+                elif monto_neto_linea > 0 and total_unidades > 0:
+                    costo_unitario_real = round(monto_neto_linea / total_unidades, 4)
+                else:
+                    costo_unitario_real = 0.0
+
+                if costo_unitario_real > 0:
+                    precio_con_utilidad = costo_unitario_real * (1 + (margen_utilidad / 100.0))
+                    precio_venta = round_to_nearest_5(precio_con_utilidad * 1.18)
+                else:
+                    precio_venta = 0.0
+
+                lista_codigos_pagina.append({
+                    "idx": idx, "nombre": nombre_limpio, "presentacion": presentacion_limpia,
+                    "codigo": codigo_final, "cant_compra": cant_compra, "empaque": empaque,
+                    "total_unidades": total_unidades, "costo_real": costo_unitario_real, "precio_venta": precio_venta
+                })
+
+            # ==========================================
+            # AUDITORÍA Y CORRECCIÓN INTELIGENTE DE DUPLICADOS
+            # ==========================================
+            codigos_vistos = {}
+            duplicados_encontrados = []
+            for row_item in lista_codigos_pagina:
+                c_code = row_item["codigo"]
+                c_name = row_item["nombre"]
+                if c_code != "S/C" and c_name not in st.session_state["duplicados_confirmados_sesion"]:
+                    if c_code in codigos_vistos:
+                        duplicados_encontrados.append((c_code, codigos_vistos[c_code], c_name))
+                    else:
+                        codigos_vistos[c_code] = c_name
+
+            if duplicados_encontrados:
+                st.warning("⚠️ **¡Atención! Se detectaron códigos EAN repetidos en esta página:**")
+                for cod_dup, p1, p2 in duplicados_encontrados:
+                    st.markdown("---")
+                    st.markdown(f"🔹 **Código compartido:** `{cod_dup}` asignado a: `📊 {p1}` y `📊 {p2}`")
+                    
+                    prod_legitimo = st.selectbox(
+                        f"✅ ¿A cuál de estos dos productos SÍ le pertenece el código {cod_dup}?",
+                        [p1, p2],
+                        key=f"dueño_legitimo_{cod_dup}"
+                    )
+                    
+                    prod_erroneo = p2 if prod_legitimo == p1 else p1
+                    
+                    st.markdown(f"🔍 El producto **{prod_erroneo}** tiene el código erróneo. Asigne su código correcto:")
+                    
+                    col_dc1, col_dc2 = st.columns([2, 1])
+                    with col_dc1:
+                        nuevo_c_maestro = st.selectbox(
+                            f"Buscar código correcto en Catálogo Maestro para [{prod_erroneo}]",
+                            ["-- Seleccionar del Maestro --"] + nombres_maestro_lista,
+                            key=f"maestro_corregir_{cod_dup}_{prod_erroneo}"
+                        )
+                    with col_dc2:
+                        nuevo_c_manual = st.text_input(
+                            f"O ingrese código manual",
+                            key=f"manual_corregir_{cod_dup}_{prod_erroneo}",
+                            placeholder="EAN correcto..."
+                        )
+                    
+                    if st.button(f"💾 Guardar y Ocultar Conflicto para [{prod_erroneo}]", key=f"btn_aplicar_corr_{cod_dup}_{prod_erroneo}"):
+                        asignar_codigo = "S/C"
+                        if nuevo_c_maestro != "-- Seleccionar del Maestro --":
+                            asignar_codigo = master_dict[nuevo_c_maestro]
+                        elif nuevo_c_manual and len(nuevo_c_manual.strip()) >= 7:
+                            asignar_codigo = clean_ean_code(nuevo_c_manual)
+                        
+                        if asignar_codigo != "S/C":
+                            st.session_state["duplicados_confirmados_sesion"].add(prod_legitimo)
+                            st.session_state["codigos_manuales_sesion"][prod_erroneo] = asignar_codigo
+                            master_dict[prod_erroneo] = asignar_codigo
+                            save_json_file(MASTER_CATALOG_FILE, master_dict)
+                            st.success(f"¡Conflicto resuelto! El producto **{prod_legitimo}** quedó confirmado y **{prod_erroneo}** fue actualizado.")
+                            time.sleep(0.5)
+                            st.rerun()
+            else:
+                st.success("✅ **Auditoría de Códigos:** No hay conflictos de códigos EAN en esta página.")
+
+            wb = openpyxl.Workbook()
+            ws = wb.active
+            ws.title = "Inventario"
+            ws.append(['Nombre', 'Presentación', 'Código Barra', 'Categoría', 'Tipo', 'Precio Venta', 'Costo Unitario', 'Stock (Unidades)', 'ITBIS', 'Unidad Medida', 'Cantidad Empaque'])
+
+            table_display_rows = []
+            for row_item in lista_codigos_pagina:
+                idx = row_item["idx"]
+                nombre_limpio = row_item["nombre"]
+                presentacion_limpia = row_item["presentacion"]
+                display_codigo = row_item["codigo"]
+
+                if nombre_limpio in st.session_state["codigos_manuales_sesion"]:
+                    display_codigo = st.session_state["codigos_manuales_sesion"][nombre_limpio]
+
+                if display_codigo == "S/C":
+                    st.markdown(f"⚠️ **{nombre_limpio} ({presentacion_limpia})** sin código EAN asignado.")
+                    col_c1, col_c2, col_c3 = st.columns([2, 1, 1])
+                    with col_c1:
+                        sel_maestro = st.selectbox("Seleccionar Maestro", ["-- Buscar en Maestro --"] + nombres_maestro_lista, key=f"sel_m_{idx}_{nombre_limpio}")
+                        if sel_maestro != "-- Buscar en Maestro --":
+                            display_codigo = master_dict[sel_maestro]
+                    with col_c2:
+                        codigo_manual_input = st.text_input("Código manual", key=f"man_{idx}_{nombre_limpio}", placeholder="EAN...")
+                        if codigo_manual_input and len(codigo_manual_input.strip()) >= 7:
+                            clean_m = clean_ean_code(codigo_manual_input)
+                            if clean_m != "S/C": display_codigo = clean_m
+                    with col_c3:
+                        st.markdown("<br>", unsafe_allow_html=True)
+                        q_b = f"EAN barcode {nombre_limpio} {presentacion_limpia}".replace(" ", "+")
+                        st.markdown(f"[🌐 Buscar](https://www.google.com/search?q={q_b})", unsafe_allow_html=True)
+
+                    if display_codigo != "S/C":
+                        if st.button("💾 Guardar", key=f"btn_sv_{idx}_{nombre_limpio}"):
+                            st.session_state["codigos_manuales_sesion"][nombre_limpio] = display_codigo
+                            master_dict[nombre_limpio] = display_codigo
+                            save_json_file(MASTER_CATALOG_FILE, master_dict)
+                            st.rerun()
+
+                table_display_rows.append({
+                    "No.": idx, "Producto": nombre_limpio, "Presentación": presentacion_limpia, 
+                    "Código EAN": display_codigo, "Cant. Compra": row_item["cant_compra"], "Empaque": row_item["empaque"], 
+                    "Stock Unidades": row_item["total_unidades"], "Costo Unit. Real": row_item["costo_real"], "Precio Venta": row_item["precio_venta"]
+                })
+
+                ws.append([
+                    nombre_limpio, presentacion_limpia, str(display_codigo), prov_actual, "producto",
+                    row_item["precio_venta"], row_item["costo_real"], row_item["total_unidades"], 0.18, "unidad", row_item["empaque"]
+                ])
+
+            st.dataframe(pd.DataFrame(table_display_rows), use_container_width=True, hide_index=True)
+
+            excel_buffer = io.BytesIO()
+            wb.save(excel_buffer)
+            st.download_button(
+                label=f"📥 Descargar Excel - {prov_actual} (Pág. {pag_info})",
+                data=excel_buffer.getvalue(),
+                file_name=f"Inventario_Master_{prov_actual.replace(' ', '_')}_Pag_{pag_info}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            )
+
+# ==========================================
+# MÓDULO 2: CATÁLOGO MAESTRO EAN
+# ==========================================
+elif menu_opcion == "📁 Catálogo Maestro EAN":
+    st.markdown("<h2>📁 Gestión, Carga y Limpieza del Archivo Maestro EAN</h2>", unsafe_allow_html=True)
+    st.markdown("<p style='color: #64748b;'>Sube tu archivo masivo o agrega productos individualmente.</p>", unsafe_allow_html=True)
+    st.markdown("---")
+
+    master_dict = load_json_file(MASTER_CATALOG_FILE, "dict")
+
+    st.markdown('<div class="card-container">', unsafe_allow_html=True)
+    st.markdown("### ➕ Agregar Producto Individual Manualmente")
+    with st.form("form_agregar_maestro_individual"):
+        col_fm1, col_fm2 = st.columns([2, 1])
+        with col_fm1:
+            nuevo_nombre_prod = st.text_input("Nombre / Descripción Oficial del Producto", placeholder="EJ. MONSTER ENERGY 473ML...")
+        with col_fm2:
+            nuevo_codigo_prod = st.text_input("Código EAN / SAP Oficial", placeholder="EJ. 7461234567890...")
+        
+        btn_submit_maestro = st.form_submit_button("💾 Guardar Producto en Archivo Maestro")
+        if btn_submit_maestro:
+            clean_n = nuevo_nombre_prod.upper().strip()
+            clean_c = clean_ean_code(nuevo_codigo_prod)
+            if clean_n and clean_c != "S/C":
+                master_dict[clean_n] = clean_c
+                save_json_file(MASTER_CATALOG_FILE, master_dict)
+                st.success(f"✅ ¡Producto **{clean_n}** guardado exitosamente con el código **{clean_c}**!")
+                time.sleep(0.5)
+                st.rerun()
+            else:
+                st.error("⚠️ Por favor ingresa un nombre de producto válido y un código EAN/SAP correcto (de 7 a 14 dígitos).")
+    st.markdown('</div>', unsafe_allow_html=True)
+
+    st.markdown("---")
+
+    if master_dict:
+        st.markdown(f"### 📋 Productos Registrados en el Archivo Maestro ({len(master_dict):,} registros)")
+        df_show = pd.DataFrame([{"Producto / Descripción": k, "Código EAN/SAP Oficial": v} for k, v in master_dict.items()])
+        st.dataframe(df_show, use_container_width=True, hide_index=True)
+
+# ==========================================
+# MÓDULO 3: GESTIONAR PROVEEDORES
+# ==========================================
+elif menu_opcion == "🏢 Gestionar Proveedores":
+    st.markdown("<h2>🏢 Configuración de Perfiles Independientes por Proveedor</h2>", unsafe_allow_html=True)
+    st.markdown("---")
+    supps = st.session_state["supplier_memory"]
+    if not isinstance(supps, dict): supps = {}
+    for p_name, p_data in list(supps.items()):
+        with st.expander(f"🏢 Perfil Proveedor: {p_name}"):
+            st.write(p_data)
