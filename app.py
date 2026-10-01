@@ -151,11 +151,6 @@ def parse_empaque_proveedor(proveedor_nombre, unidad_txt="", tamano_txt="", desc
     return 1
 
 def buscar_en_catalogo_maestro(nombre_producto, presentacion=""):
-    """
-    Búsqueda inteligente por similitud de tokens y palabras clave. 
-    Garantiza que si el producto existe en el maestro (aunque tenga pequeñas variaciones de escritura), 
-    sea reconocido exitosamente exigiendo siempre la misma presentación (volumen).
-    """
     n_norm = normalizar_texto(nombre_producto)
     p_norm = normalizar_texto(presentacion)
     
@@ -163,15 +158,12 @@ def buscar_en_catalogo_maestro(nombre_producto, presentacion=""):
     if not master_dict:
         return "S/C"
 
-    # 1. Coincidencia Exacta Plena
     query_completa = f"{n_norm} {p_norm}".strip()
     for m_key, m_code in master_dict.items():
         m_key_up = normalizar_texto(m_key)
         if m_key_up == query_completa:
             return clean_ean_code(m_code)
 
-    # 2. Búsqueda por Similitud Inteligente de Tokens
-    # Extraemos palabras clave significativas (ignorando conectores y medidas sueltas)
     tokens_query = set(re.findall(r'\b[A-Z0-9]+\b', n_norm))
     tokens_query = {t for t in tokens_query if len(t) > 1 and t not in {"ML", "CL", "L", "OZ", "BOT", "LATA", "UN", "YO"}}
     if not tokens_query:
@@ -183,9 +175,7 @@ def buscar_en_catalogo_maestro(nombre_producto, presentacion=""):
     for m_key, m_code in master_dict.items():
         m_key_up = normalizar_texto(m_key)
         
-        # VALIDACIÓN DE SEGURIDAD: La presentación en el maestro debe coincidir exactamente (ej. 700ML nunca con 1000ML)
         if p_norm and p_norm not in m_key_up:
-            # Comprobación flexible de equivalencias comunes de volumen
             equivalente = False
             if "1000ML" in p_norm and ("1L" in m_key_up or "1000 ML" in m_key_up): equivalente = True
             elif "750ML" in p_norm and ("75 CL" in m_key_up or "750 ML" in m_key_up): equivalente = True
@@ -196,7 +186,6 @@ def buscar_en_catalogo_maestro(nombre_producto, presentacion=""):
         comunes = tokens_query.intersection(tokens_master)
         score = len(comunes)
 
-        # Si comparte al menos 2 o más palabras clave significativas (ej. CHIVAS REGAL, 12, etc.)
         if score > max_coincidentes and score >= min(2, len(tokens_query)):
             max_coincidentes = score
             mejor_codigo = clean_ean_code(m_code)
@@ -265,7 +254,7 @@ st.sidebar.markdown("<h3 style='color: #0284c7;'>⚡ WilPOS Multi-Proveedor</h3>
 menu_opcion = st.sidebar.radio("Navegación", ["📄 Procesar Factura (Por Página)", "📁 Catálogo Maestro EAN", "🏢 Gestionar Proveedores"])
 
 st.sidebar.markdown("---")
-st.sidebar.markdown("<p style='font-size: 0.8rem; color: #10b981; font-weight: 600;'>🟢 Similitud Inteligente Activa</p>", unsafe_allow_html=True)
+st.sidebar.markdown("<p style='font-size: 0.8rem; color: #10b981; font-weight: 600;'>🟢 Memorias de Proveedores Seguras</p>", unsafe_allow_html=True)
 
 if st.sidebar.button("🔄 Reiniciar Historial y Filtros"):
     st.session_state["paginas_procesadas_historial"] = set()
@@ -280,7 +269,7 @@ if st.sidebar.button("🔄 Reiniciar Historial y Filtros"):
 # ==========================================
 if menu_opcion == "📄 Procesar Factura (Por Página)":
     st.markdown("<h2>📄 Procesador de Facturas (Multi-Proveedor)</h2>", unsafe_allow_html=True)
-    st.markdown("<p style='color: #64748b;'>Sube tu factura. El sistema empareja inteligentemente los productos existentes en tu maestro.</p>", unsafe_allow_html=True)
+    st.markdown("<p style='color: #64748b;'>Sube tu factura. El sistema recuerda los perfiles y formatos de cada proveedor registrado.</p>", unsafe_allow_html=True)
     st.markdown("---")
 
     if "factura_data" not in st.session_state: st.session_state["factura_data"] = None
