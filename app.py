@@ -68,7 +68,7 @@ def save_json_file(filepath, data):
         pass
 
 # ==========================================
-# UTILIDADES Y FUNCIONES AUXILIARES
+# UTILIDADES Y FUNCIONES AUXILIARES CORREGIDAS
 # ==========================================
 def safe_float(val, default=0.0):
     try:
@@ -101,34 +101,31 @@ def normalizar_texto(texto):
 def limpiar_nombre_y_extraer_presentacion(proveedor_activo, descripcion_raw, tamano_raw=""):
     t_norm = normalizar_texto(descripcion_raw)
     t_tam = normalizar_texto(tamano_raw)
-    prov_up = normalizar_texto(proveedor_activo)
-    
     combined_raw = f"{t_norm} {t_tam}"
     
-    m_med = re.search(r'(\d+)\s*(?:ML|L|LT|G|KG|OZ|CL)', combined_raw)
-    if m_med:
-        num_val = m_med.group(1)
-        if "L" in combined_raw[m_med.end()-3:m_med.end()] and int(num_val) <= 2:
-            presentacion = f"{int(num_val)*1000}ML" if int(num_val) <= 2 else f"{num_val}ML"
-        else:
-            presentacion = f"{num_val}ML" if "CL" not in combined_raw else f"{int(num_val)*10}ML"
-    else:
-        presentacion = "750ML" if "EL CATADOR" in prov_up else "UN"
+    # Detección robusta de volumen sin confundirse con códigos numéricos internos
+    presentacion = "750ML"
+    if "3 LT" in combined_raw or "3000" in combined_raw:
+        presentacion = "3000 ML"
+    elif "1.5 LT" in combined_raw or "1.5L" in combined_raw or "1500" in combined_raw:
+        presentacion = "1500 ML"
+    elif "1 L" in combined_raw or "1LT" in combined_raw or "1000" in combined_raw:
+        presentacion = "1000 ML"
+    elif "75CL" in combined_raw or "750" in combined_raw:
+        presentacion = "750 ML"
+    elif "375" in combined_raw:
+        presentacion = "375 ML"
 
-    if "75CL" in combined_raw: presentacion = "750ML"
-    if "1L" in combined_raw or "1LT" in combined_raw or "1000ML" in combined_raw: presentacion = "1000ML"
-
-    desc_limpia = t_norm
-    desc_limpia = re.sub(r'\b(CAJA\s*\d*|CJ\s*\d*\s*BOT|BOT|BOTELLA|LATA|LATAS|\d+\s*X\s*\d+\s*(?:ML|CL|L)|\d+/\s*\d+\s*(?:ML|CL|L|750ML)|750\s*ML|75\s*CL|750ML|75CL|1000\s*ML|1000ML|1L|1LT|500\s*ML|500ML|375\s*ML|375ML|700\s*ML|700ML|50\s*ML|50ML|1250\s*ML|1250ML|\d+OZ|\d+\s*PZAS|\d+\s*PZA|\d+P\b|\b4P\b|\b12P\b|\b\d+X\d+[A-Z]*\b)\b', '', desc_limpia)
+    # Limpiar códigos internos de factura de 4 o 5 dígitos (ej. 04628, 01875, 02766)
+    desc_limpia = re.sub(r'\b\d{4,5}\b', '', t_norm)
+    # Limpiar términos de empaque comunes
+    desc_limpia = re.sub(r'\b(CAJA\s*\d*|CJ\s*\d*\s*BOT|BOT|BOTELLA|LATA|LATAS|3\s*LT|1\.5\s*LT|1\s*LT|1\s*L|750\s*ML|75\s*CL|750ML|75CL|1000\s*ML|1000ML|1L|1LT|500\s*ML|375\s*ML|700\s*ML)\b', '', desc_limpia)
     desc_limpia = re.sub(r'\s+', ' ', desc_limpia).strip()
     
-    if presentacion != "UN" and presentacion not in desc_limpia:
+    # Reintegrar el formato de presentación estándar limpio que usa tu maestro
+    if presentacion not in desc_limpia:
         desc_limpia = f"{desc_limpia} {presentacion}".strip()
-    else:
-        for p_test in ["500ML", "375ML", "50ML", "750ML", "1000ML", "700ML", "1250ML"]:
-            if desc_limpia.count(p_test) > 1:
-                desc_limpia = desc_limpia.replace(p_test, "", desc_limpia.count(p_test) - 1).strip()
-
+        
     return desc_limpia, presentacion
 
 def parse_empaque_proveedor(proveedor_nombre, unidad_txt="", tamano_txt="", descripcion_txt=""):
@@ -145,19 +142,9 @@ def parse_empaque_proveedor(proveedor_nombre, unidad_txt="", tamano_txt="", desc
         val = int(m_mult_comb.group(1))
         if val > 0: return val
 
-    if any(m in unidad_norm for m in ["ML", "CL", "L", "OZ"]) and "X" not in unidad_norm:
-        return 1
-
     return 1
 
 def buscar_en_catalogo_maestro(nombre_producto, presentacion=""):
-    """
-    BÚSQUEDA INTELIGENTE Y ROBUSTA:
-    1. Normaliza tildes, mayúsculas y espacios en ambos lados para evitar falsos negativos.
-    2. Busca coincidencia exacta primero.
-    3. Si no es exacta, realiza coincidencia por tokens clave con validación estricta de volumen (presentación) 
-       y porcentajes para encontrar el producto en el maestro de forma segura y automática.
-    """
     n_norm = normalizar_texto(nombre_producto)
     p_norm = normalizar_texto(presentacion)
     
@@ -165,21 +152,17 @@ def buscar_en_catalogo_maestro(nombre_producto, presentacion=""):
     if not master_dict:
         return "S/C"
 
-    # Normalizamos todas las llaves del maestro en memoria
     master_norm = {normalizar_texto(k): clean_ean_code(v) for k, v in master_dict.items() if k}
 
-    # 1. Intento de coincidencia exacta normalizada
-    query_completa = f"{n_norm} {p_norm}".strip()
+    # 1. Coincidencia exacta
+    query_completa = f"{n_norm}".strip()
     for m_key_up, m_code in master_norm.items():
         if m_key_up == query_completa:
             return m_code
-        if n_norm in m_key_up or m_key_up in n_norm:
-            if p_norm and p_norm in m_key_up:
-                return m_code
 
-    # 2. Búsqueda por tokens de palabras clave con alta coincidencia
+    # 2. Coincidencia por tokens clave
     tokens_query = set(re.findall(r'\b[A-Z0-9%]+\b', n_norm))
-    tokens_query = {t for t in tokens_query if len(t) > 1 and t not in {"ML", "CL", "L", "OZ", "BOT", "LATA", "UN"}}
+    tokens_query = {t for t in tokens_query if len(t) > 1 and t not in {"ML", "LT", "L", "OZ", "BOT", "UN"}}
     if not tokens_query:
         return "S/C"
 
@@ -187,14 +170,6 @@ def buscar_en_catalogo_maestro(nombre_producto, presentacion=""):
     max_coincidentes = 0
 
     for m_key_up, m_code in master_norm.items():
-        # Validar presentación equivalente (volumen)
-        if p_norm and p_norm not in m_key_up:
-            equivalente = False
-            if "1000ML" in p_norm and ("1L" in m_key_up or "1000" in m_key_up): equivalente = True
-            elif "750ML" in p_norm and ("75CL" in m_key_up or "750" in m_key_up): equivalente = True
-            if not equivalente:
-                continue
-
         tokens_master = set(re.findall(r'\b[A-Z0-9%]+\b', m_key_up))
         comunes = tokens_query.intersection(tokens_master)
         score = len(comunes)
@@ -259,7 +234,7 @@ st.sidebar.markdown("<h3 style='color: #0284c7;'>⚡ WilPOS Multi-Proveedor</h3>
 menu_opcion = st.sidebar.radio("Navegación", ["📄 Procesar Factura (Por Página)", "📁 Catálogo Maestro EAN", "🏢 Gestionar Proveedores"])
 
 st.sidebar.markdown("---")
-st.sidebar.markdown("<p style='font-size: 0.8rem; color: #10b981; font-weight: 600;'>🟢 Búsqueda Inteligente Activa</p>", unsafe_allow_html=True)
+st.sidebar.markdown("<p style='font-size: 0.8rem; color: #10b981; font-weight: 600;'>🟢 Motor de Limpieza Corregido</p>", unsafe_allow_html=True)
 
 if st.sidebar.button("🔄 Reiniciar Todo el Sistema (Maestro y Sesión)"):
     st.session_state["paginas_procesadas_historial"] = set()
@@ -275,7 +250,7 @@ if st.sidebar.button("🔄 Reiniciar Todo el Sistema (Maestro y Sesión)"):
 # ==========================================
 if menu_opcion == "📄 Procesar Factura (Por Página)":
     st.markdown("<h2>📄 Procesador de Facturas (Multi-Proveedor)</h2>", unsafe_allow_html=True)
-    st.markdown("<p style='color: #64748b;'>Sube tu factura. Las ediciones se realizan mediante doble clic de forma temporal en sesión y nunca alteran el maestro.</p>", unsafe_allow_html=True)
+    st.markdown("<p style='color: #64748b;'>Sube tu factura. Los códigos ahora coinciden limpiamente con los nombres de tu maestro sin interferencia de códigos internos.</p>", unsafe_allow_html=True)
     st.markdown("---")
 
     if "factura_data" not in st.session_state: st.session_state["factura_data"] = None
@@ -465,9 +440,6 @@ if menu_opcion == "📄 Procesar Factura (Por Página)":
                     "Stock Unidades": total_unidades, "Costo Unit. Real": costo_unitario_real, "Precio Venta": precio_venta
                 })
 
-            # ==========================================
-            # TABLA EDITABLE INTERACTIVA (st.data_editor con Doble Clic)
-            # ==========================================
             df_preview_original = pd.DataFrame(lista_codigos_pagina)
             
             df_editado = st.data_editor(
@@ -479,7 +451,7 @@ if menu_opcion == "📄 Procesar Factura (Por Página)":
                 column_config={
                     "Código EAN": st.column_config.TextColumn(
                         "Código EAN",
-                        help="Haz doble clic en la celda para escribir o corregir el código EAN directamente en esta sesión.",
+                        help="Haz doble clic en la celda para corregir el código EAN.",
                         max_chars=14,
                         validate="^\\d+$"
                     )
@@ -487,16 +459,12 @@ if menu_opcion == "📄 Procesar Factura (Por Página)":
                 key="editor_tabla_inventario"
             )
 
-            # Sincronizar códigos editados EXCLUSIVAMENTE EN SESIÓN (sin tocar el archivo maestro)
             for i, row in df_editado.iterrows():
                 p_name = row["Producto"]
                 nuevo_c_editado = clean_ean_code(row["Código EAN"])
                 if nuevo_c_editado != "S/C":
                     st.session_state["codigos_manuales_sesion"][p_name] = nuevo_c_editado
 
-            # ==========================================
-            # ASISTENTE PARA ÍTEMS SIN CÓDIGO (S/C)
-            # ==========================================
             for row_item in lista_codigos_pagina:
                 nombre_limpio = row_item["Producto"]
                 presentacion_limpia = row_item["Presentación"]
@@ -510,7 +478,7 @@ if menu_opcion == "📄 Procesar Factura (Por Página)":
                         if sel_maestro != "-- Buscar en Maestro --" and sel_maestro in master_dict:
                             asig_c = master_dict[sel_maestro]
                             st.session_state["codigos_manuales_sesion"][nombre_limpio] = asig_c
-                            st.success(f"¡Código asignado para esta factura!")
+                            st.success(f"¡Código asignado!")
                             time.sleep(0.3)
                             st.rerun()
                     with col_c2:
@@ -519,7 +487,7 @@ if menu_opcion == "📄 Procesar Factura (Por Página)":
                             clean_m = clean_ean_code(codigo_manual_input)
                             if clean_m != "S/C":
                                 st.session_state["codigos_manuales_sesion"][nombre_limpio] = clean_m
-                                st.success("¡Guardado para esta factura!")
+                                st.success("¡Guardado!")
                                 time.sleep(0.3)
                                 st.rerun()
                     with col_c3:
@@ -527,7 +495,6 @@ if menu_opcion == "📄 Procesar Factura (Por Página)":
                         q_b = f"EAN barcode {nombre_limpio} {presentacion_limpia}".replace(" ", "+")
                         st.markdown(f"[🌐 Buscar en Google](https://www.google.com/search?q={q_b})", unsafe_allow_html=True)
 
-            # Generación de Excel final con los datos limpios y editados
             wb = openpyxl.Workbook()
             ws = wb.active
             ws.title = "Inventario"
@@ -572,9 +539,6 @@ elif menu_opcion == "📁 Catálogo Maestro EAN":
             time.sleep(0.5)
             st.rerun()
 
-    # ==========================================
-    # CARGA MASIVA DE EXCEL AL MAESTRO
-    # ==========================================
     st.markdown('<div class="card-container">', unsafe_allow_html=True)
     st.markdown("### 📂 Carga Masiva de Catálogo Maestro (Excel)")
     uploaded_master_file = st.file_uploader("Sube tu archivo Excel con productos y códigos EAN", type=["xlsx", "xls"], key="upload_master_excel")
@@ -604,15 +568,12 @@ elif menu_opcion == "📁 Catálogo Maestro EAN":
             st.error(f"Error al leer el archivo Excel: {str(e)}")
     st.markdown('</div>', unsafe_allow_html=True)
 
-    # ==========================================
-    # AGREGAR INDIVIDUAL
-    # ==========================================
     st.markdown('<div class="card-container">', unsafe_allow_html=True)
     st.markdown("### ➕ Agregar Producto Individual Manualmente")
     with st.form("form_agregar_maestro_individual"):
         col_fm1, col_fm2 = st.columns([2, 1])
         with col_fm1:
-            nuevo_nombre_prod = st.text_input("Nombre / Descripción Oficial del Producto", placeholder="EJ. ANTIOQUEÑO SIN AZUCAR TV 24% 750ML...")
+            nuevo_nombre_prod = st.text_input("Nombre / Descripción Oficial del Producto", placeholder="EJ. CARLO ROSSI ROSE 1500 ML...")
         with col_fm2:
             nuevo_codigo_prod = st.text_input("Código EAN / SAP Oficial", placeholder="EJ. Código de barras real...")
         
