@@ -151,6 +151,13 @@ def parse_empaque_proveedor(proveedor_nombre, unidad_txt="", tamano_txt="", desc
     return 1
 
 def buscar_en_catalogo_maestro(nombre_producto, presentacion=""):
+    """
+    BÚSQUEDA INTELIGENTE Y ROBUSTA:
+    1. Normaliza tildes, mayúsculas y espacios en ambos lados para evitar falsos negativos.
+    2. Busca coincidencia exacta primero.
+    3. Si no es exacta, realiza coincidencia por tokens clave con validación estricta de volumen (presentación) 
+       y porcentajes para encontrar el producto en el maestro de forma segura y automática.
+    """
     n_norm = normalizar_texto(nombre_producto)
     p_norm = normalizar_texto(presentacion)
     
@@ -158,13 +165,45 @@ def buscar_en_catalogo_maestro(nombre_producto, presentacion=""):
     if not master_dict:
         return "S/C"
 
-    query_completa = f"{n_norm} {p_norm}".strip()
-    for m_key, m_code in master_dict.items():
-        m_key_up = normalizar_texto(m_key)
-        if m_key_up == query_completa:
-            return clean_ean_code(m_code)
+    # Normalizamos todas las llaves del maestro en memoria
+    master_norm = {normalizar_texto(k): clean_ean_code(v) for k, v in master_dict.items() if k}
 
-    return "S/C"
+    # 1. Intento de coincidencia exacta normalizada
+    query_completa = f"{n_norm} {p_norm}".strip()
+    for m_key_up, m_code in master_norm.items():
+        if m_key_up == query_completa:
+            return m_code
+        if n_norm in m_key_up or m_key_up in n_norm:
+            if p_norm and p_norm in m_key_up:
+                return m_code
+
+    # 2. Búsqueda por tokens de palabras clave con alta coincidencia
+    tokens_query = set(re.findall(r'\b[A-Z0-9%]+\b', n_norm))
+    tokens_query = {t for t in tokens_query if len(t) > 1 and t not in {"ML", "CL", "L", "OZ", "BOT", "LATA", "UN"}}
+    if not tokens_query:
+        return "S/C"
+
+    mejor_codigo = "S/C"
+    max_coincidentes = 0
+
+    for m_key_up, m_code in master_norm.items():
+        # Validar presentación equivalente (volumen)
+        if p_norm and p_norm not in m_key_up:
+            equivalente = False
+            if "1000ML" in p_norm and ("1L" in m_key_up or "1000" in m_key_up): equivalente = True
+            elif "750ML" in p_norm and ("75CL" in m_key_up or "750" in m_key_up): equivalente = True
+            if not equivalente:
+                continue
+
+        tokens_master = set(re.findall(r'\b[A-Z0-9%]+\b', m_key_up))
+        comunes = tokens_query.intersection(tokens_master)
+        score = len(comunes)
+
+        if score > max_coincidentes and score >= max(1, len(tokens_query) // 2):
+            max_coincidentes = score
+            mejor_codigo = m_code
+
+    return mejor_codigo
 
 # ==========================================
 # GESTIÓN DE PERFILES Y CATÁLOGO
@@ -220,7 +259,7 @@ st.sidebar.markdown("<h3 style='color: #0284c7;'>⚡ WilPOS Multi-Proveedor</h3>
 menu_opcion = st.sidebar.radio("Navegación", ["📄 Procesar Factura (Por Página)", "📁 Catálogo Maestro EAN", "🏢 Gestionar Proveedores"])
 
 st.sidebar.markdown("---")
-st.sidebar.markdown("<p style='font-size: 0.8rem; color: #10b981; font-weight: 600;'>🟢 Control Total Activo</p>", unsafe_allow_html=True)
+st.sidebar.markdown("<p style='font-size: 0.8rem; color: #10b981; font-weight: 600;'>🟢 Búsqueda Inteligente Activa</p>", unsafe_allow_html=True)
 
 if st.sidebar.button("🔄 Reiniciar Todo el Sistema (Maestro y Sesión)"):
     st.session_state["paginas_procesadas_historial"] = set()
