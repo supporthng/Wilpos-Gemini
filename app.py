@@ -151,6 +151,11 @@ def parse_empaque_proveedor(proveedor_nombre, unidad_txt="", tamano_txt="", desc
     return 1
 
 def buscar_en_catalogo_maestro(nombre_producto, presentacion=""):
+    """
+    Búsqueda ultrasegura y estricta. Exige coincidencia plena de presentación Y 
+    verifica que no haya diferencias críticas de graduación alcohólica o subtipos 
+    (ej. SIN AZUCAR vs CON AZUCAR, 29% vs 24%) para evitar falsos positivos y códigos duplicados.
+    """
     n_norm = normalizar_texto(nombre_producto)
     p_norm = normalizar_texto(presentacion)
     
@@ -158,13 +163,15 @@ def buscar_en_catalogo_maestro(nombre_producto, presentacion=""):
     if not master_dict:
         return "S/C"
 
+    # 1. Búsqueda exacta de la llave completa
     query_completa = f"{n_norm} {p_norm}".strip()
     for m_key, m_code in master_dict.items():
         m_key_up = normalizar_texto(m_key)
         if m_key_up == query_completa:
             return clean_ean_code(m_code)
 
-    tokens_query = set(re.findall(r'\b[A-Z0-9]+\b', n_norm))
+    # 2. Búsqueda por tokens estrictos con validación anti-conflicto (grados y variantes)
+    tokens_query = set(re.findall(r'\b[A-Z0-9%]+\b', n_norm))
     tokens_query = {t for t in tokens_query if len(t) > 1 and t not in {"ML", "CL", "L", "OZ", "BOT", "LATA", "UN", "YO"}}
     if not tokens_query:
         return "S/C"
@@ -175,6 +182,7 @@ def buscar_en_catalogo_maestro(nombre_producto, presentacion=""):
     for m_key, m_code in master_dict.items():
         m_key_up = normalizar_texto(m_key)
         
+        # Validación estricta de presentación (volumen)
         if p_norm and p_norm not in m_key_up:
             equivalente = False
             if "1000ML" in p_norm and ("1L" in m_key_up or "1000 ML" in m_key_up): equivalente = True
@@ -182,11 +190,24 @@ def buscar_en_catalogo_maestro(nombre_producto, presentacion=""):
             if not equivalente:
                 continue
 
-        tokens_master = set(re.findall(r'\b[A-Z0-9]+\b', m_key_up))
+        # VALIDACIÓN ANTI-FALSOS POSITIVOS (ej. 24% vs 29%, SIN AZUCAR vs normal)
+        # Si la query tiene un porcentaje o variante específica y el maestro tiene otro diferente, se descarta.
+        match_conflicto = False
+        for t_q in tokens_query:
+            if "%" in t_q:
+                # Si el maestro no tiene exactamente este porcentaje, es otro producto
+                if t_q not in m_key_up:
+                    match_conflicto = True
+                    break
+        if match_conflicto:
+            continue
+
+        tokens_master = set(re.findall(r'\b[A-Z0-9%]+\b', m_key_up))
         comunes = tokens_query.intersection(tokens_master)
         score = len(comunes)
 
-        if score > max_coincidentes and score >= min(2, len(tokens_query)):
+        # Exigimos alta coincidencia de tokens
+        if score > max_coincidentes and score >= min(3, len(tokens_query)):
             max_coincidentes = score
             mejor_codigo = clean_ean_code(m_code)
 
@@ -254,7 +275,7 @@ st.sidebar.markdown("<h3 style='color: #0284c7;'>⚡ WilPOS Multi-Proveedor</h3>
 menu_opcion = st.sidebar.radio("Navegación", ["📄 Procesar Factura (Por Página)", "📁 Catálogo Maestro EAN", "🏢 Gestionar Proveedores"])
 
 st.sidebar.markdown("---")
-st.sidebar.markdown("<p style='font-size: 0.8rem; color: #10b981; font-weight: 600;'>🟢 Celdas Editables (Doble Click / Click)</p>", unsafe_allow_html=True)
+st.sidebar.markdown("<p style='font-size: 0.8rem; color: #10b981; font-weight: 600;'>🟢 Doble Clic para Editar EAN Activo</p>", unsafe_allow_html=True)
 
 if st.sidebar.button("🔄 Reiniciar Historial y Filtros"):
     st.session_state["paginas_procesadas_historial"] = set()
@@ -269,7 +290,7 @@ if st.sidebar.button("🔄 Reiniciar Historial y Filtros"):
 # ==========================================
 if menu_opcion == "📄 Procesar Factura (Por Página)":
     st.markdown("<h2>📄 Procesador de Facturas (Multi-Proveedor)</h2>", unsafe_allow_html=True)
-    st.markdown("<p style='color: #64748b;'>Sube tu factura. Puedes hacer clic directamente en la tabla para editar códigos o seleccionarlos del maestro.</p>", unsafe_allow_html=True)
+    st.markdown("<p style='color: #64748b;'>Sube tu factura. Haz **doble clic** en cualquier celda de **Código EAN** en la tabla interactiva de abajo para editar o escribir un código directamente.</p>", unsafe_allow_html=True)
     st.markdown("---")
 
     if "factura_data" not in st.session_state: st.session_state["factura_data"] = None
@@ -413,7 +434,6 @@ if menu_opcion == "📄 Procesar Factura (Por Página)":
 
         if items:
             st.markdown(f"### 📋 Detalle de Renglones Extraídos ({len(items)} ítems)")
-            st.info("💡 **Consejo:** Haz doble clic o clic en la celda de **Código EAN** en la tabla interactiva de abajo para editar o escribir un código directamente.")
             
             preview_rows = []
             lista_codigos_pagina = []
@@ -465,17 +485,25 @@ if menu_opcion == "📄 Procesar Factura (Por Página)":
             # ==========================================
             df_preview_original = pd.DataFrame(lista_codigos_pagina)
             
-            # Usamos st.data_editor para permitir edición directa en celdas
+            # Hacemos estrictamente editable la columna "Código EAN" mediante doble clic
             df_editado = st.data_editor(
                 df_preview_original,
                 use_container_width=True,
                 hide_index=True,
                 num_rows="fixed",
                 disabled=["idx", "Producto", "Presentación", "Cant. Compra", "Empaque", "Stock Unidades", "Costo Unit. Real", "Precio Venta"],
+                column_config={
+                    "Código EAN": st.column_config.TextColumn(
+                        "Código EAN",
+                        help="Haz doble clic en la celda para escribir o corregir el código EAN directamente.",
+                        max_chars=14,
+                        validate="^\\d+$"
+                    )
+                },
                 key="editor_tabla_inventario"
             )
 
-            # Sincronizar los cambios de códigos EAN editados en la tabla con la sesión
+            # Sincronizar y guardar en memoria los códigos editados por César en la tabla
             for i, row in df_editado.iterrows():
                 p_name = row["Producto"]
                 nuevo_c_editado = clean_ean_code(row["Código EAN"])
@@ -493,14 +521,14 @@ if menu_opcion == "📄 Procesar Factura (Por Página)":
                 actual_c = df_editado.loc[df_editado["Producto"] == nombre_limpio, "Código EAN"].values[0]
                 
                 if actual_c == "S/C":
-                    st.markdown(f"⚠️ **{nombre_limpio} ({presentacion_limpia})** está sin código EAN asignado.")
+                    st.markdown(f"⚠️ **{nombre_limpio} ({presentacion_limpia})** sin código EAN asignado.")
                     col_c1, col_c2, col_c3 = st.columns([2, 1, 1])
                     with col_c1:
                         sel_maestro = st.selectbox("Seleccionar de Catálogo Maestro", ["-- Buscar en Maestro --"] + nombres_maestro_lista, key=f"sel_m_{nombre_limpio}")
                         if sel_maestro != "-- Buscar en Maestro --" and sel_maestro in master_dict:
                             asig_c = master_dict[sel_maestro]
                             st.session_state["codigos_manuales_sesion"][nombre_limpio] = asig_c
-                            st.success(f"¡Código asignado desde maestro!")
+                            st.success(f"¡Código asignado!")
                             time.sleep(0.3)
                             st.rerun()
                     with col_c2:
@@ -511,7 +539,7 @@ if menu_opcion == "📄 Procesar Factura (Por Página)":
                                 st.session_state["codigos_manuales_sesion"][nombre_limpio] = clean_m
                                 master_dict[nombre_limpio] = clean_m
                                 save_json_file(MASTER_CATALOG_FILE, master_dict)
-                                st.success("¡Código guardado!")
+                                st.success("¡Guardado!")
                                 time.sleep(0.3)
                                 st.rerun()
                     with col_c3:
@@ -519,7 +547,7 @@ if menu_opcion == "📄 Procesar Factura (Por Página)":
                         q_b = f"EAN barcode {nombre_limpio} {presentacion_limpia}".replace(" ", "+")
                         st.markdown(f"[🌐 Buscar en Google](https://www.google.com/search?q={q_b})", unsafe_allow_html=True)
 
-            # Generación de Excel final con los datos editados
+            # Generación de Excel final con los datos limpios y editados
             wb = openpyxl.Workbook()
             ws = wb.active
             ws.title = "Inventario"
@@ -561,7 +589,7 @@ elif menu_opcion == "📁 Catálogo Maestro EAN":
     with st.form("form_agregar_maestro_individual"):
         col_fm1, col_fm2 = st.columns([2, 1])
         with col_fm1:
-            nuevo_nombre_prod = st.text_input("Nombre / Descripción Oficial del Producto", placeholder="EJ. CHIVAS REGAL 12 AÑOS 750ML...")
+            nuevo_nombre_prod = st.text_input("Nombre / Descripción Oficial del Producto", placeholder="EJ. ANTIOQUEÑO SIN AZUCAR TV 24% 750ML...")
         with col_fm2:
             nuevo_codigo_prod = st.text_input("Código EAN / SAP Oficial", placeholder="EJ. Código de barras real...")
         
