@@ -158,9 +158,6 @@ def limpiar_nombre_y_extraer_presentacion(proveedor_activo, descripcion_raw, tam
     t_tam = normalizar_texto(tamano_raw)
     prov_up = normalizar_texto(proveedor_activo)
     
-    # Traducción automática de abreviaturas de Bepensa
-    t_norm = t_norm.replace("CCSA", "COCA COLA SIN AZUCAR")
-    
     combined_raw = f"{t_norm} {t_tam}"
     
     m_med = re.search(r'(\d+\s*(?:ML|L|LT|G|KG|OZ|CL))', combined_raw)
@@ -168,7 +165,7 @@ def limpiar_nombre_y_extraer_presentacion(proveedor_activo, descripcion_raw, tam
     if "75CL" in presentacion:
         presentacion = "750ML"
 
-    desc_limpia = re.sub(r'\b(CAJA\s*\d*|CJ\s*\d*\s*BOT|\d+\s*X\s*\d+\s*(?:ML|CL|L)|\d+/\s*\d+\s*(?:ML|CL|L|750ML)|750\s*ML|75\s*CL|750ML|75CL|\d+OZ|\d+\s*PZAS|\d+\s*PZA|\d+P\b|\b4P\b|\b12P\b|\bNRP\b|\b12\s*PZAS\b)\b', '', t_norm)
+    desc_limpia = re.sub(r'\b(CAJA\s*\d*|CJ\s*\d*\s*BOT|\d+\s*X\s*\d+\s*(?:ML|CL|L)|\d+/\s*\d+\s*(?:ML|CL|L|750ML)|750\s*ML|75\s*CL|750ML|75CL|\d+OZ|\d+\s*PZAS|\d+\s*PZA|\d+P\b|\b4P\b|\b12P\b)\b', '', t_norm)
     desc_limpia = re.sub(r'\s+', ' ', desc_limpia).strip()
     
     if presentacion != "UN" and presentacion not in desc_limpia:
@@ -232,7 +229,7 @@ st.sidebar.markdown("<h3 style='color: #0284c7;'>⚡ WilPOS Multi-Proveedor</h3>
 menu_opcion = st.sidebar.radio("Navegación", ["📄 Procesar Factura (Por Página)", "📁 Catálogo Maestro EAN", "🏢 Gestionar Proveedores"])
 
 st.sidebar.markdown("---")
-st.sidebar.markdown("<p style='font-size: 0.8rem; color: #10b981; font-weight: 600;'>🟢 CCSA = Coca-Cola Sin Azúcar Mapeado</p>", unsafe_allow_html=True)
+st.sidebar.markdown("<p style='font-size: 0.8rem; color: #10b981; font-weight: 600;'>🟢 Sistema Sintaxis Corregida</p>", unsafe_allow_html=True)
 
 if st.sidebar.button("🔄 Reiniciar Historial y Filtros"):
     st.session_state["paginas_procesadas_historial"] = set()
@@ -247,7 +244,7 @@ if st.sidebar.button("🔄 Reiniciar Historial y Filtros"):
 # ==========================================
 if menu_opcion == "📄 Procesar Factura (Por Página)":
     st.markdown("<h2>📄 Procesador de Facturas (Multi-Proveedor)</h2>", unsafe_allow_html=True)
-    st.markdown("<p style='color: #64748b;'>Sube tu factura de Bepensa. El sistema traduce automáticamente 'CCSA' a 'Coca-Cola Sin Azúcar'.</p>", unsafe_allow_html=True)
+    st.markdown("<p style='color: #64748b;'>Sube tu factura. El sistema calcula automáticamente los costos unitarios netos por cada unidad/lata.</p>", unsafe_allow_html=True)
     st.markdown("---")
 
     if "factura_data" not in st.session_state: st.session_state["factura_data"] = None
@@ -304,4 +301,51 @@ if menu_opcion == "📄 Procesar Factura (Por Página)":
                     response_det = model.generate_content([target_image, prompt_deteccion])
                     raw_det_text = response_det.text.strip()
                     if raw_det_text.startswith("```json"): raw_det_text = raw_det_text[7:]
-                    if raw_
+                    if raw_det_text.endswith("```"): raw_det_text = raw_det_text[:-3]
+                    
+                    det_json = json.loads(raw_det_text.strip())
+                    nombre_detectado_raw = str(det_json.get("proveedor_detectado", "PROVEEDOR GENERAL")).upper().strip()
+                    num_factura_detectada = str(det_json.get("numero_factura", "S/N")).upper().strip()
+
+                    firma_pagina = f"{archivo_subido.name}_{num_factura_detectada}_PAG_{pagina_a_procesar}"
+                    
+                    if firma_pagina in st.session_state["paginas_procesadas_historial"]:
+                        st.warning(f"⚠️ La página #{pagina_a_procesar} ya fue procesada previamente en esta sesión.")
+
+                    supp_mem = st.session_state["supplier_memory"]
+                    if not isinstance(supp_mem, dict): supp_mem = {}
+                    
+                    prov_encontrado = None
+                    for p_key in supp_mem.keys():
+                        if p_key in nombre_detectado_raw or nombre_detectado_raw in p_key:
+                            prov_encontrado = p_key
+                            break
+                    
+                    if not prov_encontrado:
+                        prov_encontrado = nombre_detectado_raw
+                        supp_mem[prov_encontrado] = {
+                            "nombre": prov_encontrado,
+                            "tipo_formato": "factura_desglose_personalizado",
+                            "instruccion_prompt": f"Analiza esta página de {prov_encontrado} renglón por renglón. Extrae 'descripcion', 'tamano', 'cantidad', 'unidad', 'precio_unitario', 'descuento_porcentaje' y 'monto_neto'."
+                        }
+                        st.session_state["supplier_memory"] = supp_mem
+                        save_json_file(SUPPLIER_MEMORY_FILE, supp_mem)
+
+                    prov_dict_data = supp_mem.get(prov_encontrado, {})
+                    if not isinstance(prov_dict_data, dict): prov_dict_data = {}
+                    instruccion_proveedor = prov_dict_data.get("instruccion_prompt", "Extrae todos los ítems.")
+
+                    prompt_unificado = (
+                        f"Estás procesando la página {pagina_a_procesar} de una factura del proveedor: '{prov_encontrado}'. "
+                        f"Instrucción específica de su perfil: {instruccion_proveedor} "
+                        "Extrae 'descripcion', 'tamano', 'cantidad', 'unidad', 'precio_unitario' (precio neto de la caja/paquete sin ITBIS), 'descuento_porcentaje' y 'monto_neto' (subtotal de la línea sin ITBIS). "
+                        "Devuelve un JSON puro con esta estructura exacta y llaves en minúscula: "
+                        '{"paginacion": "' + str(pagina_a_procesar) + '", "proveedor_detectado": "' + prov_encontrado + '", "subtotal": 0.0, "itbis": 0.0, "descuentos": 0.0, "total": 0.0, "items": [{"descripcion": "...", "tamano": "500ML", "cantidad": 1.0, "unidad": "12 PZAS", "precio_unitario": 344.07, "descuento_porcentaje": 0.0, "monto_neto": 3440.70}]}. '
+                        "Respuesta JSON pura."
+                    )
+
+                    response = model.generate_content([target_image, prompt_unificado])
+                    
+                    raw_text = response.text.strip()
+                    if raw_text.startswith("```json"): raw_text = raw_text[7:]
+                    if raw_text.endswith("
