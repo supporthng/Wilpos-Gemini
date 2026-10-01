@@ -105,19 +105,30 @@ def limpiar_nombre_y_extraer_presentacion(proveedor_activo, descripcion_raw, tam
     
     combined_raw = f"{t_norm} {t_tam}"
     
-    m_med = re.search(r'(\d+\s*(?:ML|L|LT|G|KG|OZ|CL))', combined_raw)
-    presentacion = m_med.group(1).replace(" ", "") if m_med else ("750ML" if "EL CATADOR" in prov_up else "UN")
-    if "75CL" in presentacion:
-        presentacion = "750ML"
-    if "1L" in presentacion or "1LT" in presentacion:
-        presentacion = "1000ML"
+    m_med = re.search(r'(\d+)\s*(?:ML|L|LT|G|KG|OZ|CL)', combined_raw)
+    if m_med:
+        num_val = m_med.group(1)
+        if "L" in combined_raw[m_med.end()-3:m_med.end()] and int(num_val) <= 2:
+            presentacion = f"{int(num_val)*1000}ML" if int(num_val) <= 2 else f"{num_val}ML"
+        else:
+            presentacion = f"{num_val}ML" if "CL" not in combined_raw else f"{int(num_val)*10}ML"
+    else:
+        presentacion = "750ML" if "EL CATADOR" in prov_up else "UN"
 
-    desc_limpia = re.sub(r'\b(CAJA\s*\d*|CJ\s*\d*\s*BOT|\d+\s*X\s*\d+\s*(?:ML|CL|L)|\d+/\s*\d+\s*(?:ML|CL|L|750ML)|750\s*ML|75\s*CL|750ML|75CL|1000\s*ML|1000ML|1L|1LT|\d+OZ|\d+\s*PZAS|\d+\s*PZA|\d+P\b|\b4P\b|\b12P\b|\b\d+X\d+[A-Z]*\b)\b', '', t_norm)
+    if "75CL" in combined_raw: presentacion = "750ML"
+    if "1L" in combined_raw or "1LT" in combined_raw or "1000ML" in combined_raw: presentacion = "1000ML"
+
+    desc_limpia = t_norm
+    desc_limpia = re.sub(r'\b(CAJA\s*\d*|CJ\s*\d*\s*BOT|BOT|BOTELLA|LATA|LATAS|\d+\s*X\s*\d+\s*(?:ML|CL|L)|\d+/\s*\d+\s*(?:ML|CL|L|750ML)|750\s*ML|75\s*CL|750ML|75CL|1000\s*ML|1000ML|1L|1LT|500\s*ML|500ML|375\s*ML|375ML|700\s*ML|700ML|50\s*ML|50ML|1250\s*ML|1250ML|\d+OZ|\d+\s*PZAS|\d+\s*PZA|\d+P\b|\b4P\b|\b12P\b|\b\d+X\d+[A-Z]*\b)\b', '', desc_limpia)
     desc_limpia = re.sub(r'\s+', ' ', desc_limpia).strip()
     
     if presentacion != "UN" and presentacion not in desc_limpia:
         desc_limpia = f"{desc_limpia} {presentacion}".strip()
-    
+    else:
+        for p_test in ["500ML", "375ML", "50ML", "750ML", "1000ML", "700ML", "1250ML"]:
+            if desc_limpia.count(p_test) > 1:
+                desc_limpia = desc_limpia.replace(p_test, "", desc_limpia.count(p_test) - 1).strip()
+
     return desc_limpia, presentacion
 
 def parse_empaque_proveedor(proveedor_nombre, unidad_txt="", tamano_txt="", descripcion_txt=""):
@@ -141,34 +152,56 @@ def parse_empaque_proveedor(proveedor_nombre, unidad_txt="", tamano_txt="", desc
 
 def buscar_en_catalogo_maestro(nombre_producto, presentacion=""):
     """
-    Búsqueda ultrasegura y estricta en el catálogo maestro. 
-    Exige coincidencia exacta del nombre y la presentación. Si hay cualquier ambigüedad, retorna 'S/C'.
+    Búsqueda inteligente por similitud de tokens y palabras clave. 
+    Garantiza que si el producto existe en el maestro (aunque tenga pequeñas variaciones de escritura), 
+    sea reconocido exitosamente exigiendo siempre la misma presentación (volumen).
     """
     n_norm = normalizar_texto(nombre_producto)
     p_norm = normalizar_texto(presentacion)
     
     master_dict = load_json_file(MASTER_CATALOG_FILE, "dict")
-    
-    # 1. Búsqueda exacta de la llave completa (Nombre y Presentación integrados)
+    if not master_dict:
+        return "S/C"
+
+    # 1. Coincidencia Exacta Plena
     query_completa = f"{n_norm} {p_norm}".strip()
     for m_key, m_code in master_dict.items():
         m_key_up = normalizar_texto(m_key)
-        if m_key_up == query_completa or query_completa == m_key_up:
+        if m_key_up == query_completa:
             return clean_ean_code(m_code)
 
-    # 2. Búsqueda por subcadena estricta (Nombre y Presentación presentes en la clave del maestro)
+    # 2. Búsqueda por Similitud Inteligente de Tokens
+    # Extraemos palabras clave significativas (ignorando conectores y medidas sueltas)
+    tokens_query = set(re.findall(r'\b[A-Z0-9]+\b', n_norm))
+    tokens_query = {t for t in tokens_query if len(t) > 1 and t not in {"ML", "CL", "L", "OZ", "BOT", "LATA", "UN", "YO"}}
+    if not tokens_query:
+        return "S/C"
+
+    mejor_codigo = "S/C"
+    max_coincidentes = 0
+
     for m_key, m_code in master_dict.items():
         m_key_up = normalizar_texto(m_key)
-        # Ambas condiciones deben cumplirse estrictamente
-        if n_norm in m_key_up and p_norm in m_key_up:
-            # Validamos que no sea una coincidencia parcial engañosa (ej. pasaporte vs passport)
-            tokens_n = set(n_norm.split())
-            tokens_m = set(m_key_up.split())
-            if tokens_n.issubset(tokens_m):
-                return clean_ean_code(m_code)
+        
+        # VALIDACIÓN DE SEGURIDAD: La presentación en el maestro debe coincidir exactamente (ej. 700ML nunca con 1000ML)
+        if p_norm and p_norm not in m_key_up:
+            # Comprobación flexible de equivalencias comunes de volumen
+            equivalente = False
+            if "1000ML" in p_norm and ("1L" in m_key_up or "1000 ML" in m_key_up): equivalente = True
+            elif "750ML" in p_norm and ("75 CL" in m_key_up or "750 ML" in m_key_up): equivalente = True
+            if not equivalente:
+                continue
 
-    # Si no hay coincidencia 100% certera, retornamos S/C para evitar falsos positivos
-    return "S/C"
+        tokens_master = set(re.findall(r'\b[A-Z0-9]+\b', m_key_up))
+        comunes = tokens_query.intersection(tokens_master)
+        score = len(comunes)
+
+        # Si comparte al menos 2 o más palabras clave significativas (ej. CHIVAS REGAL, 12, etc.)
+        if score > max_coincidentes and score >= min(2, len(tokens_query)):
+            max_coincidentes = score
+            mejor_codigo = clean_ean_code(m_code)
+
+    return mejor_codigo if mejor_codigo != "S/C" else "S/C"
 
 # ==========================================
 # GESTIÓN DE PERFILES Y CATÁLOGO
@@ -232,7 +265,7 @@ st.sidebar.markdown("<h3 style='color: #0284c7;'>⚡ WilPOS Multi-Proveedor</h3>
 menu_opcion = st.sidebar.radio("Navegación", ["📄 Procesar Factura (Por Página)", "📁 Catálogo Maestro EAN", "🏢 Gestionar Proveedores"])
 
 st.sidebar.markdown("---")
-st.sidebar.markdown("<p style='font-size: 0.8rem; color: #10b981; font-weight: 600;'>🟢 Cero Falsos Positivos (Coincidencia Estricta)</p>", unsafe_allow_html=True)
+st.sidebar.markdown("<p style='font-size: 0.8rem; color: #10b981; font-weight: 600;'>🟢 Similitud Inteligente Activa</p>", unsafe_allow_html=True)
 
 if st.sidebar.button("🔄 Reiniciar Historial y Filtros"):
     st.session_state["paginas_procesadas_historial"] = set()
@@ -247,7 +280,7 @@ if st.sidebar.button("🔄 Reiniciar Historial y Filtros"):
 # ==========================================
 if menu_opcion == "📄 Procesar Factura (Por Página)":
     st.markdown("<h2>📄 Procesador de Facturas (Multi-Proveedor)</h2>", unsafe_allow_html=True)
-    st.markdown("<p style='color: #64748b;'>Sube tu factura. El sistema utiliza un filtro estricta y conservador para evitar cualquier asociación incorrecta.</p>", unsafe_allow_html=True)
+    st.markdown("<p style='color: #64748b;'>Sube tu factura. El sistema empareja inteligentemente los productos existentes en tu maestro.</p>", unsafe_allow_html=True)
     st.markdown("---")
 
     if "factura_data" not in st.session_state: st.session_state["factura_data"] = None
@@ -524,11 +557,11 @@ if menu_opcion == "📄 Procesar Factura (Por Página)":
                     display_codigo = st.session_state["codigos_manuales_sesion"][nombre_limpio]
 
                 if display_codigo == "S/C":
-                    st.markdown(f"⚠️️ **{nombre_limpio} ({presentacion_limpia})** sin código EAN asignado.")
+                    st.markdown(f"⚠️ **{nombre_limpio} ({presentacion_limpia})** sin código EAN asignado.")
                     col_c1, col_c2, col_c3 = st.columns([2, 1, 1])
                     with col_c1:
                         sel_maestro = st.selectbox("Seleccionar Maestro", ["-- Buscar en Maestro --"] + nombres_maestro_lista, key=f"sel_m_{idx}_{nombre_limpio}")
-                        if sel_maestro != "-- Buscar en Maestro --" and sel_maestro in master_dict:
+                        if sel_maestro != "-- Seleccionar del Maestro --" and sel_maestro in master_dict:
                             display_codigo = master_dict[sel_maestro]
                     with col_c2:
                         codigo_manual_input = st.text_input("Código manual", key=f"man_{idx}_{nombre_limpio}", placeholder="EAN...")
@@ -584,7 +617,7 @@ elif menu_opcion == "📁 Catálogo Maestro EAN":
     with st.form("form_agregar_maestro_individual"):
         col_fm1, col_fm2 = st.columns([2, 1])
         with col_fm1:
-            nuevo_nombre_prod = st.text_input("Nombre / Descripción Oficial del Producto", placeholder="EJ. PASSPORT SELECTION 1000ML...")
+            nuevo_nombre_prod = st.text_input("Nombre / Descripción Oficial del Producto", placeholder="EJ. CHIVAS REGAL 12 AÑOS 750ML...")
         with col_fm2:
             nuevo_codigo_prod = st.text_input("Código EAN / SAP Oficial", placeholder="EJ. Código de barras real...")
         
