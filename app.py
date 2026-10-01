@@ -138,6 +138,10 @@ def parse_empaque_proveedor(proveedor_nombre, unidad_txt="", tamano_txt="", desc
     return 1
 
 def buscar_en_catalogo_maestro(nombre_producto, presentacion=""):
+    """
+    Busca estrictamente en el catálogo maestro. Si no hay coincidencia exacta o robusta,
+    devuelve 'S/C' (Sin Código) en lugar de inventar códigos erróneos.
+    """
     n_norm = normalizar_texto(nombre_producto)
     p_norm = normalizar_texto(presentacion)
     combined_query = normalizar_texto(f"{n_norm} {p_norm}")
@@ -150,8 +154,9 @@ def buscar_en_catalogo_maestro(nombre_producto, presentacion=""):
     if n_norm in master_norm:
         return clean_ean_code(master_norm[n_norm])
 
+    # Requerimos una coincidencia de tokens muy alta y estricta para evitar falsos positivos
     tokens_query = set(re.findall(r'\b[A-Z0-9]+\b', combined_query))
-    tokens_query = {t for t in tokens_query if len(t) > 1 and t not in {"ML", "CL", "L", "OZ", "CON", "SIN", "EA", "UN"}}
+    tokens_query = {t for t in tokens_query if len(t) > 1 and t not in {"ML", "CL", "L", "OZ", "CON", "SIN", "EA", "UN", "BOT"}}
 
     if not tokens_query:
         return "S/C"
@@ -164,7 +169,8 @@ def buscar_en_catalogo_maestro(nombre_producto, presentacion=""):
         comunes = tokens_query.intersection(tokens_master)
         score = len(comunes)
         
-        if score > max_coincidentes and score >= 2:
+        # Exigimos al menos 3 tokens idénticos o coincidencia plena para licores y marcas para no mezclar productos
+        if score > max_coincidentes and score >= 3:
             max_coincidentes = score
             mejor_codigo = clean_ean_code(m_code)
 
@@ -232,7 +238,7 @@ st.sidebar.markdown("<h3 style='color: #0284c7;'>⚡ WilPOS Multi-Proveedor</h3>
 menu_opcion = st.sidebar.radio("Navegación", ["📄 Procesar Factura (Por Página)", "📁 Catálogo Maestro EAN", "🏢 Gestionar Proveedores"])
 
 st.sidebar.markdown("---")
-st.sidebar.markdown("<p style='font-size: 0.8rem; color: #10b981; font-weight: 600;'>🟢 Auditoría de Duplicados Corregida</p>", unsafe_allow_html=True)
+st.sidebar.markdown("<p style='font-size: 0.8rem; color: #10b981; font-weight: 600;'>🟢 Anti-Inventвенción de Códigos Activo</p>", unsafe_allow_html=True)
 
 if st.sidebar.button("🔄 Reiniciar Historial y Filtros"):
     st.session_state["paginas_procesadas_historial"] = set()
@@ -247,7 +253,7 @@ if st.sidebar.button("🔄 Reiniciar Historial y Filtros"):
 # ==========================================
 if menu_opcion == "📄 Procesar Factura (Por Página)":
     st.markdown("<h2>📄 Procesador de Facturas (Multi-Proveedor)</h2>", unsafe_allow_html=True)
-    st.markdown("<p style='color: #64748b;'>Sube tu factura. El sistema calcula automáticamente los costos unitarios netos y los precios de venta.</p>", unsafe_allow_html=True)
+    st.markdown("<p style='color: #64748b;'>Sube tu factura. Si un producto no está en el maestro, se marcará como S/C para que puedas buscarlo o asignarlo correctamente.</p>", unsafe_allow_html=True)
     st.markdown("---")
 
     if "factura_data" not in st.session_state: st.session_state["factura_data"] = None
@@ -438,13 +444,14 @@ if menu_opcion == "📄 Procesar Factura (Por Página)":
                 })
 
             # ==========================================
-            # AUDITORÍA Y CORRECCIÓN INTELIGENTE DE DUPLICADOS (LLAVES ÚNICAS + CÓDIGO MAESTRO VISIBLE)
+            # AUDITORÍA Y CORRECCIÓN INTELIGENTE DE DUPLICADOS
             # ==========================================
             codigos_vistos = {}
             duplicados_encontrados = []
             for row_item in lista_codigos_pagina:
                 c_code = row_item["codigo"]
                 c_name = row_item["nombre"]
+                # Solo auditamos duplicados si tienen un código EAN real (diferente a S/C)
                 if c_code != "S/C" and c_name not in st.session_state["duplicados_confirmados_sesion"]:
                     if c_code in codigos_vistos:
                         duplicados_encontrados.append((c_code, codigos_vistos[c_code], c_name))
@@ -457,7 +464,6 @@ if menu_opcion == "📄 Procesar Factura (Por Página)":
                     st.markdown("---")
                     st.markdown(f"🔹 **Código compartido:** `{cod_dup}` asignado a: `📊 {p1}` y `📊 {p2}`")
                     
-                    # Mostramos el código que tiene en el maestro junto al nombre en el selectbox
                     code_p1 = master_dict.get(p1, "S/C")
                     code_p2 = master_dict.get(p2, "S/C")
                     
@@ -529,7 +535,7 @@ if menu_opcion == "📄 Procesar Factura (Por Página)":
                     col_c1, col_c2, col_c3 = st.columns([2, 1, 1])
                     with col_c1:
                         sel_maestro = st.selectbox("Seleccionar Maestro", ["-- Buscar en Maestro --"] + nombres_maestro_lista, key=f"sel_m_{idx}_{nombre_limpio}")
-                        if sel_maestro != "-- Buscar en Maestro --":
+                        if sel_maestro != "-- Seleccionar del Maestro --":
                             display_codigo = master_dict[sel_maestro]
                     with col_c2:
                         codigo_manual_input = st.text_input("Código manual", key=f"man_{idx}_{nombre_limpio}", placeholder="EAN...")
@@ -539,7 +545,7 @@ if menu_opcion == "📄 Procesar Factura (Por Página)":
                     with col_c3:
                         st.markdown("<br>", unsafe_allow_html=True)
                         q_b = f"EAN barcode {nombre_limpio} {presentacion_limpia}".replace(" ", "+")
-                        st.markdown(f"[🌐 Buscar](https://www.google.com/search?q={q_b})", unsafe_allow_html=True)
+                        st.markdown(f"[🌐 Buscar en Google](https://www.google.com/search?q={q_b})", unsafe_allow_html=True)
 
                     if display_codigo != "S/C":
                         if st.button("💾 Guardar", key=f"btn_sv_{idx}_{nombre_limpio}"):
@@ -587,7 +593,7 @@ elif menu_opcion == "📁 Catálogo Maestro EAN":
         with col_fm1:
             nuevo_nombre_prod = st.text_input("Nombre / Descripción Oficial del Producto", placeholder="EJ. EVAN WILLIAMS FIRE BOT 750ML...")
         with col_fm2:
-            nuevo_codigo_prod = st.text_input("Código EAN / SAP Oficial", placeholder="EJ. 096749005406...")
+            nuevo_codigo_prod = st.text_input("Código EAN / SAP Oficial", placeholder="EJ. Código de barras real...")
         
         btn_submit_maestro = st.form_submit_button("💾 Guardar Producto en Archivo Maestro")
         if btn_submit_maestro:
