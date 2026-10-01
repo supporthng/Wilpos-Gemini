@@ -138,10 +138,6 @@ def parse_empaque_proveedor(proveedor_nombre, unidad_txt="", tamano_txt="", desc
     return 1
 
 def buscar_en_catalogo_maestro(nombre_producto, presentacion=""):
-    """
-    Busca estrictamente en el catálogo maestro. Si no hay coincidencia exacta o robusta,
-    devuelve 'S/C' (Sin Código) en lugar de inventar códigos erróneos.
-    """
     n_norm = normalizar_texto(nombre_producto)
     p_norm = normalizar_texto(presentacion)
     combined_query = normalizar_texto(f"{n_norm} {p_norm}")
@@ -154,7 +150,6 @@ def buscar_en_catalogo_maestro(nombre_producto, presentacion=""):
     if n_norm in master_norm:
         return clean_ean_code(master_norm[n_norm])
 
-    # Requerimos una coincidencia de tokens muy alta y estricta para evitar falsos positivos
     tokens_query = set(re.findall(r'\b[A-Z0-9]+\b', combined_query))
     tokens_query = {t for t in tokens_query if len(t) > 1 and t not in {"ML", "CL", "L", "OZ", "CON", "SIN", "EA", "UN", "BOT"}}
 
@@ -169,7 +164,6 @@ def buscar_en_catalogo_maestro(nombre_producto, presentacion=""):
         comunes = tokens_query.intersection(tokens_master)
         score = len(comunes)
         
-        # Exigimos al menos 3 tokens idénticos o coincidencia plena para licores y marcas para no mezclar productos
         if score > max_coincidentes and score >= 3:
             max_coincidentes = score
             mejor_codigo = clean_ean_code(m_code)
@@ -238,7 +232,7 @@ st.sidebar.markdown("<h3 style='color: #0284c7;'>⚡ WilPOS Multi-Proveedor</h3>
 menu_opcion = st.sidebar.radio("Navegación", ["📄 Procesar Factura (Por Página)", "📁 Catálogo Maestro EAN", "🏢 Gestionar Proveedores"])
 
 st.sidebar.markdown("---")
-st.sidebar.markdown("<p style='font-size: 0.8rem; color: #10b981; font-weight: 600;'>🟢 Anti-Inventвенción de Códigos Activo</p>", unsafe_allow_html=True)
+st.sidebar.markdown("<p style='font-size: 0.8rem; color: #10b981; font-weight: 600;'>🟢 Anti-Inventención & KeyError Blindado</p>", unsafe_allow_html=True)
 
 if st.sidebar.button("🔄 Reiniciar Historial y Filtros"):
     st.session_state["paginas_procesadas_historial"] = set()
@@ -253,7 +247,7 @@ if st.sidebar.button("🔄 Reiniciar Historial y Filtros"):
 # ==========================================
 if menu_opcion == "📄 Procesar Factura (Por Página)":
     st.markdown("<h2>📄 Procesador de Facturas (Multi-Proveedor)</h2>", unsafe_allow_html=True)
-    st.markdown("<p style='color: #64748b;'>Sube tu factura. Si un producto no está en el maestro, se marcará como S/C para que puedas buscarlo o asignarlo correctamente.</p>", unsafe_allow_html=True)
+    st.markdown("<p style='color: #64748b;'>Sube tu factura. Los productos sin coincidencia se quedan como S/C para búsqueda manual.</p>", unsafe_allow_html=True)
     st.markdown("---")
 
     if "factura_data" not in st.session_state: st.session_state["factura_data"] = None
@@ -451,7 +445,6 @@ if menu_opcion == "📄 Procesar Factura (Por Página)":
             for row_item in lista_codigos_pagina:
                 c_code = row_item["codigo"]
                 c_name = row_item["nombre"]
-                # Solo auditamos duplicados si tienen un código EAN real (diferente a S/C)
                 if c_code != "S/C" and c_name not in st.session_state["duplicados_confirmados_sesion"]:
                     if c_code in codigos_vistos:
                         duplicados_encontrados.append((c_code, codigos_vistos[c_code], c_name))
@@ -499,7 +492,8 @@ if menu_opcion == "📄 Procesar Factura (Por Página)":
                     
                     if st.button(f"💾 Guardar y Ocultar Conflicto para [{prod_erroneo}]", key=f"btn_aplicar_corr_{cod_dup}_{d_idx}_{prod_erroneo}"):
                         asignar_codigo = "S/C"
-                        if nuevo_c_maestro != "-- Seleccionar del Maestro --":
+                        # PROTECCIÓN CONTRA KEYERROR: Validar que no sea la opción por defecto
+                        if nuevo_c_maestro != "-- Seleccionar del Maestro --" and nuevo_c_maestro in master_dict:
                             asignar_codigo = master_dict[nuevo_c_maestro]
                         elif nuevo_c_manual and len(nuevo_c_manual.strip()) >= 7:
                             asignar_codigo = clean_ean_code(nuevo_c_manual)
@@ -535,7 +529,8 @@ if menu_opcion == "📄 Procesar Factura (Por Página)":
                     col_c1, col_c2, col_c3 = st.columns([2, 1, 1])
                     with col_c1:
                         sel_maestro = st.selectbox("Seleccionar Maestro", ["-- Buscar en Maestro --"] + nombres_maestro_lista, key=f"sel_m_{idx}_{nombre_limpio}")
-                        if sel_maestro != "-- Seleccionar del Maestro --":
+                        # PROTECCIÓN CONTRA KEYERROR
+                        if sel_maestro != "-- Buscar en Maestro --" and sel_maestro in master_dict:
                             display_codigo = master_dict[sel_maestro]
                     with col_c2:
                         codigo_manual_input = st.text_input("Código manual", key=f"man_{idx}_{nombre_limpio}", placeholder="EAN...")
