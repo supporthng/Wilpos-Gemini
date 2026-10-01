@@ -176,70 +176,31 @@ def limpiar_nombre_y_extraer_presentacion(proveedor_activo, descripcion_raw, tam
 def parse_empaque_proveedor(proveedor_nombre, unidad_txt="", tamano_txt="", descripcion_txt=""):
     combined = normalizar_texto(f"{unidad_txt} {tamano_txt} {descripcion_txt}")
     
-    # Patrón tipo 24X12OZ, 15X65CL, 24X355ML
+    # 1. Buscar formato tipo 24X12OZ, 15X65CL
     m_mult = re.search(r'\b(\d+)\s*[xX]\s*\d+', combined)
     if m_mult:
         val = int(m_mult.group(1))
         if val > 0: return val
 
-    m_pzas = re.search(r'(?:(\d+)\s*(?:PZAS|PZA|BOT|UNIDADES|UN|CAJA|CJ|BOX))|(?:(?:PZAS|PZA|BOT|CAJA|CJ|BOX)[\s\-]*(\d+))', combined)
-    if m_pzas:
-        val = int(m_pzas.group(1) or m_pzas.group(2))
-        if val > 0: return val
-
-    m_pack = re.search(r'(?:LT\s*)?(\d+)\s*P\b', combined)
-    if m_pack:
-        val = int(m_pack.group(1))
-        if val > 0: return val
+    # 2. Si la unidad es 700ML, 750ML, 75CL pero en la descripción o factura se compró por caja (cantidad > 1 o importe alto), 
+    # en United Brands las cajas de licor de 700ml/750ml estándar traen 12 botellas.
+    if any(m in unidad_txt.upper() for m in ["ML", "CL", "L"]) and "X" not in unidad_txt.upper():
+        # Verificamos si la descripción menciona BOT o si es un destilado/vino en caja
+        if "BOT" in combined or "700ML" in combined or "750ML" in combined or "75CL" in combined:
+            return 12
+        return 1
 
     for num in [24, 12, 15, 6, 4]:
         if f" {num} " in combined or combined.endswith(f" {num}") or f"/{num}" in combined:
             return num
 
-    # Si la unidad dice exactamente 700ML, 750ML, etc. (botella individual sin caja especificada de mayor volumen)
-    if any(m in unidad_txt.upper() for m in ["ML", "CL", "L"]) and "X" not in unidad_txt.upper():
-        return 1
-
-    return 1
-
-def buscar_en_catalogo_maestro(nombre_producto, presentacion=""):
-    n_norm = normalizar_texto(nombre_producto)
-    p_norm = normalizar_texto(presentacion)
-    combined_query = normalizar_texto(f"{n_norm} {p_norm}")
-
-    master_dict = load_json_file(MASTER_CATALOG_FILE, "dict")
-    master_norm = {normalizar_texto(k): v for k, v in master_dict.items()}
-
-    if combined_query in master_norm:
-        return clean_ean_code(master_norm[combined_query])
-    if n_norm in master_norm:
-        return clean_ean_code(master_norm[n_norm])
-
-    tokens_query = set(re.findall(r'\b[A-Z0-9]+\b', combined_query))
-    tokens_query = {t for t in tokens_query if len(t) > 1 and t not in {"ML", "CL", "L", "OZ", "CON", "SIN", "EA", "UN"}}
-
-    if not tokens_query:
-        return "S/C"
-
-    mejor_codigo = "S/C"
-    max_coincidentes = 0
-
-    for m_key, m_code in master_norm.items():
-        tokens_master = set(re.findall(r'\b[A-Z0-9]+\b', m_key))
-        comunes = tokens_query.intersection(tokens_master)
-        score = len(comunes)
-        
-        if score > max_coincidentes and score >= 2:
-            max_coincidentes = score
-            mejor_codigo = clean_ean_code(m_code)
-
-    return mejor_codigo if mejor_codigo != "S/C" else "S/C"
+    return 12 # Default seguro para cajas de licor si no se especifica lo contrario
 
 st.sidebar.markdown("<h3 style='color: #0284c7;'>⚡ WilPOS Multi-Proveedor</h3>", unsafe_allow_html=True)
 menu_opcion = st.sidebar.radio("Navegación", ["📄 Procesar Factura (Por Página)", "📁 Catálogo Maestro EAN", "🏢 Gestionar Proveedores"])
 
 st.sidebar.markdown("---")
-st.sidebar.markdown("<p style='font-size: 0.8rem; color: #10b981; font-weight: 600;'>🟢 Costos Netos con Descuentos Blindados</p>", unsafe_allow_html=True)
+st.sidebar.markdown("<p style='font-size: 0.8rem; color: #10b981; font-weight: 600;'>🟢 Costos Netos y Empaques Corregidos</p>", unsafe_allow_html=True)
 
 if st.sidebar.button("🔄 Reiniciar Historial y Filtros"):
     st.session_state["paginas_procesadas_historial"] = set()
@@ -253,8 +214,8 @@ if st.sidebar.button("🔄 Reiniciar Historial y Filtros"):
 # MÓDULO 1: PROCESAR FACTURA POR PÁGINA
 # ==========================================
 if menu_opcion == "📄 Procesar Factura (Por Página)":
-    st.markdown("<h2>📄 Procesador de Facturas (United Brands & Multi-Proveedor)</h2>", unsafe_allow_html=True)
-    st.markdown("<p style='color: #64748b;'>Sube tu factura. El sistema calcula el costo unitario real usando el Impuesto Neto (descontado y sin ITBIS) dividido entre el empaque exacto (ej. 24X12OZ).</p>", unsafe_allow_html=True)
+    st.markdown("<h2>📄 Procesador de Facturas (Cálculo Financiero Exacto)</h2>", unsafe_allow_html=True)
+    st.markdown("<p style='color: #64748b;'>Sube tu factura. El costo unitario se calcula dividiendo el Impuesto Neto (sin ITBIS y con descuento) entre las cajas y el empaque (ej. 12 botellas).</p>", unsafe_allow_html=True)
     st.markdown("---")
 
     if "factura_data" not in st.session_state: st.session_state["factura_data"] = None
@@ -348,7 +309,7 @@ if menu_opcion == "📄 Procesar Factura (Por Página)":
                     prompt_unificado = (
                         f"Estás procesando la página {pagina_a_procesar} de una factura del proveedor: '{prov_encontrado}'. "
                         f"Instrucción específica de su perfil: {instruccion_proveedor} "
-                        "Extrae para cada ítem: 'descripcion', 'tamano', 'cantidad' (cant. de cajas o bultos), 'unidad' (ej. '24X12OZ', '750ML'), 'precio_unitario', 'descuento_porcentaje' y 'monto_neto' (que corresponde estrictamente al 'Imp. Neto' de la línea, es decir, el valor neto sin ITBIS y ya con los descuentos aplicados). "
+                        "Extrae para cada renglón: 'descripcion', 'tamano', 'cantidad' (número de cajas), 'unidad' (ej. 750ml, 24X12OZ), 'precio_unitario', 'descuento_porcentaje' y 'monto_neto' (que es el valor exacto de la columna 'Imp. Neto', es decir, el total de la línea sin ITBIS y con los descuentos ya restados). "
                         "Devuelve un JSON puro con esta estructura exacta y llaves en minúscula: "
                         '{"paginacion": "' + str(pagina_a_procesar) + '", "proveedor_detectado": "' + prov_encontrado + '", "subtotal": 0.0, "itbis": 0.0, "descuentos": 0.0, "total": 0.0, "items": [{"descripcion": "CHIVAS REGAL 12YO BOT 750ML", "tamano": "750ML", "cantidad": 24.0, "unidad": "750ML", "precio_unitario": 1854.00, "descuento_porcentaje": 12.0, "monto_neto": 39156.48}]}. '
                         "Respuesta JSON pura."
@@ -425,10 +386,8 @@ if menu_opcion == "📄 Procesar Factura (Por Página)":
                 desc_pct = safe_float(item.get("descuento_porcentaje"), 0.0)
 
                 # ==========================================
-                # CÁLCULO INFALIBLE DE COSTO UNITARIO REAL (POR UNIDAD/BOTELLA)
+                # CÁLCULO FINANCIERO CORREGIDO (IMP. NETO / TOTAL UNIDADES)
                 # ==========================================
-                # Prioridad 1: Si tenemos el monto neto total de la línea (Imp. Neto ya con descuento y sin ITBIS),
-                # lo dividimos directamente entre el total de unidades (cajas * empaque). ¡Esta es la forma más precisa!
                 if monto_neto_linea > 0 and total_unidades > 0:
                     costo_unitario_real = round(monto_neto_linea / total_unidades, 4)
                 elif p_unit_extraido > 0:
