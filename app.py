@@ -76,7 +76,7 @@ if "supplier_memory" not in st.session_state:
         "BEPENSA DOMINICANA SA": {
             "nombre": "BEPENSA DOMINICANA SA",
             "tipo_formato": "factura_tique_bepensa",
-            "instruccion_prompt": "Analiza esta página de la factura de BEPENSA DOMINICANA SA renglón por renglón. Cada ítem muestra código, descripción con tamaño y empaque, cantidad, precio unitario, descuento, ITBIS y total. Extrae 'descripcion', 'tamano', 'cantidad', 'unidad', 'precio_unitario', 'descuento_porcentaje' y 'monto_neto'."
+            "instruccion_prompt": "Analiza esta página de la factura de BEPENSA DOMINICANA SA renglón por renglón. Extrae 'descripcion', 'tamano', 'cantidad' (cajas o bultos), 'unidad', 'precio_unitario' (precio neto de la caja sin ITBIS), 'descuento_porcentaje', 'itbis_linea' y 'monto_neto' (subtotal de la línea sin ITBIS)."
         },
         "EL CATADOR": {
             "nombre": "EL CATADOR",
@@ -176,7 +176,7 @@ def limpiar_nombre_y_extraer_presentacion(proveedor_activo, descripcion_raw, tam
 def parse_empaque_proveedor(proveedor_nombre, unidad_txt="", tamano_txt="", descripcion_txt=""):
     combined = normalizar_texto(f"{unidad_txt} {tamano_txt} {descripcion_txt}")
     
-    m_caj_num = re.search(r'(?:CAJA|CJ|BOX)[\s\-]*(\d+)', combined)
+    m_caj_num = re.search(r'(?:CAJA|CJ|BOX|PZAS|PZA)[\s\-]*(\d+)', combined)
     if m_caj_num:
         val = int(m_caj_num.group(1))
         if val > 0: return val
@@ -186,12 +186,9 @@ def parse_empaque_proveedor(proveedor_nombre, unidad_txt="", tamano_txt="", desc
         val = int(m_slash.group(1))
         if val > 1: return val
 
-    if "12X" in combined or "12/" in combined or "CJ12" in combined:
-        return 12
-    if "24X" in combined or "24/" in combined or "CJ24" in combined:
-        return 24
-    if "6X" in combined or "6/" in combined or "CJ6" in combined:
-        return 6
+    if "12" in combined: return 12
+    if "24" in combined: return 24
+    if "6" in combined: return 6
 
     return 1
 
@@ -232,7 +229,7 @@ st.sidebar.markdown("<h3 style='color: #0284c7;'>⚡ WilPOS Multi-Proveedor</h3>
 menu_opcion = st.sidebar.radio("Navegación", ["📄 Procesar Factura (Por Página)", "📁 Catálogo Maestro EAN", "🏢 Gestionar Proveedores"])
 
 st.sidebar.markdown("---")
-st.sidebar.markdown("<p style='font-size: 0.8rem; color: #10b981; font-weight: 600;'>🟢 Sistema Actualizado</p>", unsafe_allow_html=True)
+st.sidebar.markdown("<p style='font-size: 0.8rem; color: #10b981; font-weight: 600;'>🟢 Costos Netos sin ITBIS Blindados</p>", unsafe_allow_html=True)
 
 if st.sidebar.button("🔄 Reiniciar Historial y Filtros"):
     st.session_state["paginas_procesadas_historial"] = set()
@@ -246,8 +243,8 @@ if st.sidebar.button("🔄 Reiniciar Historial y Filtros"):
 # MÓDULO 1: PROCESAR FACTURA POR PÁGINA
 # ==========================================
 if menu_opcion == "📄 Procesar Factura (Por Página)":
-    st.markdown("<h2>📄 Procesador de Facturas (Multi-Proveedor)</h2>", unsafe_allow_html=True)
-    st.markdown("<p style='color: #64748b;'>Sube tu factura. Corrige o asigna códigos correctos al instante desde el panel.</p>", unsafe_allow_html=True)
+    st.markdown("<h2>📄 Procesador de Facturas (Cálculo de Costo Unitario Neto)</h2>", unsafe_allow_html=True)
+    st.markdown("<p style='color: #64748b;'>Sube tu factura. El costo unitario se calcula estrictamente dividiendo el subtotal neto de la caja (sin ITBIS) entre el empaque.</p>", unsafe_allow_html=True)
     st.markdown("---")
 
     if "factura_data" not in st.session_state: st.session_state["factura_data"] = None
@@ -341,10 +338,10 @@ if menu_opcion == "📄 Procesar Factura (Por Página)":
                     prompt_unificado = (
                         f"Estás procesando la página {pagina_a_procesar} de una factura del proveedor: '{prov_encontrado}'. "
                         f"Instrucción específica de su perfil: {instruccion_proveedor} "
-                        "Extrae 'descripcion', 'tamano', 'cantidad', 'unidad', 'precio_unitario', 'descuento_porcentaje' y 'monto_neto' de los ítems presentes en ESTA PÁGINA. "
-                        "IMPORTANTE: No inventes códigos EAN ni los confundas entre productos diferentes. "
+                        "Extrae 'descripcion', 'tamano', 'cantidad' (cantidad de cajas o bultos), 'unidad' (ej. 12 PZAS), 'precio_unitario' (el precio unitario de la caja/paquete SIN ITBIS), 'descuento_porcentaje' y 'monto_neto' (subtotal de la línea SIN ITBIS). "
+                        "IMPORTANTE: No mezcles el ITBIS con el precio unitario ni con el monto neto. "
                         "Devuelve un JSON puro con esta estructura exacta y llaves en minúscula: "
-                        '{"paginacion": "' + str(pagina_a_procesar) + '", "proveedor_detectado": "' + prov_encontrado + '", "subtotal": 0.0, "itbis": 0.0, "descuentos": 0.0, "total": 0.0, "items": [{"descripcion": "...", "tamano": "750ML", "cantidad": 1.0, "unidad": "CAJA12", "precio_unitario": 5450.0, "descuento_porcentaje": 10.70, "monto_neto": 4866.85}]}. '
+                        '{"paginacion": "' + str(pagina_a_procesar) + '", "proveedor_detectado": "' + prov_encontrado + '", "subtotal": 0.0, "itbis": 0.0, "descuentos": 0.0, "total": 0.0, "items": [{"descripcion": "...", "tamano": "500ML", "cantidad": 10.0, "unidad": "12 PZAS", "precio_unitario": 344.07, "descuento_porcentaje": 0.0, "monto_neto": 3440.70}]}. '
                         "Respuesta JSON pura."
                     )
 
@@ -376,7 +373,7 @@ if menu_opcion == "📄 Procesar Factura (Por Página)":
         total_descuentos = safe_float(data_resp.get("descuentos"))
         total_val = safe_float(data_resp.get("total"))
 
-        total_importe_neto = sum(safe_float(i.get("monto_neto") or i.get("precio_unitario")) for i in items)
+        total_importe_neto = sum(safe_float(i.get("monto_neto") or (safe_float(i.get("precio_unitario")) * safe_float(i.get("cantidad")))) for i in items)
         if subtotal_val == 0.0 and items: subtotal_val = total_importe_neto
         if total_val == 0.0 and items: total_val = subtotal_val * 1.18
 
@@ -418,15 +415,21 @@ if menu_opcion == "📄 Procesar Factura (Por Página)":
                 desc_pct = safe_float(item.get("descuento_porcentaje"), 0.0)
                 monto_neto_linea = safe_float(item.get("monto_neto"), 0.0)
 
+                # ==========================================
+                # CÁLCULO ESTRICTO DE COSTO UNITARIO NETO (SIN ITBIS)
+                # ==========================================
                 if p_unit_extraido > 0:
+                    # Precio de la caja neto con descuento aplicado, dividido entre el empaque
                     precio_neto_caja = p_unit_extraido * (1 - (desc_pct / 100.0))
-                    costo_unitario_real = round(precio_neto_caja / empaque, 2) if empaque > 1 else precio_neto_caja
+                    costo_unitario_real = round(precio_neto_caja / empaque, 4) if empaque > 1 else precio_neto_caja
                 elif monto_neto_linea > 0 and total_unidades > 0:
-                    costo_unitario_real = round(monto_neto_linea / total_unidades, 2)
+                    # Monto neto total de la línea dividido entre el total de unidades
+                    costo_unitario_real = round(monto_neto_linea / total_unidades, 4)
                 else:
                     costo_unitario_real = 0.0
 
                 if costo_unitario_real > 0:
+                    # El precio de venta se calcula sobre el costo unitario neto (sin ITBIS), aplicándole la utilidad y sumando el ITBIS (18%) al final
                     precio_con_utilidad = costo_unitario_real * (1 + (margen_utilidad / 100.0))
                     precio_venta = round_to_nearest_5(precio_con_utilidad * 1.18)
                 else:
@@ -439,7 +442,7 @@ if menu_opcion == "📄 Procesar Factura (Por Página)":
                 })
 
             # ==========================================
-            # AUDITORÍA Y CORRECCIÓN INTELIGENTE DE DUPLICADOS (FILTRANDO CONFIRMADOS)
+            # AUDITORÍA Y CORRECCIÓN INTELIGENTE DE DUPLICADOS
             # ==========================================
             codigos_vistos = {}
             duplicados_encontrados = []
@@ -571,13 +574,12 @@ elif menu_opcion == "📁 Catálogo Maestro EAN":
 
     master_dict = load_json_file(MASTER_CATALOG_FILE, "dict")
 
-    # Formulario para Agregar Producto Manualmente (Restaurado)
     st.markdown('<div class="card-container">', unsafe_allow_html=True)
     st.markdown("### ➕ Agregar Producto Individual Manualmente")
     with st.form("form_agregar_maestro_individual"):
         col_fm1, col_fm2 = st.columns([2, 1])
         with col_fm1:
-            nuevo_nombre_prod = st.text_input("Nombre / Descripción Oficial del Producto", placeholder="EJ. COCA COLA 500 ML NRP 750ML...")
+            nuevo_nombre_prod = st.text_input("Nombre / Descripción Oficial del Producto", placeholder="EJ. COCA COLA 500 ML NRP 500ML...")
         with col_fm2:
             nuevo_codigo_prod = st.text_input("Código EAN / SAP Oficial", placeholder="EJ. 7461234567890...")
         
