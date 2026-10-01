@@ -206,11 +206,7 @@ if "supplier_memory" not in st.session_state:
 if "master_catalog" not in st.session_state:
     loaded_master = load_json_file(MASTER_CATALOG_FILE, "dict")
     if not loaded_master:
-        base_defaults = {
-            "ANTIOQUEÑO TAPA ROJA 750 ML": "7702131234567",
-            "OLD PARR 12 AÑOS 750ML": "7804300120986",
-            "FRONTERA SAUVIGNON BLANC C Y T 750ML": "051497455286"
-        }
+        base_defaults = {} # Iniciamos limpio o vacío según prefieras
         loaded_master = base_defaults
         save_json_file(MASTER_CATALOG_FILE, loaded_master)
     st.session_state["master_catalog"] = loaded_master
@@ -225,12 +221,14 @@ st.sidebar.markdown("<h3 style='color: #0284c7;'>⚡ WilPOS Multi-Proveedor</h3>
 menu_opcion = st.sidebar.radio("Navegación", ["📄 Procesar Factura (Por Página)", "📁 Catálogo Maestro EAN", "🏢 Gestionar Proveedores"])
 
 st.sidebar.markdown("---")
-st.sidebar.markdown("<p style='font-size: 0.8rem; color: #10b981; font-weight: 600;'>🟢 Maestro Protegido</p>", unsafe_allow_html=True)
+st.sidebar.markdown("<p style='font-size: 0.8rem; color: #10b981; font-weight: 600;'>🟢 Control Total Activo</p>", unsafe_allow_html=True)
 
-if st.sidebar.button("🔄 Reiniciar Historial y Filtros"):
+if st.sidebar.button("🔄 Reiniciar Todo el Sistema (Maestro y Sesión)"):
     st.session_state["paginas_procesadas_historial"] = set()
+    st.session_state["codigos_manuales_sesion"] = {}
     st.session_state["factura_data"] = None
-    st.success("Historial limpiado.")
+    save_json_file(MASTER_CATALOG_FILE, {}) # Vaciar maestro oficial
+    st.success("¡Sistema reiniciado por completo con éxito!")
     time.sleep(0.5)
     st.rerun()
 
@@ -239,7 +237,7 @@ if st.sidebar.button("🔄 Reiniciar Historial y Filtros"):
 # ==========================================
 if menu_opcion == "📄 Procesar Factura (Por Página)":
     st.markdown("<h2>📄 Procesador de Facturas (Multi-Proveedor)</h2>", unsafe_allow_html=True)
-    st.markdown("<p style='color: #64748b;'>Sube tu factura. Las ediciones en sesión son temporales y NUNCA alteran el archivo maestro automáticamente.</p>", unsafe_allow_html=True)
+    st.markdown("<p style='color: #64748b;'>Sube tu factura. Las ediciones se realizan mediante doble clic de forma temporal en sesión y nunca alteran el maestro.</p>", unsafe_allow_html=True)
     st.markdown("---")
 
     if "factura_data" not in st.session_state: st.session_state["factura_data"] = None
@@ -523,22 +521,16 @@ if menu_opcion == "📄 Procesar Factura (Por Página)":
 # ==========================================
 elif menu_opcion == "📁 Catálogo Maestro EAN":
     st.markdown("<h2>📁 Gestión, Carga y Limpieza del Archivo Maestro EAN</h2>", unsafe_allow_html=True)
-    st.markdown("<p style='color: #64748b;'>Este es el único lugar donde se alimenta y actualiza el archivo maestro oficial.</p>", unsafe_allow_html=True)
+    st.markdown("<p style='color: #64748b;'>Este es el único lugar donde se alimenta y actualiza el archivo maestro oficial de forma manual.</p>", unsafe_allow_html=True)
     st.markdown("---")
 
     master_dict = load_json_file(MASTER_CATALOG_FILE, "dict")
 
-    # Botón para Reiniciar/Restaurar el Catálogo Maestro
     col_rst1, col_rst2 = st.columns([3, 1])
     with col_rst2:
-        if st.button("⚠️ Reiniciar / Vaciar Maestro"):
-            base_defaults = {
-                "ANTIOQUEÑO TAPA ROJA 750 ML": "7702131234567",
-                "OLD PARR 12 AÑOS 750ML": "7804300120986",
-                "FRONTERA SAUVIGNON BLANC C Y T 750ML": "051497455286"
-            }
-            save_json_file(MASTER_CATALOG_FILE, base_defaults)
-            st.success("¡Catálogo maestro restaurado a valores por defecto con éxito!")
+        if st.button("⚠️ Vaciar Archivo Maestro"):
+            save_json_file(MASTER_CATALOG_FILE, {})
+            st.success("¡Catálogo maestro vaciado correctamente!")
             time.sleep(0.5)
             st.rerun()
 
@@ -571,6 +563,8 @@ elif menu_opcion == "📁 Catálogo Maestro EAN":
         st.markdown(f"### 📋 Productos Registrados en el Archivo Maestro ({len(master_dict):,} registros)")
         df_show = pd.DataFrame([{"Producto / Descripción": k, "Código EAN/SAP Oficial": v} for k, v in master_dict.items()])
         st.dataframe(df_show, use_container_width=True, hide_index=True)
+    else:
+        st.info("ℹ️ El archivo maestro está actualmente vacío. Agrega productos manualmente o cárgalos.")
 
 # ==========================================
 # MÓDULO 3: GESTIONAR PROVEEDORES
