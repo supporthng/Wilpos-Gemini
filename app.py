@@ -206,8 +206,7 @@ if "supplier_memory" not in st.session_state:
 if "master_catalog" not in st.session_state:
     loaded_master = load_json_file(MASTER_CATALOG_FILE, "dict")
     if not loaded_master:
-        base_defaults = {} # Iniciamos limpio o vacío según prefieras
-        loaded_master = base_defaults
+        loaded_master = {}
         save_json_file(MASTER_CATALOG_FILE, loaded_master)
     st.session_state["master_catalog"] = loaded_master
 
@@ -227,7 +226,7 @@ if st.sidebar.button("🔄 Reiniciar Todo el Sistema (Maestro y Sesión)"):
     st.session_state["paginas_procesadas_historial"] = set()
     st.session_state["codigos_manuales_sesion"] = {}
     st.session_state["factura_data"] = None
-    save_json_file(MASTER_CATALOG_FILE, {}) # Vaciar maestro oficial
+    save_json_file(MASTER_CATALOG_FILE, {})
     st.success("¡Sistema reiniciado por completo con éxito!")
     time.sleep(0.5)
     st.rerun()
@@ -534,6 +533,41 @@ elif menu_opcion == "📁 Catálogo Maestro EAN":
             time.sleep(0.5)
             st.rerun()
 
+    # ==========================================
+    # CARGA MASIVA DE EXCEL AL MAESTRO
+    # ==========================================
+    st.markdown('<div class="card-container">', unsafe_allow_html=True)
+    st.markdown("### 📂 Carga Masiva de Catálogo Maestro (Excel)")
+    uploaded_master_file = st.file_uploader("Sube tu archivo Excel con productos y códigos EAN", type=["xlsx", "xls"], key="upload_master_excel")
+    
+    if uploaded_master_file is not None:
+        try:
+            df_upload = pd.read_excel(uploaded_master_file)
+            st.write("Vista previa del archivo cargado:", df_upload.head(3))
+            
+            col_desc_opt = st.selectbox("Selecciona la columna de Nombre/Descripción:", df_upload.columns)
+            col_ean_opt = st.selectbox("Selecciona la columna de Código EAN/Barras:", df_upload.columns)
+            
+            if st.button("📥 Importar y Fusionar al Maestro Oficial"):
+                nuevos_agregados = 0
+                for _, row in df_upload.iterrows():
+                    p_desc = str(row[col_desc_opt]).upper().strip()
+                    p_ean = clean_ean_code(row[col_ean_opt])
+                    if p_desc and p_desc != "NAN" and p_ean != "S/C":
+                        master_dict[p_desc] = p_ean
+                        nuevos_agregados += 1
+                
+                save_json_file(MASTER_CATALOG_FILE, master_dict)
+                st.success(f"¡Se han importado y guardado {nuevos_agregados} productos exitosamente en el maestro oficial!")
+                time.sleep(0.8)
+                st.rerun()
+        except Exception as e:
+            st.error(f"Error al leer el archivo Excel: {str(e)}")
+    st.markdown('</div>', unsafe_allow_html=True)
+
+    # ==========================================
+    # AGREGAR INDIVIDUAL
+    # ==========================================
     st.markdown('<div class="card-container">', unsafe_allow_html=True)
     st.markdown("### ➕ Agregar Producto Individual Manualmente")
     with st.form("form_agregar_maestro_individual"):
@@ -564,7 +598,7 @@ elif menu_opcion == "📁 Catálogo Maestro EAN":
         df_show = pd.DataFrame([{"Producto / Descripción": k, "Código EAN/SAP Oficial": v} for k, v in master_dict.items()])
         st.dataframe(df_show, use_container_width=True, hide_index=True)
     else:
-        st.info("ℹ️ El archivo maestro está actualmente vacío. Agrega productos manualmente o cárgalos.")
+        st.info("ℹ️ El archivo maestro está actualmente vacío. Agrega productos manualmente o cárgalos mediante Excel.")
 
 # ==========================================
 # MÓDULO 3: GESTIONAR PROVEEDORES
