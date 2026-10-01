@@ -76,7 +76,7 @@ if "supplier_memory" not in st.session_state:
         "BEPENSA DOMINICANA SA": {
             "nombre": "BEPENSA DOMINICANA SA",
             "tipo_formato": "factura_tique_bepensa",
-            "instruccion_prompt": "Analiza esta página de la factura de BEPENSA DOMINICANA SA renglón por renglón. Extrae 'descripcion', 'tamano', 'cantidad', 'unidad', 'precio_unitario' (precio de la caja sin ITBIS), 'descuento_porcentaje' y 'monto_neto' (subtotal de la línea sin ITBIS)."
+            "instruccion_prompt": "Analiza esta página de la factura de BEPENSA DOMINICANA SA renglón por renglón. Extrae 'descripcion', 'tamano', 'cantidad', 'unidad', 'precio_unitario' (precio neto del paquete sin ITBIS), 'descuento_porcentaje' y 'monto_neto' (subtotal de la línea sin ITBIS)."
         },
         "EL CATADOR": {
             "nombre": "EL CATADOR",
@@ -165,7 +165,7 @@ def limpiar_nombre_y_extraer_presentacion(proveedor_activo, descripcion_raw, tam
     if "75CL" in presentacion:
         presentacion = "750ML"
 
-    desc_limpia = re.sub(r'\b(CAJA\s*\d*|CJ\s*\d*\s*BOT|\d+\s*X\s*\d+\s*(?:ML|CL|L)|\d+/\s*\d+\s*(?:ML|CL|L|750ML)|750\s*ML|75\s*CL|750ML|75CL|\d+OZ|\d+\s*PZAS|\d+\s*PZA)\b', '', t_norm)
+    desc_limpia = re.sub(r'\b(CAJA\s*\d*|CJ\s*\d*\s*BOT|\d+\s*X\s*\d+\s*(?:ML|CL|L)|\d+/\s*\d+\s*(?:ML|CL|L|750ML)|750\s*ML|75\s*CL|750ML|75CL|\d+OZ|\d+\s*PZAS|\d+\s*PZA|\d+P\b|\b4P\b|\b12P\b)\b', '', t_norm)
     desc_limpia = re.sub(r'\s+', ' ', desc_limpia).strip()
     
     if presentacion != "UN" and presentacion not in desc_limpia:
@@ -176,13 +176,17 @@ def limpiar_nombre_y_extraer_presentacion(proveedor_activo, descripcion_raw, tam
 def parse_empaque_proveedor(proveedor_nombre, unidad_txt="", tamano_txt="", descripcion_txt=""):
     combined = normalizar_texto(f"{unidad_txt} {tamano_txt} {descripcion_txt}")
     
-    # 1. Buscar número precedido o seguido de palabras de empaque (PZAS, PZA, CAJA, CJ, BOT)
+    # Detección ultra precisa para Bepensa (ej. 12 Pzas, 4P, Lt 4P, etc.)
     m_pzas = re.search(r'(?:(\d+)\s*(?:PZAS|PZA|BOT|UNIDADES|UN|CAJA|CJ|BOX))|(?:(?:PZAS|PZA|BOT|CAJA|CJ|BOX)[\s\-]*(\d+))', combined)
     if m_pzas:
         val = int(m_pzas.group(1) or m_pzas.group(2))
         if val > 0: return val
 
-    # 2. Buscar números aislados comunes en bebidas (12, 24, 6)
+    m_pack = re.search(r'(?:LT\s*)?(\d+)\s*P\b', combined)
+    if m_pack:
+        val = int(m_pack.group(1))
+        if val > 0: return val
+
     for num in [12, 24, 6, 4]:
         if f" {num} " in combined or combined.endswith(f" {num}") or f"/{num}" in combined:
             return num
@@ -226,7 +230,7 @@ st.sidebar.markdown("<h3 style='color: #0284c7;'>⚡ WilPOS Multi-Proveedor</h3>
 menu_opcion = st.sidebar.radio("Navegación", ["📄 Procesar Factura (Por Página)", "📁 Catálogo Maestro EAN", "🏢 Gestionar Proveedores"])
 
 st.sidebar.markdown("---")
-st.sidebar.markdown("<p style='font-size: 0.8rem; color: #10b981; font-weight: 600;'>🟢 Detección de Empaque 'Pzas' Activa</p>", unsafe_allow_html=True)
+st.sidebar.markdown("<p style='font-size: 0.8rem; color: #10b981; font-weight: 600;'>🟢 Costos y Packs (4P, 12Pzas) Blindados</p>", unsafe_allow_html=True)
 
 if st.sidebar.button("🔄 Reiniciar Historial y Filtros"):
     st.session_state["paginas_procesadas_historial"] = set()
@@ -240,8 +244,8 @@ if st.sidebar.button("🔄 Reiniciar Historial y Filtros"):
 # MÓDULO 1: PROCESAR FACTURA POR PÁGINA
 # ==========================================
 if menu_opcion == "📄 Procesar Factura (Por Página)":
-    st.markdown("<h2>📄 Procesador de Facturas (Cálculo de Costo Unitario Exacto)</h2>", unsafe_allow_html=True)
-    st.markdown("<p style='color: #64748b;'>Sube tu factura. El sistema detecta automáticamente el empaque (ej. 12 Pzas) para dividir el costo de la caja de forma perfecta.</p>", unsafe_allow_html=True)
+    st.markdown("<h2>📄 Procesador de Facturas (Cálculo de Costo por Unidad Real)</h2>", unsafe_allow_html=True)
+    st.markdown("<p style='color: #64748b;'>Sube tu factura. El sistema detecta correctamente packs de 4 (4P) y cajas de 12 para calcular el costo por unidad sin ITBIS.</p>", unsafe_allow_html=True)
     st.markdown("---")
 
     if "factura_data" not in st.session_state: st.session_state["factura_data"] = None
@@ -335,9 +339,9 @@ if menu_opcion == "📄 Procesar Factura (Por Página)":
                     prompt_unificado = (
                         f"Estás procesando la página {pagina_a_procesar} de una factura del proveedor: '{prov_encontrado}'. "
                         f"Instrucción específica de su perfil: {instruccion_proveedor} "
-                        "Extrae 'descripcion' (ej. 'Coca Cola 500Ml Nrp 12 Pzas'), 'tamano', 'cantidad' (número de cajas o paquetes), 'unidad' (ej. '12 PZAS'), 'precio_unitario' (el precio neto de la caja sin ITBIS), 'descuento_porcentaje' y 'monto_neto' (subtotal de la línea sin ITBIS). "
+                        "Extrae 'descripcion' (ej. 'Monster Energy Lata 473ml 4P'), 'tamano' (ej. '473ML'), 'cantidad' (número de bultos o packs), 'unidad' (ej. '4P'), 'precio_unitario' (el precio neto del paquete sin ITBIS), 'descuento_porcentaje' y 'monto_neto' (subtotal de la línea sin ITBIS). "
                         "Devuelve un JSON puro con esta estructura exacta y llaves en minúscula: "
-                        '{"paginacion": "' + str(pagina_a_procesar) + '", "proveedor_detectado": "' + prov_encontrado + '", "subtotal": 0.0, "itbis": 0.0, "descuentos": 0.0, "total": 0.0, "items": [{"descripcion": "Coca Cola 500Ml Nrp 12 Pzas", "tamano": "500ML", "cantidad": 10.0, "unidad": "12 PZAS", "precio_unitario": 344.07, "descuento_porcentaje": 0.0, "monto_neto": 3440.70}]}. '
+                        '{"paginacion": "' + str(pagina_a_procesar) + '", "proveedor_detectado": "' + prov_encontrado + '", "subtotal": 0.0, "itbis": 0.0, "descuentos": 0.0, "total": 0.0, "items": [{"descripcion": "Monster Energy Lata 473ml 4P", "tamano": "473ML", "cantidad": 12.0, "unidad": "4P", "precio_unitario": 338.98, "descuento_porcentaje": 0.0, "monto_neto": 4067.76}]}. '
                         "Respuesta JSON pura."
                     )
 
@@ -412,11 +416,11 @@ if menu_opcion == "📄 Procesar Factura (Por Página)":
                 monto_neto_linea = safe_float(item.get("monto_neto"), 0.0)
 
                 # ==========================================
-                # CÁLCULO ESTRICTO DE COSTO UNITARIO NETO (POR BOTELLA)
+                # CÁLCULO ESTRICTO DE COSTO UNITARIO NETO (POR LATA / UNIDAD)
                 # ==========================================
                 if p_unit_extraido > 0:
-                    precio_neto_caja = p_unit_extraido * (1 - (desc_pct / 100.0))
-                    costo_unitario_real = round(precio_neto_caja / empaque, 4) if empaque > 1 else precio_neto_caja
+                    precio_neto_paquete = p_unit_extraido * (1 - (desc_pct / 100.0))
+                    costo_unitario_real = round(precio_neto_paquete / empaque, 4) if empaque > 1 else precio_neto_paquete
                 elif monto_neto_linea > 0 and total_unidades > 0:
                     costo_unitario_real = round(monto_neto_linea / total_unidades, 4)
                 else:
@@ -449,7 +453,7 @@ if menu_opcion == "📄 Procesar Factura (Por Página)":
                         codigos_vistos[c_code] = c_name
 
             if duplicados_encontrados:
-                st.warning("⚠️ **¡Atención! Se detectaron códigos EAN repetidos en esta página:**")
+                st.warning("⚠️️ **¡Atención! Se detectaron códigos EAN repetidos en esta página:**")
                 for cod_dup, p1, p2 in duplicados_encontrados:
                     st.markdown("---")
                     st.markdown(f"🔹 **Código compartido:** `{cod_dup}` asignado a: `📊 {p1}` y `📊 {p2}`")
@@ -572,7 +576,7 @@ elif menu_opcion == "📁 Catálogo Maestro EAN":
     with st.form("form_agregar_maestro_individual"):
         col_fm1, col_fm2 = st.columns([2, 1])
         with col_fm1:
-            nuevo_nombre_prod = st.text_input("Nombre / Descripción Oficial del Producto", placeholder="EJ. COCA COLA 500 ML NRP 500ML...")
+            nuevo_nombre_prod = st.text_input("Nombre / Descripción Oficial del Producto", placeholder="EJ. MONSTER ENERGY 473ML...")
         with col_fm2:
             nuevo_codigo_prod = st.text_input("Código EAN / SAP Oficial", placeholder="EJ. 7461234567890...")
         
