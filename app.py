@@ -119,23 +119,30 @@ def limpiar_nombre_y_extraer_presentacion(proveedor_activo, descripcion_raw, tam
     return desc_limpia, presentacion
 
 def parse_empaque_proveedor(proveedor_nombre, unidad_txt="", tamano_txt="", descripcion_txt=""):
+    """
+    Lee con precisión quirúrgica la columna 'Unidad' (ej. 24X12OZ, 15X65CL, 700ML, 750ML).
+    Si viene en formato AxB (ej. 24X12OZ), el empaque es estrictamente el número antes de la X (24).
+    Si viene solo la medida (ej. 750ML), es una unidad individual (empaque = 1).
+    """
+    unidad_norm = normalizar_texto(unidad_txt)
     combined = normalizar_texto(f"{unidad_txt} {tamano_txt} {descripcion_txt}")
     
-    m_mult = re.search(r'\b(\d+)\s*[xX]\s*\d+', combined)
+    # Patrón exacto AxB en la columna unidad o descripción (ej. 24X12, 15X65, 24X355)
+    m_mult = re.search(r'\b(\d+)\s*[xX]\s*\d+', unidad_norm)
     if m_mult:
         val = int(m_mult.group(1))
         if val > 0: return val
 
-    if any(m in unidad_txt.upper() for m in ["ML", "CL", "L"]) and "X" not in unidad_txt.upper():
-        if "BOT" in combined or "700ML" in combined or "750ML" in combined or "75CL" in combined:
-            return 12
+    m_mult_comb = re.search(r'\b(\d+)\s*[xX]\s*\d+', combined)
+    if m_mult_comb:
+        val = int(m_mult_comb.group(1))
+        if val > 0: return val
+
+    # Si la unidad es exclusivamente una medida volumétrica (ej. 700ML, 750ML, 75CL) sin X, es 1 unidad
+    if any(m in unidad_norm for m in ["ML", "CL", "L", "OZ"]) and "X" not in unidad_norm:
         return 1
 
-    for num in [24, 12, 15, 6, 4]:
-        if f" {num} " in combined or combined.endswith(f" {num}") or f"/{num}" in combined:
-            return num
-
-    return 12
+    return 1
 
 def buscar_en_catalogo_maestro(nombre_producto, presentacion=""):
     n_norm = normalizar_texto(nombre_producto)
@@ -179,7 +186,7 @@ if "supplier_memory" not in st.session_state:
         "UNITED BRANDS S A": {
             "nombre": "UNITED BRANDS S A",
             "tipo_formato": "factura_tabla_united_brands",
-            "instruccion_prompt": "Analiza esta página de la factura de UNITED BRANDS S A renglón por renglón. Extrae 'descripcion', 'tamano', 'cantidad', 'unidad', 'precio_unitario', 'descuento_porcentaje' y 'monto_neto' (Imp. Neto)."
+            "instruccion_prompt": "Analiza esta página de la factura de UNITED BRANDS S A renglón por renglón. Extrae 'descripcion', 'tamano', 'cantidad', 'unidad' (ej. 24X12OZ, 750ML), 'precio_unitario', 'descuento_porcentaje' y 'monto_neto' (Imp. Neto sin ITBIS y con descuento)."
         },
         "BEPENSA DOMINICANA SA": {
             "nombre": "BEPENSA DOMINICANA SA",
@@ -232,7 +239,7 @@ st.sidebar.markdown("<h3 style='color: #0284c7;'>⚡ WilPOS Multi-Proveedor</h3>
 menu_opcion = st.sidebar.radio("Navegación", ["📄 Procesar Factura (Por Página)", "📁 Catálogo Maestro EAN", "🏢 Gestionar Proveedores"])
 
 st.sidebar.markdown("---")
-st.sidebar.markdown("<p style='font-size: 0.8rem; color: #10b981; font-weight: 600;'>🟢 Sistema Operativo Corregido</p>", unsafe_allow_html=True)
+st.sidebar.markdown("<p style='font-size: 0.8rem; color: #10b981; font-weight: 600;'>🟢 Empaques por Unidad y Costos Precisos</p>", unsafe_allow_html=True)
 
 if st.sidebar.button("🔄 Reiniciar Historial y Filtros"):
     st.session_state["paginas_procesadas_historial"] = set()
@@ -246,8 +253,8 @@ if st.sidebar.button("🔄 Reiniciar Historial y Filtros"):
 # MÓDULO 1: PROCESAR FACTURA POR PÁGINA
 # ==========================================
 if menu_opcion == "📄 Procesar Factura (Por Página)":
-    st.markdown("<h2>📄 Procesador de Facturas (Multi-Proveedor)</h2>", unsafe_allow_html=True)
-    st.markdown("<p style='color: #64748b;'>Sube tu factura. El sistema calcula automáticamente los costos unitarios netos y los precios de venta.</p>", unsafe_allow_html=True)
+    st.markdown("<h2>📄 Procesador de Facturas (United Brands & Multi-Proveedor)</h2>", unsafe_allow_html=True)
+    st.markdown("<p style='color: #64748b;'>Sube tu factura. El empaque se detecta de la columna Unidad (ej. 24X12OZ = 24, 750ML = 1) y el costo se calcula con el Imp. Neto.</p>", unsafe_allow_html=True)
     st.markdown("---")
 
     if "factura_data" not in st.session_state: st.session_state["factura_data"] = None
@@ -341,9 +348,9 @@ if menu_opcion == "📄 Procesar Factura (Por Página)":
                     prompt_unificado = (
                         f"Estás procesando la página {pagina_a_procesar} de una factura del proveedor: '{prov_encontrado}'. "
                         f"Instrucción específica de su perfil: {instruccion_proveedor} "
-                        "Extrae 'descripcion', 'tamano', 'cantidad', 'unidad', 'precio_unitario', 'descuento_porcentaje' y 'monto_neto' (Impuesto Neto sin ITBIS y con descuento aplicado). "
+                        "Extrae para cada renglón: 'descripcion', 'tamano', 'cantidad' (cantidad de bultos/cajas), 'unidad' (copia exacta de la columna 'Unida.', ej. '24X12OZ', '24X355ML', '750ML'), 'precio_unitario', 'descuento_porcentaje' y 'monto_neto' (que corresponde exactamente al valor de la columna 'Imp. Neto', es decir, sin ITBIS y con descuento aplicado). "
                         "Devuelve un JSON puro con esta estructura exacta y llaves en minúscula: "
-                        '{"paginacion": "' + str(pagina_a_procesar) + '", "proveedor_detectado": "' + prov_encontrado + '", "subtotal": 0.0, "itbis": 0.0, "descuentos": 0.0, "total": 0.0, "items": [{"descripcion": "...", "tamano": "750ML", "cantidad": 1.0, "unidad": "750ML", "precio_unitario": 100.0, "descuento_porcentaje": 0.0, "monto_neto": 100.0}]}. '
+                        '{"paginacion": "' + str(pagina_a_procesar) + '", "proveedor_detectado": "' + prov_encontrado + '", "subtotal": 0.0, "itbis": 0.0, "descuentos": 0.0, "total": 0.0, "items": [{"descripcion": "COORS ORIGINAL BOT 24X12OZ", "tamano": "24X12OZ", "cantidad": 2.0, "unidad": "24X12OZ", "precio_unitario": 2458.00, "descuento_porcentaje": 0.0, "monto_neto": 4916.00}]}. '
                         "Respuesta JSON pura."
                     )
 
@@ -417,6 +424,9 @@ if menu_opcion == "📄 Procesar Factura (Por Página)":
                 p_unit_extraido = safe_float(item.get("precio_unitario"), 0.0)
                 desc_pct = safe_float(item.get("descuento_porcentaje"), 0.0)
 
+                # ==========================================
+                # CÁLCULO DE COSTO UNITARIO REAL POR UNIDAD/BOTELLA
+                # ==========================================
                 if monto_neto_linea > 0 and total_unidades > 0:
                     costo_unitario_real = round(monto_neto_linea / total_unidades, 4)
                 elif p_unit_extraido > 0:
@@ -575,7 +585,7 @@ elif menu_opcion == "📁 Catálogo Maestro EAN":
     with st.form("form_agregar_maestro_individual"):
         col_fm1, col_fm2 = st.columns([2, 1])
         with col_fm1:
-            nuevo_nombre_prod = st.text_input("Nombre / Descripción Oficial del Producto", placeholder="EJ. CHIVAS REGAL 12YO 750ML...")
+            nuevo_nombre_prod = st.text_input("Nombre / Descripción Oficial del Producto", placeholder="EJ. COORS ORIGINAL 355ML...")
         with col_fm2:
             nuevo_codigo_prod = st.text_input("Código EAN / SAP Oficial", placeholder="EJ. 7461234567890...")
         
