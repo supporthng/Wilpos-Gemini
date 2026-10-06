@@ -40,8 +40,10 @@ gemini_key = (
 if gemini_key:
     genai.configure(api_key=gemini_key)
 
-SUPPLIER_MEMORY_FILE = "proveedores_formatos_memoria.json"
-MASTER_CATALOG_FILE = "catalogo_maestro_sistema.json"
+# Rutas absolutas persistentes en el directorio de trabajo
+BASE_DIR = os.path.dirname(os.path.abspath(__file__)) if "__file__" in locals() else os.getcwd()
+SUPPLIER_MEMORY_FILE = os.path.join(BASE_DIR, "proveedores_formatos_memoria.json")
+MASTER_CATALOG_FILE = os.path.join(BASE_DIR, "catalogo_maestro_sistema.json")
 
 def load_json_file(filepath, default_type="dict"):
     if os.path.exists(filepath):
@@ -50,7 +52,7 @@ def load_json_file(filepath, default_type="dict"):
                 data = json.load(f)
                 if default_type == "dict":
                     if isinstance(data, dict):
-                        return {str(k).upper().strip(): v for k, v in data.items() if k}
+                        return {str(k).upper().strip(): str(v) for k, v in data.items() if k}
                     return {}
                 elif default_type == "list":
                     if isinstance(data, list):
@@ -64,11 +66,13 @@ def save_json_file(filepath, data):
     try:
         with open(filepath, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=4)
-    except Exception:
-        pass
+        return True
+    except Exception as e:
+        st.error(f"Error al guardar archivo persistente: {e}")
+        return False
 
 # ==========================================
-# UTILIDADES Y FUNCIONES AUXILIARES CORREGIDAS
+# UTILIDADES Y FUNCIONES AUXILIARES
 # ==========================================
 def safe_float(val, default=0.0):
     try:
@@ -103,26 +107,18 @@ def limpiar_nombre_y_extraer_presentacion(proveedor_activo, descripcion_raw, tam
     t_tam = normalizar_texto(tamano_raw)
     combined_raw = f"{t_norm} {t_tam}"
     
-    # Detección robusta de volumen sin confundirse con códigos numéricos internos
     presentacion = "750ML"
-    if "3 LT" in combined_raw or "3000" in combined_raw:
-        presentacion = "3000 ML"
-    elif "1.5 LT" in combined_raw or "1.5L" in combined_raw or "1500" in combined_raw:
-        presentacion = "1500 ML"
-    elif "1 L" in combined_raw or "1LT" in combined_raw or "1000" in combined_raw:
-        presentacion = "1000 ML"
-    elif "75CL" in combined_raw or "750" in combined_raw:
-        presentacion = "750 ML"
-    elif "375" in combined_raw:
-        presentacion = "375 ML"
+    if "3 LT" in combined_raw or "3000" in combined_raw: presentacion = "3000ML"
+    elif "1.5 LT" in combined_raw or "1.5L" in combined_raw or "1500" in combined_raw: presentacion = "1500ML"
+    elif "1 L" in combined_raw or "1LT" in combined_raw or "1000" in combined_raw: presentacion = "1000ML"
+    elif "700" in combined_raw or "6/700" in combined_raw: presentacion = "700ML"
+    elif "75CL" in combined_raw or "750" in combined_raw: presentacion = "750ML"
+    elif "375" in combined_raw: presentacion = "375ML"
 
-    # Limpiar códigos internos de factura de 4 o 5 dígitos (ej. 04628, 01875, 02766)
     desc_limpia = re.sub(r'\b\d{4,5}\b', '', t_norm)
-    # Limpiar términos de empaque comunes
-    desc_limpia = re.sub(r'\b(CAJA\s*\d*|CJ\s*\d*\s*BOT|BOT|BOTELLA|LATA|LATAS|3\s*LT|1\.5\s*LT|1\s*LT|1\s*L|750\s*ML|75\s*CL|750ML|75CL|1000\s*ML|1000ML|1L|1LT|500\s*ML|375\s*ML|700\s*ML)\b', '', desc_limpia)
+    desc_limpia = re.sub(r'\b(CAJA\s*\d*|CJ\s*\d*\s*BOT|BOT|BOTELLA|LATA|LATAS|\d+/\d+|\d+\s*X\s*\d+|3\s*LT|1\.5\s*LT|1\s*LT|1\s*L|700\s*ML|750\s*ML|75\s*CL|750ML|75CL|1000\s*ML|1000ML|1L|1LT|500\s*ML|375\s*ML)\b', '', desc_limpia)
     desc_limpia = re.sub(r'\s+', ' ', desc_limpia).strip()
     
-    # Reintegrar el formato de presentación estándar limpio que usa tu maestro
     if presentacion not in desc_limpia:
         desc_limpia = f"{desc_limpia} {presentacion}".strip()
         
@@ -132,6 +128,16 @@ def parse_empaque_proveedor(proveedor_nombre, unidad_txt="", tamano_txt="", desc
     unidad_norm = normalizar_texto(unidad_txt)
     combined = normalizar_texto(f"{unidad_txt} {tamano_txt} {descripcion_txt}")
     
+    m_cj_bot = re.search(r'CJ(\d+)BOT', unidad_norm)
+    if m_cj_bot:
+        val = int(m_cj_bot.group(1))
+        if val > 0: return val
+
+    m_cj_bot_comb = re.search(r'CJ(\d+)BOT', combined)
+    if m_cj_bot_comb:
+        val = int(m_cj_bot_comb.group(1))
+        if val > 0: return val
+
     m_mult = re.search(r'\b(\d+)\s*[xX]\s*\d+', unidad_norm)
     if m_mult:
         val = int(m_mult.group(1))
@@ -146,9 +152,9 @@ def parse_empaque_proveedor(proveedor_nombre, unidad_txt="", tamano_txt="", desc
 
 def buscar_en_catalogo_maestro(nombre_producto, presentacion=""):
     n_norm = normalizar_texto(nombre_producto)
-    p_norm = normalizar_texto(presentacion)
     
-    master_dict = load_json_file(MASTER_CATALOG_FILE, "dict")
+    # Obtener siempre desde session_state sincronizado con disco
+    master_dict = st.session_state.get("master_catalog", load_json_file(MASTER_CATALOG_FILE, "dict"))
     if not master_dict:
         return "S/C"
 
@@ -181,11 +187,16 @@ def buscar_en_catalogo_maestro(nombre_producto, presentacion=""):
     return mejor_codigo
 
 # ==========================================
-# GESTIÓN DE PERFILES Y CATÁLOGO
+# GESTIÓN DE PERFILES Y CATÁLOGO PERMANENTE
 # ==========================================
 if "supplier_memory" not in st.session_state:
     loaded_supps = load_json_file(SUPPLIER_MEMORY_FILE, "dict")
     default_profiles = {
+        "ELIAS DISTRIBUCION": {
+            "nombre": "ELIAS DISTRIBUCION",
+            "tipo_formato": "factura_tabla_elias",
+            "instruccion_prompt": "Analiza esta factura de ELIAS DISTRIBUCION renglón por renglón. Extrae 'descripcion', 'tamano', 'cantidad', 'unidad' (ej. CJ6BOT), 'precio_unitario', 'descuento_porcentaje' y 'monto_neto'."
+        },
         "UNITED BRANDS S A": {
             "nombre": "UNITED BRANDS S A",
             "tipo_formato": "factura_tabla_united_brands",
@@ -212,17 +223,14 @@ if "supplier_memory" not in st.session_state:
             "instruccion_prompt": "Analiza esta página de la factura de ALVAREZ & SANCHEZ renglón por renglón. Extrae 'descripcion', 'tamano', 'cantidad', 'unidad', 'precio_unitario', 'descuento_porcentaje' y 'monto_neto'."
         }
     }
-    if not loaded_supps or "UNITED BRANDS S A" not in loaded_supps:
+    if not loaded_supps or "ELIAS DISTRIBUCION" not in loaded_supps:
         loaded_supps.update(default_profiles)
         save_json_file(SUPPLIER_MEMORY_FILE, loaded_supps)
     st.session_state["supplier_memory"] = loaded_supps
 
 if "master_catalog" not in st.session_state:
-    loaded_master = load_json_file(MASTER_CATALOG_FILE, "dict")
-    if not loaded_master:
-        loaded_master = {}
-        save_json_file(MASTER_CATALOG_FILE, loaded_master)
-    st.session_state["master_catalog"] = loaded_master
+    # Cargar directamente de disco al iniciar la app
+    st.session_state["master_catalog"] = load_json_file(MASTER_CATALOG_FILE, "dict")
 
 if "codigos_manuales_sesion" not in st.session_state:
     st.session_state["codigos_manuales_sesion"] = {}
@@ -234,14 +242,13 @@ st.sidebar.markdown("<h3 style='color: #0284c7;'>⚡ WilPOS Multi-Proveedor</h3>
 menu_opcion = st.sidebar.radio("Navegación", ["📄 Procesar Factura (Por Página)", "📁 Catálogo Maestro EAN", "🏢 Gestionar Proveedores"])
 
 st.sidebar.markdown("---")
-st.sidebar.markdown("<p style='font-size: 0.8rem; color: #10b981; font-weight: 600;'>🟢 Motor de Limpieza Corregido</p>", unsafe_allow_html=True)
+st.sidebar.markdown(f"<p style='font-size: 0.8rem; color: #10b981; font-weight: 600;'>🟢 Maestro Permanente ({len(st.session_state.get('master_catalog', {})):,} ítems)</p>", unsafe_allow_html=True)
 
-if st.sidebar.button("🔄 Reiniciar Todo el Sistema (Maestro y Sesión)"):
+if st.sidebar.button("🔄 Reiniciar Memoria Temporal de Sesión"):
     st.session_state["paginas_procesadas_historial"] = set()
     st.session_state["codigos_manuales_sesion"] = {}
     st.session_state["factura_data"] = None
-    save_json_file(MASTER_CATALOG_FILE, {})
-    st.success("¡Sistema reiniciado por completo con éxito!")
+    st.success("¡Memoria de sesión limpiada (el maestro permanente se mantiene intacto)!")
     time.sleep(0.5)
     st.rerun()
 
@@ -250,7 +257,7 @@ if st.sidebar.button("🔄 Reiniciar Todo el Sistema (Maestro y Sesión)"):
 # ==========================================
 if menu_opcion == "📄 Procesar Factura (Por Página)":
     st.markdown("<h2>📄 Procesador de Facturas (Multi-Proveedor)</h2>", unsafe_allow_html=True)
-    st.markdown("<p style='color: #64748b;'>Sube tu factura. Los códigos ahora coinciden limpiamente con los nombres de tu maestro sin interferencia de códigos internos.</p>", unsafe_allow_html=True)
+    st.markdown("<p style='color: #64748b;'>Sube tu factura. Compara contra tu catálogo maestro almacenado permanentemente.</p>", unsafe_allow_html=True)
     st.markdown("---")
 
     if "factura_data" not in st.session_state: st.session_state["factura_data"] = None
@@ -346,7 +353,7 @@ if menu_opcion == "📄 Procesar Factura (Por Página)":
                         f"Instrucción específica de su perfil: {instruccion_proveedor} "
                         "Extrae 'descripcion', 'tamano', 'cantidad', 'unidad', 'precio_unitario', 'descuento_porcentaje' y 'monto_neto' (Impuesto Neto sin ITBIS y con descuento aplicado). "
                         "Devuelve un JSON puro con esta estructura exacta y llaves en minúscula: "
-                        '{"paginacion": "' + str(pagina_a_procesar) + '", "proveedor_detectado": "' + prov_encontrado + '", "subtotal": 0.0, "itbis": 0.0, "descuentos": 0.0, "total": 0.0, "items": [{"descripcion": "...", "tamano": "750ML", "cantidad": 1.0, "unidad": "750ML", "precio_unitario": 100.0, "descuento_porcentaje": 0.0, "monto_neto": 100.0}]}. '
+                        '{"paginacion": "' + str(pagina_a_procesar) + '", "proveedor_detectado": "' + prov_encontrado + '", "subtotal": 0.0, "itbis": 0.0, "descuentos": 0.0, "total": 0.0, "items": [{"descripcion": "...", "tamano": "700ML", "cantidad": 1.0, "unidad": "CJ6BOT", "precio_unitario": 100.0, "descuento_porcentaje": 0.0, "monto_neto": 100.0}]}. '
                         "Respuesta JSON pura."
                     )
 
@@ -395,9 +402,8 @@ if menu_opcion == "📄 Procesar Factura (Por Página)":
         if items:
             st.markdown(f"### 📋 Detalle de Renglones Extraídos ({len(items)} ítems)")
             
-            preview_rows = []
             lista_codigos_pagina = []
-            master_dict = load_json_file(MASTER_CATALOG_FILE, "dict")
+            master_dict = st.session_state.get("master_catalog", {})
             nombres_maestro_lista = list(master_dict.keys())
 
             for idx, item in enumerate(items, start=1):
@@ -522,23 +528,50 @@ if menu_opcion == "📄 Procesar Factura (Por Página)":
             )
 
 # ==========================================
-# MÓDULO 2: CATÁLOGO MAESTRO EAN
+# MÓDULO 2: CATÁLOGO MAESTRO EAN (PERMANENTE)
 # ==========================================
 elif menu_opcion == "📁 Catálogo Maestro EAN":
-    st.markdown("<h2>📁 Gestión, Carga y Limpieza del Archivo Maestro EAN</h2>", unsafe_allow_html=True)
-    st.markdown("<p style='color: #64748b;'>Este es el único lugar donde se alimenta y actualiza el archivo maestro oficial de forma manual.</p>", unsafe_allow_html=True)
+    st.markdown("<h2>📁 Gestión Permanente del Archivo Maestro EAN</h2>", unsafe_allow_html=True)
+    st.markdown(f"<p style='color: #64748b;'>Los productos guardados aquí se almacenan de forma permanente en el sistema ({len(st.session_state.get('master_catalog', {})):,} registros actuales).</p>", unsafe_allow_html=True)
     st.markdown("---")
 
-    master_dict = load_json_file(MASTER_CATALOG_FILE, "dict")
+    master_dict = st.session_state.get("master_catalog", load_json_file(MASTER_CATALOG_FILE, "dict"))
 
-    col_rst1, col_rst2 = st.columns([3, 1])
-    with col_rst2:
-        if st.button("⚠️ Vaciar Archivo Maestro"):
+    # BOTONES DE RESPALDO Y VACIADO PERMANENTE
+    col_p1, col_p2, col_p3 = st.columns([2, 2, 1])
+    with col_p1:
+        json_master_str = json.dumps(master_dict, ensure_ascii=False, indent=4)
+        st.download_button(
+            label="📥 Descargar Respaldo Maestro (.JSON)",
+            data=json_master_str,
+            file_name=f"catalogo_maestro_respaldo_{datetime.now().strftime('%Y%m%d')}.json",
+            mime="application/json"
+        )
+    with col_p2:
+        uploaded_json_backup = st.file_uploader("📤 Restaurar Respaldo Maestro (.JSON)", type=["json"], key="restaurar_json_maestro")
+        if uploaded_json_backup is not None:
+            try:
+                backup_data = json.load(uploaded_json_backup)
+                if isinstance(backup_data, dict):
+                    master_dict = {str(k).upper().strip(): str(v) for k, v in backup_data.items() if k}
+                    st.session_state["master_catalog"] = master_dict
+                    save_json_file(MASTER_CATALOG_FILE, master_dict)
+                    st.success(f"¡Catálogo maestro restaurado permanentemente ({len(master_dict)} productos)!")
+                    time.sleep(0.5)
+                    st.rerun()
+            except Exception as e:
+                st.error(f"Error al leer el JSON: {str(e)}")
+    with col_p3:
+        if st.button("⚠️ Vaciar Maestro"):
+            st.session_state["master_catalog"] = {}
             save_json_file(MASTER_CATALOG_FILE, {})
-            st.success("¡Catálogo maestro vaciado correctamente!")
+            st.success("¡Maestro vaciado permanentemente!")
             time.sleep(0.5)
             st.rerun()
 
+    st.markdown("---")
+
+    # CARGA MASIVA DESDE EXCEL
     st.markdown('<div class="card-container">', unsafe_allow_html=True)
     st.markdown("### 📂 Carga Masiva de Catálogo Maestro (Excel)")
     uploaded_master_file = st.file_uploader("Sube tu archivo Excel con productos y códigos EAN", type=["xlsx", "xls"], key="upload_master_excel")
@@ -551,7 +584,7 @@ elif menu_opcion == "📁 Catálogo Maestro EAN":
             col_desc_opt = st.selectbox("Selecciona la columna de Nombre/Descripción:", df_upload.columns)
             col_ean_opt = st.selectbox("Selecciona la columna de Código EAN/Barras:", df_upload.columns)
             
-            if st.button("📥 Importar y Fusionar al Maestro Oficial"):
+            if st.button("📥 Importar y Guardar Permanentemente"):
                 nuevos_agregados = 0
                 for _, row in df_upload.iterrows():
                     p_desc = str(row[col_desc_opt]).upper().strip()
@@ -560,31 +593,34 @@ elif menu_opcion == "📁 Catálogo Maestro EAN":
                         master_dict[p_desc] = p_ean
                         nuevos_agregados += 1
                 
+                st.session_state["master_catalog"] = master_dict
                 save_json_file(MASTER_CATALOG_FILE, master_dict)
-                st.success(f"¡Se han importado y guardado {nuevos_agregados} productos exitosamente en el maestro oficial!")
+                st.success(f"¡Se han guardado permanentemente {nuevos_agregados} productos en el maestro oficial!")
                 time.sleep(0.8)
                 st.rerun()
         except Exception as e:
             st.error(f"Error al leer el archivo Excel: {str(e)}")
     st.markdown('</div>', unsafe_allow_html=True)
 
+    # AGREGAR INDIVIDUAL
     st.markdown('<div class="card-container">', unsafe_allow_html=True)
-    st.markdown("### ➕ Agregar Producto Individual Manualmente")
+    st.markdown("### ➕ Agregar Producto Individual Permanentemente")
     with st.form("form_agregar_maestro_individual"):
         col_fm1, col_fm2 = st.columns([2, 1])
         with col_fm1:
-            nuevo_nombre_prod = st.text_input("Nombre / Descripción Oficial del Producto", placeholder="EJ. CARLO ROSSI ROSE 1500 ML...")
+            nuevo_nombre_prod = st.text_input("Nombre / Descripción Oficial del Producto", placeholder="EJ. BOMBAY SAPHIRE 700ML...")
         with col_fm2:
             nuevo_codigo_prod = st.text_input("Código EAN / SAP Oficial", placeholder="EJ. Código de barras real...")
         
-        btn_submit_maestro = st.form_submit_button("💾 Guardar Producto en Archivo Maestro Oficial")
+        btn_submit_maestro = st.form_submit_button("💾 Guardar Permanentemente en el Maestro")
         if btn_submit_maestro:
             clean_n = nuevo_nombre_prod.upper().strip()
             clean_c = clean_ean_code(nuevo_codigo_prod)
             if clean_n and clean_c != "S/C":
                 master_dict[clean_n] = clean_c
+                st.session_state["master_catalog"] = master_dict
                 save_json_file(MASTER_CATALOG_FILE, master_dict)
-                st.success(f"✅ ¡Producto **{clean_n}** guardado exitosamente en el maestro oficial con el código **{clean_c}**!")
+                st.success(f"✅ ¡Producto **{clean_n}** guardado permanentemente con el código **{clean_c}**!")
                 time.sleep(0.5)
                 st.rerun()
             else:
@@ -598,7 +634,7 @@ elif menu_opcion == "📁 Catálogo Maestro EAN":
         df_show = pd.DataFrame([{"Producto / Descripción": k, "Código EAN/SAP Oficial": v} for k, v in master_dict.items()])
         st.dataframe(df_show, use_container_width=True, hide_index=True)
     else:
-        st.info("ℹ️ El archivo maestro está actualmente vacío. Agrega productos manualmente o cárgalos mediante Excel.")
+        st.info("ℹ️ El archivo maestro está actualmente vacío. Agrega productos individualmente o cárgalos por Excel.")
 
 # ==========================================
 # MÓDULO 3: GESTIONAR PROVEEDORES
