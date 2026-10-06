@@ -40,7 +40,6 @@ gemini_key = (
 if gemini_key:
     genai.configure(api_key=gemini_key)
 
-# Rutas absolutas persistentes en el directorio de trabajo
 BASE_DIR = os.path.dirname(os.path.abspath(__file__)) if "__file__" in locals() else os.getcwd()
 SUPPLIER_MEMORY_FILE = os.path.join(BASE_DIR, "proveedores_formatos_memoria.json")
 MASTER_CATALOG_FILE = os.path.join(BASE_DIR, "catalogo_maestro_sistema.json")
@@ -67,8 +66,7 @@ def save_json_file(filepath, data):
         with open(filepath, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=4)
         return True
-    except Exception as e:
-        st.error(f"Error al guardar archivo persistente: {e}")
+    except Exception:
         return False
 
 # ==========================================
@@ -116,7 +114,7 @@ def limpiar_nombre_y_extraer_presentacion(proveedor_activo, descripcion_raw, tam
     elif "375" in combined_raw: presentacion = "375ML"
 
     desc_limpia = re.sub(r'\b\d{4,5}\b', '', t_norm)
-    desc_limpia = re.sub(r'\b(CAJA\s*\d*|CJ\s*\d*\s*BOT|BOT|BOTELLA|LATA|LATAS|\d+/\d+|\d+\s*X\s*\d+|3\s*LT|1\.5\s*LT|1\s*LT|1\s*L|700\s*ML|750\s*ML|75\s*CL|750ML|75CL|1000\s*ML|1000ML|1L|1LT|500\s*ML|375\s*ML)\b', '', desc_limpia)
+    desc_limpia = re.sub(r'\b(CAJA\s*\d*|CJ\s*\d*\s*BOT|BOT|BOTELLA|LATA|LATAS|\d+/\d+|\d+\s*X\s*\d+|3\s*LT|1\.5\s*LT|1\s*LT|1\s*L|700\s*ML|750\s*ML|75\s*CL|750ML|75CL|1000\s*ML|1000ML|1L|1LT|500\s*ML|375\s*ML|NP)\b', '', desc_limpia)
     desc_limpia = re.sub(r'\s+', ' ', desc_limpia).strip()
     
     if presentacion not in desc_limpia:
@@ -128,12 +126,13 @@ def parse_empaque_proveedor(proveedor_nombre, unidad_txt="", tamano_txt="", desc
     unidad_norm = normalizar_texto(unidad_txt)
     combined = normalizar_texto(f"{unidad_txt} {tamano_txt} {descripcion_txt}")
     
-    m_cj_bot = re.search(r'CJ(\d+)BOT', unidad_norm)
+    # Detección estricta de empaque CJ6BOT, CJ12BOT, etc.
+    m_cj_bot = re.search(r'CJ\s*(\d+)\s*BOT', unidad_norm)
     if m_cj_bot:
         val = int(m_cj_bot.group(1))
         if val > 0: return val
 
-    m_cj_bot_comb = re.search(r'CJ(\d+)BOT', combined)
+    m_cj_bot_comb = re.search(r'CJ\s*(\d+)\s*BOT', combined)
     if m_cj_bot_comb:
         val = int(m_cj_bot_comb.group(1))
         if val > 0: return val
@@ -148,25 +147,27 @@ def parse_empaque_proveedor(proveedor_nombre, unidad_txt="", tamano_txt="", desc
         val = int(m_mult_comb.group(1))
         if val > 0: return val
 
+    # Si en la descripción dice algo como 6/700 ML, el empaque es 6
+    m_slash = re.search(r'\b(\d+)\s*/\s*\d+\s*(?:ML|L|CL)', combined)
+    if m_slash:
+        val = int(m_slash.group(1))
+        if val > 1: return val
+
     return 1
 
 def buscar_en_catalogo_maestro(nombre_producto, presentacion=""):
     n_norm = normalizar_texto(nombre_producto)
-    
-    # Obtener siempre desde session_state sincronizado con disco
     master_dict = st.session_state.get("master_catalog", load_json_file(MASTER_CATALOG_FILE, "dict"))
     if not master_dict:
         return "S/C"
 
     master_norm = {normalizar_texto(k): clean_ean_code(v) for k, v in master_dict.items() if k}
 
-    # 1. Coincidencia exacta
     query_completa = f"{n_norm}".strip()
     for m_key_up, m_code in master_norm.items():
         if m_key_up == query_completa:
             return m_code
 
-    # 2. Coincidencia por tokens clave
     tokens_query = set(re.findall(r'\b[A-Z0-9%]+\b', n_norm))
     tokens_query = {t for t in tokens_query if len(t) > 1 and t not in {"ML", "LT", "L", "OZ", "BOT", "UN"}}
     if not tokens_query:
@@ -229,7 +230,6 @@ if "supplier_memory" not in st.session_state:
     st.session_state["supplier_memory"] = loaded_supps
 
 if "master_catalog" not in st.session_state:
-    # Cargar directamente de disco al iniciar la app
     st.session_state["master_catalog"] = load_json_file(MASTER_CATALOG_FILE, "dict")
 
 if "codigos_manuales_sesion" not in st.session_state:
@@ -248,7 +248,7 @@ if st.sidebar.button("🔄 Reiniciar Memoria Temporal de Sesión"):
     st.session_state["paginas_procesadas_historial"] = set()
     st.session_state["codigos_manuales_sesion"] = {}
     st.session_state["factura_data"] = None
-    st.success("¡Memoria de sesión limpiada (el maestro permanente se mantiene intacto)!")
+    st.success("¡Memoria de sesión limpiada!")
     time.sleep(0.5)
     st.rerun()
 
@@ -257,7 +257,7 @@ if st.sidebar.button("🔄 Reiniciar Memoria Temporal de Sesión"):
 # ==========================================
 if menu_opcion == "📄 Procesar Factura (Por Página)":
     st.markdown("<h2>📄 Procesador de Facturas (Multi-Proveedor)</h2>", unsafe_allow_html=True)
-    st.markdown("<p style='color: #64748b;'>Sube tu factura. Compara contra tu catálogo maestro almacenado permanentemente.</p>", unsafe_allow_html=True)
+    st.markdown("<p style='color: #64748b;'>Sube tu factura. El cálculo de stock y costos por unidad se procesa de forma automática y precisa.</p>", unsafe_allow_html=True)
     st.markdown("---")
 
     if "factura_data" not in st.session_state: st.session_state["factura_data"] = None
@@ -322,9 +322,6 @@ if menu_opcion == "📄 Procesar Factura (Por Página)":
 
                     firma_pagina = f"{archivo_subido.name}_{num_factura_detectada}_PAG_{pagina_a_procesar}"
                     
-                    if firma_pagina in st.session_state["paginas_procesadas_historial"]:
-                        st.warning(f"⚠️ La página #{pagina_a_procesar} ya fue procesada previamente en esta sesión.")
-
                     supp_mem = st.session_state["supplier_memory"]
                     if not isinstance(supp_mem, dict): supp_mem = {}
                     
@@ -345,20 +342,18 @@ if menu_opcion == "📄 Procesar Factura (Por Página)":
                         save_json_file(SUPPLIER_MEMORY_FILE, supp_mem)
 
                     prov_dict_data = supp_mem.get(prov_encontrado, {})
-                    if not isinstance(prov_dict_data, dict): prov_dict_data = {}
                     instruccion_proveedor = prov_dict_data.get("instruccion_prompt", "Extrae todos los ítems.")
 
                     prompt_unificado = (
                         f"Estás procesando la página {pagina_a_procesar} de una factura del proveedor: '{prov_encontrado}'. "
                         f"Instrucción específica de su perfil: {instruccion_proveedor} "
-                        "Extrae 'descripcion', 'tamano', 'cantidad', 'unidad', 'precio_unitario', 'descuento_porcentaje' y 'monto_neto' (Impuesto Neto sin ITBIS y con descuento aplicado). "
+                        "Extrae 'descripcion', 'tamano', 'cantidad', 'unidad' (ej. CJ6BOT), 'precio_unitario', 'descuento_porcentaje' y 'monto_neto' (Impuesto Neto sin ITBIS y con descuento aplicado). "
                         "Devuelve un JSON puro con esta estructura exacta y llaves en minúscula: "
-                        '{"paginacion": "' + str(pagina_a_procesar) + '", "proveedor_detectado": "' + prov_encontrado + '", "subtotal": 0.0, "itbis": 0.0, "descuentos": 0.0, "total": 0.0, "items": [{"descripcion": "...", "tamano": "700ML", "cantidad": 1.0, "unidad": "CJ6BOT", "precio_unitario": 100.0, "descuento_porcentaje": 0.0, "monto_neto": 100.0}]}. '
+                        '{"paginacion": "' + str(pagina_a_procesar) + '", "proveedor_detectado": "' + prov_encontrado + '", "subtotal": 0.0, "itbis": 0.0, "descuentos": 0.0, "total": 0.0, "items": [{"descripcion": "...", "tamano": "700ML", "cantidad": 2.0, "unidad": "CJ6BOT", "precio_unitario": 8491.0, "descuento_porcentaje": 0.0, "monto_neto": 15113.98}]}. '
                         "Respuesta JSON pura."
                     )
 
                     response = model.generate_content([target_image, prompt_unificado])
-                    
                     raw_text = response.text.strip()
                     if raw_text.startswith("```json"): raw_text = raw_text[7:]
                     if raw_text.endswith("```"): raw_text = raw_text[:-3]
@@ -537,7 +532,6 @@ elif menu_opcion == "📁 Catálogo Maestro EAN":
 
     master_dict = st.session_state.get("master_catalog", load_json_file(MASTER_CATALOG_FILE, "dict"))
 
-    # BOTONES DE RESPALDO Y VACIADO PERMANENTE
     col_p1, col_p2, col_p3 = st.columns([2, 2, 1])
     with col_p1:
         json_master_str = json.dumps(master_dict, ensure_ascii=False, indent=4)
@@ -571,7 +565,6 @@ elif menu_opcion == "📁 Catálogo Maestro EAN":
 
     st.markdown("---")
 
-    # CARGA MASIVA DESDE EXCEL
     st.markdown('<div class="card-container">', unsafe_allow_html=True)
     st.markdown("### 📂 Carga Masiva de Catálogo Maestro (Excel)")
     uploaded_master_file = st.file_uploader("Sube tu archivo Excel con productos y códigos EAN", type=["xlsx", "xls"], key="upload_master_excel")
@@ -602,7 +595,6 @@ elif menu_opcion == "📁 Catálogo Maestro EAN":
             st.error(f"Error al leer el archivo Excel: {str(e)}")
     st.markdown('</div>', unsafe_allow_html=True)
 
-    # AGREGAR INDIVIDUAL
     st.markdown('<div class="card-container">', unsafe_allow_html=True)
     st.markdown("### ➕ Agregar Producto Individual Permanentemente")
     with st.form("form_agregar_maestro_individual"):
