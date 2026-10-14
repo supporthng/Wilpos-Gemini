@@ -176,7 +176,7 @@ if "supplier_memory" not in st.session_state:
         "CERVECERIA NACIONAL DOMINICANA": {
             "nombre": "CERVECERIA NACIONAL DOMINICANA",
             "tipo_formato": "factura_tique_cnd",
-            "instruccion_prompt": "Analiza esta factura renglón por renglón. Extrae 'descripcion', 'tamano', 'cantidad', 'unidad', 'precio_unitario' y 'monto_neto' (Imp. Neto sin ITBIS)."
+            "instruccion_prompt": "Analiza esta factura renglón por renglón. Extrae 'descripcion', 'tamano', 'cantidad', 'unidad', 'precio_unitario' y 'monto_neto'."
         }
     }
     if not loaded_supps or "CERVECERIA NACIONAL DOMINICANA" not in loaded_supps:
@@ -204,7 +204,7 @@ st.sidebar.markdown(f"<p style='font-size: 0.8rem; color: #10b981; font-weight: 
 # ==========================================
 if menu_opcion == "📄 Procesar Factura (Por Página)":
     st.markdown("<h2>📄 Procesador de Facturas (Multi-Proveedor)</h2>", unsafe_allow_html=True)
-    st.markdown("<p style='color: #64748b;'>Edita directamente 'Cant. Compra' o 'Empaque' y el stock y costos se recalcularán al instante.</p>", unsafe_allow_html=True)
+    st.markdown("<p style='color: #64748b;'>Modifica 'Cant. Compra' o 'Empaque' libremente en la tabla y el stock se actualizará al instante.</p>", unsafe_allow_html=True)
     st.markdown("---")
 
     if "factura_data" not in st.session_state: st.session_state["factura_data"] = None
@@ -277,10 +277,9 @@ if menu_opcion == "📄 Procesar Factura (Por Página)":
         prov_actual = st.session_state.get("prov_activo", "GENERAL")
 
         if items:
-            st.markdown(f"### 📋 Detalle de Renglones ({len(items)} ítems)")
+            st.markdown(f"### 📋 Edición de Renglones ({len(items)} ítems)")
             lista_renglones = []
             master_dict = st.session_state.get("master_catalog", {})
-            nombres_maestro = list(master_dict.keys())
 
             for idx, item in enumerate(items, start=1):
                 raw_desc = str(item.get("descripcion", ""))
@@ -288,8 +287,8 @@ if menu_opcion == "📄 Procesar Factura (Por Página)":
                 unidad = str(item.get("unidad", ""))
                 
                 nombre_limpio, presentacion_limpia = limpiar_nombre_y_extraer_presentacion(prov_actual, raw_desc, raw_tam)
-                cant_compra = safe_float(item.get("cantidad"), 1.0)
-                empaque = parse_empaque_proveedor(prov_actual, unidad, raw_tam, raw_desc)
+                cant_compra = float(safe_float(item.get("cantidad"), 1.0))
+                empaque = int(parse_empaque_proveedor(prov_actual, unidad, raw_tam, raw_desc))
 
                 codigo_final = buscar_en_catalogo_maestro(nombre_limpio, presentacion_limpia)
                 if nombre_limpio in st.session_state["codigos_manuales_sesion"]:
@@ -307,32 +306,32 @@ if menu_opcion == "📄 Procesar Factura (Por Página)":
                     monto_neto = precio_ext * cant_compra
 
                 lista_renglones.append({
-                    "idx": idx, 
-                    "Producto": nombre_limpio, 
-                    "Presentación": presentacion_limpia,
+                    "idx": int(idx), 
+                    "Producto": str(nombre_limpio), 
+                    "Presentación": str(presentacion_limpia),
                     "Código EAN": str(codigo_final), 
-                    "Cant. Compra": cant_compra, 
-                    "Empaque": empaque,
-                    "_monto_base": monto_neto
+                    "Cant. Compra": float(cant_compra), 
+                    "Empaque": int(empaque),
+                    "_monto_base": float(monto_neto)
                 })
 
             df_preview = pd.DataFrame(lista_renglones)
             
-            # HABILITAMOS LA EDICIÓN DE 'Cant. Compra' y 'Empaque' junto con 'Código EAN'
+            # TABLA COMPLETAMENTE EDITABLE (SOLO SE BLOQUEAN IDENTIFICADORES Y NOMBRES)
             df_editado = st.data_editor(
                 df_preview.drop(columns=["_monto_base"]),
                 use_container_width=True,
                 hide_index=True,
                 disabled=["idx", "Producto", "Presentación"],
                 column_config={
-                    "Código EAN": st.column_config.TextColumn("Código EAN", max_chars=14, validate="^\\d+$"),
-                    "Cant. Compra": st.column_config.NumberColumn("Cant. Compra", min_value=0.01, step=1.0),
-                    "Empaque": st.column_config.NumberColumn("Empaque", min_value=1, step=1.0)
+                    "Código EAN": st.column_config.TextColumn("Código EAN", max_chars=14),
+                    "Cant. Compra": st.column_config.NumberColumn("Cant. Compra", min_value=0.01, step=1.0, format="%.2f"),
+                    "Empaque": st.column_config.NumberColumn("Empaque", min_value=1, step=1)
                 },
                 key="editor_inventario_editable"
             )
 
-            # RE-CÁLCULO DINÁMICO EN TIEMPO REAL SEGÚN LO QUE EDITE EL USUARIO
+            # RE-CÁLCULO DINÁMICO EN TIEMPO REAL
             lista_final_procesada = []
             for i, row in df_editado.iterrows():
                 p_name = row["Producto"]
@@ -345,11 +344,8 @@ if menu_opcion == "📄 Procesar Factura (Por Página)":
                 if emp < 1: emp = 1
 
                 stock_unidades = int(c_compra * emp)
-                
-                # Monto base extraído originalmente para este renglón
                 monto_base_original = df_preview.loc[i, "_monto_base"]
                 
-                # Costo Unitario Real limpio sobre stock actualizado
                 if monto_base_original > 0 and stock_unidades > 0:
                     costo_unitario_real = round(monto_base_original / stock_unidades, 4)
                 else:
@@ -374,7 +370,7 @@ if menu_opcion == "📄 Procesar Factura (Por Página)":
                 })
 
             df_resultado_final = pd.DataFrame(lista_final_procesada)
-            st.markdown("### 📊 Vista Previa Recalculada en Tiempo Real")
+            st.markdown("### 📊 Resultado Actualizado en Tiempo Real")
             st.dataframe(df_resultado_final, use_container_width=True, hide_index=True)
 
             # Exportación Excel
